@@ -1,0 +1,41 @@
+# Ambiente
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Credenciais e ambiente local
+.env
+.env.*
+!.env.example
+
+# Modelos e pesos
+*.pt
+*.task
+*.onnx
+*.engine
+models/
+modelos/
+
+# Dados operacionais
+*.csv
+historico_*.csv
+evidencias/
+data/
+
+# IDE / SO
+.idea/
+.vscode/
+.cursor/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs e temporários
+*.log
+*.tmp
+tmp/
+temp/
