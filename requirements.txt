@@ -2,3 +2,5 @@ ultralytics
 opencv-python
 mediapipe
 numpy
+rapidocr-onnxruntime
+onnxruntime

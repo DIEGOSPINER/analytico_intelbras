@@ -36,3 +36,6 @@ python main.py
 
 - `historico_analitico.csv` — detecções
 - `historico_ocorrencias.csv` — eventos comportamentais com classificação de risco
+- `historico_faces.csv` — cadastro/reaparecimento de faces próximas à câmera
+- `historico_placas.csv` — leitura e reaparecimento de placas de veículos
+- `evidencias/faces/` e `evidencias/placas/` — screenshots de referência e passagens

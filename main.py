@@ -12,6 +12,15 @@ import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
+from identidade import (
+    IdentificadorFaces,
+    IdentificadorPlacas,
+    inicializar_csv_faces,
+    inicializar_csv_placas,
+    salvar_passagem_face,
+    salvar_passagem_placa,
+)
+
 
 def carregar_env(caminho=".env"):
     """Carrega variáveis de um arquivo .env simples (sem dependência extra)."""
@@ -48,6 +57,7 @@ ARQUIVO_OCORRENCIAS = "historico_ocorrencias.csv"
 MODELO_YOLO = "yolov8n.pt"
 MODELO_ARMA = "arma_fogo.pt"  # opcional
 MODELO_POSE = "pose_landmarker_lite.task"
+MODELO_FACE = "blaze_face_full_range.tflite"
 TRACKER = "bytetrack.yaml"
 
 CONF_MINIMA = 0.4
@@ -820,12 +830,22 @@ class AnaliseComportamental:
 
 class CameraAnalitica:
 
-    def __init__(self, nome, src, detector_arma=None, pose_analyzer=None):
+    def __init__(
+        self,
+        nome,
+        src,
+        detector_arma=None,
+        pose_analyzer=None,
+        identificador_faces=None,
+        identificador_placas=None
+    ):
         self.nome = nome
         self.stream = CameraStream(src).start()
         self.model = YOLO(MODELO_YOLO)
         self.detector_arma = detector_arma or DetectorArma(MODELO_ARMA)
         self.pose = pose_analyzer or PoseAnalyzer(MODELO_POSE)
+        self.faces = identificador_faces
+        self.placas = identificador_placas
 
         self.ids_vistos = set()
         self.unicos_por_categoria = defaultdict(set)
@@ -848,9 +868,10 @@ class CameraAnalitica:
         return self.model.names.get(cls_id, f"Classe_{cls_id}")
 
     def process(self):
+        vazio = (None, [], {}, [], {}, [], [])
         frame = self.stream.read()
         if frame is None:
-            return None, [], {}, [], {}
+            return vazio
 
         frame = cv2.resize(frame, (LARGURA, ALTURA))
 
@@ -864,7 +885,7 @@ class CameraAnalitica:
 
         boxes = results[0].boxes
         if boxes is None:
-            return frame, [], {}, [], {}
+            return (frame, [], {}, [], {}, [], [])
 
         if boxes.id is not None:
             ids = boxes.id.int().cpu().tolist()
@@ -874,6 +895,7 @@ class CameraAnalitica:
         quantidade_cena = defaultdict(int)
         novos_eventos = []
         pessoas_cena = {}
+        veiculos_cena = {}
 
         for box, track_id in zip(boxes, ids):
             cls_id = int(box.cls[0].item())
@@ -892,6 +914,12 @@ class CameraAnalitica:
                 pessoas_cena[track_id] = {
                     "centro": ((x1 + x2) / 2, (y1 + y2) / 2),
                     "bbox": (x1, y1, x2, y2)
+                }
+
+            if categoria == "Veiculo" and track_id is not None:
+                veiculos_cena[track_id] = {
+                    "bbox": (x1, y1, x2, y2),
+                    "classe": nome
                 }
 
             cor = CORES[categoria]
@@ -920,6 +948,34 @@ class CameraAnalitica:
             frame, pessoas_cena, armas, LARGURA, ALTURA
         )
 
+        eventos_faces, anot_faces = ([], [])
+        if self.faces is not None:
+            eventos_faces, anot_faces = self.faces.processar(
+                self.nome, frame, pessoas_cena
+            )
+
+        eventos_placas, anot_placas = ([], [])
+        if self.placas is not None:
+            eventos_placas, anot_placas = self.placas.processar(
+                self.nome, frame, veiculos_cena
+            )
+
+        for an in anot_faces:
+            x1, y1, x2, y2 = an["bbox"]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+            cv2.putText(
+                frame, an["rotulo"], (x1, max(y1 - 5, 15)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2
+            )
+
+        for an in anot_placas:
+            x1, y1, x2, y2 = an["bbox"]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.putText(
+                frame, an["rotulo"], (x1, max(y1 - 5, 15)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2
+            )
+
         cv2.rectangle(frame, (0, 0), (LARGURA, 95), (0, 0, 0), -1)
 
         texto1 = (
@@ -936,11 +992,10 @@ class CameraAnalitica:
             f"{len(self.unicos_por_categoria['Objeto'])}"
         )
         texto3 = (
-            f"Risco ativos | Queda {ativos_comp.get('Possivel_Queda', 0)} "
+            f"Risco | Queda {ativos_comp.get('Possivel_Queda', 0)} "
             f"Briga {ativos_comp.get('Possivel_Briga', 0)} "
             f"Arma {ativos_comp.get('Possivel_Arma_Fogo', 0)} "
-            f"Aglom {ativos_comp.get('Aglomeracao', 0)} "
-            f"Perm {ativos_comp.get('Permanencia', 0)}"
+            f"| Faces {len(eventos_faces)} Placas {len(eventos_placas)}"
         )
 
         cv2.putText(frame, texto1, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
@@ -965,7 +1020,9 @@ class CameraAnalitica:
             novos_eventos,
             dict(quantidade_cena),
             eventos_comp,
-            ativos_comp
+            ativos_comp,
+            eventos_faces,
+            eventos_placas
         )
 
     def total_unicos_categoria(self, categoria):
@@ -1109,22 +1166,31 @@ def salvar_ocorrencia(
 def main():
     inicializar_csv()
     inicializar_csv_ocorrencias()
+    inicializar_csv_faces()
+    inicializar_csv_placas()
 
-    print("Carregando modelos YOLO + Pose...")
+    print("Carregando modelos YOLO + Pose + Faces/Placas...")
     detector_arma = DetectorArma(MODELO_ARMA)
 
-    # Um PoseAnalyzer por câmera (estado interno isolado)
+    # Galeria compartilhada entre câmeras (mesma pessoa/placa nas duas)
+    id_faces = IdentificadorFaces(MODELO_FACE)
+    id_placas = IdentificadorPlacas()
+
     cam1 = CameraAnalitica(
         "CAMERA 1",
         RTSP_CAM_1,
         detector_arma,
-        PoseAnalyzer(MODELO_POSE)
+        PoseAnalyzer(MODELO_POSE),
+        id_faces,
+        id_placas
     )
     cam2 = CameraAnalitica(
         "CAMERA 2",
         RTSP_CAM_2,
         detector_arma,
-        PoseAnalyzer(MODELO_POSE)
+        PoseAnalyzer(MODELO_POSE),
+        id_faces,
+        id_placas
     )
 
     print("Analítico comportamental iniciado!")
@@ -1134,12 +1200,13 @@ def main():
         "Levantando, Possivel_Queda, Possivel_Briga, Possivel_Arma_Fogo"
     )
     print("Risco: Informativo(1) | Atencao(2) | Prioritario(3) | Critico(4)")
+    print("Identidade: faces próximas + placas de veículos")
     print("Pressione Q para encerrar.")
 
     try:
         while True:
-            out1, eventos1, cena1, comp1, ativos1 = cam1.process()
-            out2, eventos2, cena2, comp2, ativos2 = cam2.process()
+            out1, eventos1, cena1, comp1, ativos1, faces1, placas1 = cam1.process()
+            out2, eventos2, cena2, comp2, ativos2, faces2, placas2 = cam2.process()
 
             for categoria, classe, track_id in eventos1:
                 salvar_evento(
@@ -1193,6 +1260,12 @@ def main():
                     qualidade_pose=ev.get("qualidade_pose", 0.0)
                 )
 
+            for reg in faces1 + faces2:
+                salvar_passagem_face(reg)
+
+            for reg in placas1 + placas2:
+                salvar_passagem_placa(reg)
+
             if out1 is not None:
                 cv2.imshow("Analitico - Camera 1", out1)
             if out2 is not None:
@@ -1205,6 +1278,7 @@ def main():
         print("Encerrando analítico...")
         cam1.stop()
         cam2.stop()
+        id_faces.stop()
         cv2.destroyAllWindows()
 
 
