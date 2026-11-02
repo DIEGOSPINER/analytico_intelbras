@@ -53,6 +53,7 @@ _SITUACOES = {
     "grito": "Perturbacao",
     "persegui": "Perseguicao",
     "correndo": "Correndo",
+    "moto": "Moto",
     "correu": "Correndo",
     "deitado": "Deitado",
     "discuss": "Discussao",

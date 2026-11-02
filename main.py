@@ -12,6 +12,7 @@ import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
+from audio import EscutaAudio
 from cadastro import cameras_para_analise
 from cameras import (
     ARQUIVO_CAMERAS,
@@ -1167,6 +1168,9 @@ def titulo_janela(nome):
 def _encerrar_camera(item):
     analitica = item["analitica"]
     print(f"Câmera encerrada: {analitica.nome}")
+    audio = item.get("audio")
+    if audio is not None:
+        audio.stop()
     analitica.stop()
     try:
         cv2.destroyWindow(titulo_janela(item["janela"]))
@@ -1217,6 +1221,7 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
             "url": cfg["url"],
             "nome": cfg["nome"],
             "janela": cfg["nome"],
+            "audio": EscutaAudio(cfg["nome"], cfg["url"]).start(),
         }
 
 
@@ -1311,6 +1316,22 @@ def main():
 
             for item in list(estado.values()):
                 cam = item["analitica"]
+                for som in item.get("audio").drenar() if item.get("audio") else []:
+                    salvar_ocorrencia(
+                        cam.nome,
+                        "Audio",
+                        som["classe"],
+                        "",
+                        0,
+                        0,
+                        duracao=6,
+                        confianca=som.get("confianca", 0),
+                        status=som["risco"],
+                        pessoas_envolvidas=0,
+                        detalhe=som.get("detalhe", ""),
+                        risco=som["risco"],
+                        nivel_risco=som["nivel"],
+                    )
                 out, eventos, cena, comp, ativos, faces, placas = cam.process()
                 _registrar_saida(cam, eventos, cena, comp, ativos)
                 for reg in faces:
