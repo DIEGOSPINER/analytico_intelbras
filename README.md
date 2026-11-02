@@ -19,7 +19,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-2. Copie `.env.example` para `.env` e informe as URLs RTSP das câmeras.
+2. Copie `cameras.example.json` para `cameras.json` e informe nome, IP, usuário e senha de cada câmera. Para incluir ou tirar uma câmera, edite essa lista: o analítico aplica a mudança sem reiniciar. `"ativa": false` pausa a câmera e mantém o cadastro.
 
 3. Baixe/coloque os modelos na pasta do projeto:
    - `yolov8n.pt` (baixado automaticamente pelo Ultralytics na primeira execução, se ausente)

@@ -12,6 +12,12 @@ import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
+from cameras import (
+    ARQUIVO_CAMERAS,
+    destino_publico,
+    garantir_arquivo_cameras,
+    ler_cameras,
+)
 from identidade import (
     IdentificadorFaces,
     IdentificadorPlacas,
@@ -41,15 +47,6 @@ def carregar_env(caminho=".env"):
 carregar_env()
 
 # ===================== CONFIGURAÇÕES =====================
-
-RTSP_CAM_1 = os.getenv(
-    "RTSP_CAM_1",
-    "rtsp://usuario:senha@192.168.0.21:554/cam/realmonitor?channel=1&subtype=0"
-)
-RTSP_CAM_2 = os.getenv(
-    "RTSP_CAM_2",
-    "rtsp://usuario:senha@192.168.0.108:554/cam/realmonitor?channel=1&subtype=0"
-)
 
 ARQUIVO_HISTORICO = "historico_analitico.csv"
 ARQUIVO_OCORRENCIAS = "historico_ocorrencias.csv"
@@ -1163,35 +1160,112 @@ def salvar_ocorrencia(
 
 # ===================== EXECUÇÃO =====================
 
+def titulo_janela(nome):
+    return f"Analitico - {nome}"
+
+
+def _encerrar_camera(item):
+    analitica = item["analitica"]
+    print(f"Câmera encerrada: {analitica.nome}")
+    analitica.stop()
+    try:
+        cv2.destroyWindow(titulo_janela(item["janela"]))
+    except Exception:
+        pass
+
+
+def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
+    """Abre câmeras novas e fecha as que saíram da lista ou trocaram de acesso."""
+    por_id = {camera["id"]: camera for camera in desejadas}
+
+    for ident in list(estado):
+        atual = estado[ident]
+        nova = por_id.get(ident)
+        if nova is None or nova["url"] != atual["url"]:
+            _encerrar_camera(atual)
+            del estado[ident]
+
+    for ident, cfg in por_id.items():
+        if ident in estado:
+            atual = estado[ident]
+            if cfg["nome"] != atual["nome"]:
+                try:
+                    cv2.destroyWindow(titulo_janela(atual["janela"]))
+                except Exception:
+                    pass
+                atual["analitica"].nome = cfg["nome"]
+                atual["analitica"].comportamento.nome = cfg["nome"]
+                atual["nome"] = cfg["nome"]
+                atual["janela"] = cfg["nome"]
+            continue
+
+        print(f"Câmera iniciada: {cfg['nome']} ({destino_publico(cfg['url'])})")
+        try:
+            analitica = CameraAnalitica(
+                cfg["nome"],
+                cfg["url"],
+                detector_arma,
+                PoseAnalyzer(MODELO_POSE),
+                id_faces,
+                id_placas,
+            )
+        except Exception as exc:
+            print(f"Falha ao abrir {cfg['nome']}: {exc}")
+            continue
+        estado[ident] = {
+            "analitica": analitica,
+            "url": cfg["url"],
+            "nome": cfg["nome"],
+            "janela": cfg["nome"],
+        }
+
+
+def _registrar_saida(cam, eventos, cena, comp, ativos):
+    for categoria, classe, track_id in eventos:
+        salvar_evento(
+            cam.nome, categoria, classe, track_id,
+            cam.total_unicos_categoria(categoria),
+            cena.get(categoria, 0)
+        )
+
+    for ev in comp:
+        salvar_ocorrencia(
+            cam.nome,
+            ev["categoria"],
+            ev["classe"],
+            ev["id"],
+            cam.comportamento.total_unicos_classe(ev["classe"]),
+            ativos.get(ev["classe"], 0),
+            id_alvo=ev.get("id_alvo", ""),
+            duracao=ev.get("duracao", 0),
+            confianca=ev.get("confianca", 0),
+            status=ev.get("status", "Informativo"),
+            pessoas_envolvidas=ev.get("pessoas_envolvidas", 1),
+            detalhe=ev.get("detalhe", ""),
+            risco=ev.get("risco", "Informativo"),
+            nivel_risco=ev.get("nivel_risco", 1),
+            qualidade_pose=ev.get("qualidade_pose", 0.0)
+        )
+
+
 def main():
     inicializar_csv()
     inicializar_csv_ocorrencias()
     inicializar_csv_faces()
     inicializar_csv_placas()
+    garantir_arquivo_cameras()
 
     print("Carregando modelos YOLO + Pose + Faces/Placas...")
     detector_arma = DetectorArma(MODELO_ARMA)
 
-    # Galeria compartilhada entre câmeras (mesma pessoa/placa nas duas)
+    # Galeria compartilhada entre todas as câmeras
     id_faces = IdentificadorFaces(MODELO_FACE)
     id_placas = IdentificadorPlacas()
 
-    cam1 = CameraAnalitica(
-        "CAMERA 1",
-        RTSP_CAM_1,
-        detector_arma,
-        PoseAnalyzer(MODELO_POSE),
-        id_faces,
-        id_placas
-    )
-    cam2 = CameraAnalitica(
-        "CAMERA 2",
-        RTSP_CAM_2,
-        detector_arma,
-        PoseAnalyzer(MODELO_POSE),
-        id_faces,
-        id_placas
-    )
+    estado = {}
+    lista = []
+    mtime_visto = None
+    avisou_vazio = False
 
     print("Analítico comportamental iniciado!")
     print(
@@ -1201,83 +1275,52 @@ def main():
     )
     print("Risco: Informativo(1) | Atencao(2) | Prioritario(3) | Critico(4)")
     print("Identidade: faces próximas + placas de veículos")
+    print(f"Câmeras: {ARQUIVO_CAMERAS} (a lista é relida durante a execução).")
     print("Pressione Q para encerrar.")
 
     try:
         while True:
-            out1, eventos1, cena1, comp1, ativos1, faces1, placas1 = cam1.process()
-            out2, eventos2, cena2, comp2, ativos2, faces2, placas2 = cam2.process()
+            caminho = Path(ARQUIVO_CAMERAS)
+            mtime = caminho.stat().st_mtime if caminho.exists() else None
+            if mtime != mtime_visto:
+                mtime_visto = mtime
+                try:
+                    lista = ler_cameras()
+                except ValueError as exc:
+                    print(exc)
+                    print("Mantendo as câmeras já em análise.")
+                else:
+                    aplicar_cameras(lista, estado, detector_arma, id_faces, id_placas)
+                    if not estado and not avisou_vazio:
+                        print(
+                            "Nenhuma câmera ativa. "
+                            f"Inclua registros em {ARQUIVO_CAMERAS}."
+                        )
+                        avisou_vazio = True
+                    elif estado:
+                        avisou_vazio = False
 
-            for categoria, classe, track_id in eventos1:
-                salvar_evento(
-                    cam1.nome, categoria, classe, track_id,
-                    cam1.total_unicos_categoria(categoria),
-                    cena1.get(categoria, 0)
-                )
+            for item in list(estado.values()):
+                cam = item["analitica"]
+                out, eventos, cena, comp, ativos, faces, placas = cam.process()
+                _registrar_saida(cam, eventos, cena, comp, ativos)
+                for reg in faces:
+                    salvar_passagem_face(reg)
+                for reg in placas:
+                    salvar_passagem_placa(reg)
+                if out is not None:
+                    cv2.imshow(titulo_janela(item["janela"]), out)
 
-            for categoria, classe, track_id in eventos2:
-                salvar_evento(
-                    cam2.nome, categoria, classe, track_id,
-                    cam2.total_unicos_categoria(categoria),
-                    cena2.get(categoria, 0)
-                )
-
-            for ev in comp1:
-                salvar_ocorrencia(
-                    cam1.nome,
-                    ev["categoria"],
-                    ev["classe"],
-                    ev["id"],
-                    cam1.comportamento.total_unicos_classe(ev["classe"]),
-                    ativos1.get(ev["classe"], 0),
-                    id_alvo=ev.get("id_alvo", ""),
-                    duracao=ev.get("duracao", 0),
-                    confianca=ev.get("confianca", 0),
-                    status=ev.get("status", "Informativo"),
-                    pessoas_envolvidas=ev.get("pessoas_envolvidas", 1),
-                    detalhe=ev.get("detalhe", ""),
-                    risco=ev.get("risco", "Informativo"),
-                    nivel_risco=ev.get("nivel_risco", 1),
-                    qualidade_pose=ev.get("qualidade_pose", 0.0)
-                )
-
-            for ev in comp2:
-                salvar_ocorrencia(
-                    cam2.nome,
-                    ev["categoria"],
-                    ev["classe"],
-                    ev["id"],
-                    cam2.comportamento.total_unicos_classe(ev["classe"]),
-                    ativos2.get(ev["classe"], 0),
-                    id_alvo=ev.get("id_alvo", ""),
-                    duracao=ev.get("duracao", 0),
-                    confianca=ev.get("confianca", 0),
-                    status=ev.get("status", "Informativo"),
-                    pessoas_envolvidas=ev.get("pessoas_envolvidas", 1),
-                    detalhe=ev.get("detalhe", ""),
-                    risco=ev.get("risco", "Informativo"),
-                    nivel_risco=ev.get("nivel_risco", 1),
-                    qualidade_pose=ev.get("qualidade_pose", 0.0)
-                )
-
-            for reg in faces1 + faces2:
-                salvar_passagem_face(reg)
-
-            for reg in placas1 + placas2:
-                salvar_passagem_placa(reg)
-
-            if out1 is not None:
-                cv2.imshow("Analitico - Camera 1", out1)
-            if out2 is not None:
-                cv2.imshow("Analitico - Camera 2", out2)
+            if not estado:
+                time.sleep(0.3)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
     finally:
         print("Encerrando analítico...")
-        cam1.stop()
-        cam2.stop()
+        for item in estado.values():
+            item["analitica"].stop()
         id_faces.stop()
         cv2.destroyAllWindows()
 
