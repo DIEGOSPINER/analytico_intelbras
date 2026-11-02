@@ -1,0 +1,16 @@
+{
+  "pessoas": [
+    {
+      "face_id": "F0001",
+      "nome": "Pessoa de interesse",
+      "motivo": "circular na área monitorada"
+    }
+  ],
+  "veiculos": [
+    {
+      "placa": "ABC1D23",
+      "nome": "Veículo de interesse",
+      "motivo": "acesso autorizado ou ocorrência anterior"
+    }
+  ]
+}

@@ -12,6 +12,9 @@ __pycache__/
 .env.*
 !.env.example
 cameras.json
+interesse.json
+memoria_rua.json
+relatorios/
 
 # Modelos e pesos
 *.pt

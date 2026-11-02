@@ -1266,6 +1266,13 @@ def main():
     lista = []
     mtime_visto = None
     avisou_vazio = False
+    vigia = None
+    try:
+        from agente.vigia import Vigia
+        vigia = Vigia()
+        vigia.iniciar()
+    except Exception as exc:
+        print(f"Agente de análise não iniciado: {exc}")
 
     print("Analítico comportamental iniciado!")
     print(
@@ -1319,6 +1326,8 @@ def main():
 
     finally:
         print("Encerrando analítico...")
+        if vigia is not None:
+            vigia.parar()
         for item in estado.values():
             item["analitica"].stop()
         id_faces.stop()

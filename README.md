@@ -32,6 +32,24 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Agente de análise
+
+O agente lê os CSVs, alerta Face_ID, placas e ocorrências de atenção ou prioridade, e pede ao GPT um relatório por dia.
+
+1. Crie uma chave em [platform.openai.com/api-keys](https://platform.openai.com/api-keys) e grave no `.env` como `OPENAI_API_KEY`. A chave começa com `sk-`. O modelo padrão é `gpt-6-sol`.
+2. Copie `interesse.example.json` para `interesse.json` e informe as pessoas e os veículos que devem gerar alerta.
+3. No `.env`, preencha `SMTP_SENHA` com uma senha de app do Gmail. O relatório diário sai às 21:00 para o e-mail, e o alerta de interesse ou de atenção sai na hora pelo mesmo e-mail. O WhatsApp fica desligado enquanto `WHATSAPP_ATIVO=0`.
+4. Com o analítico aberto, a vigia roda junto. Fora dele:
+
+```bash
+python -m agente relatorio dia
+python -m agente relatorio semana
+python -m agente relatorio mes
+python -m agente vigiar
+```
+
+Os relatórios ficam em `relatorios/`. Cada impressão também entra em `historico_insights.csv` e cada alerta em `historico_alertas_ia.csv`, no mesmo padrão dos outros históricos, para o Power BI. A memória do que já foi observado na rua fica em `memoria_rua.json` e entra na análise seguinte.
+
 ## Arquivos de saída
 
 - `historico_analitico.csv` — detecções
