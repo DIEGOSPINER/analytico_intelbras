@@ -24,17 +24,19 @@ def whatsapp_configurado() -> bool:
     return ativo and bool(_limpo("WHATSAPP_DESTINO") and _limpo("WHATSAPP_APIKEY"))
 
 
-def enviar_email(assunto: str, texto: str, anexo: str = "") -> bool:
-    destino = _limpo("EMAIL_DESTINO")
+def enviar_email(assunto: str, texto: str, anexo: str = "", destinos=None) -> bool:
+    from cadastro import destinatarios
+
+    lista = [item.strip() for item in (destinos or destinatarios()) if str(item).strip()]
     usuario = _limpo("SMTP_USUARIO")
     senha = _limpo("SMTP_SENHA").replace(" ", "")
-    if not (destino and usuario and senha):
-        print("E-mail não enviado. Preencha SMTP_USUARIO e SMTP_SENHA no .env.")
+    if not (lista and usuario and senha):
+        print("E-mail não enviado. Preencha SMTP_USUARIO, SMTP_SENHA e o e-mail do cliente.")
         return False
     mensagem = EmailMessage()
     mensagem["Subject"] = assunto
     mensagem["From"] = usuario
-    mensagem["To"] = destino
+    mensagem["To"] = ", ".join(lista)
     mensagem.set_content(texto)
     caminho = Path(anexo) if anexo else None
     if caminho and caminho.exists():
@@ -54,7 +56,7 @@ def enviar_email(assunto: str, texto: str, anexo: str = "") -> bool:
     except (smtplib.SMTPException, OSError) as exc:
         print(f"E-mail não enviado: {exc}")
         return False
-    print(f"E-mail enviado para {destino}.")
+    print(f"E-mail enviado para {', '.join(lista)}.")
     return True
 
 

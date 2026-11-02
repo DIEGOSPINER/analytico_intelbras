@@ -12,11 +12,11 @@ import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
+from cadastro import cameras_para_analise
 from cameras import (
     ARQUIVO_CAMERAS,
     destino_publico,
     garantir_arquivo_cameras,
-    ler_cameras,
 )
 from identidade import (
     IdentificadorFaces,
@@ -1282,17 +1282,19 @@ def main():
     )
     print("Risco: Informativo(1) | Atencao(2) | Prioritario(3) | Critico(4)")
     print("Identidade: faces próximas + placas de veículos")
-    print(f"Câmeras: {ARQUIVO_CAMERAS} (a lista é relida durante a execução).")
+    print("Câmeras: clientes.json (a conta do cliente é relida durante a execução).")
     print("Pressione Q para encerrar.")
 
     try:
         while True:
-            caminho = Path(ARQUIVO_CAMERAS)
-            mtime = caminho.stat().st_mtime if caminho.exists() else None
+            marcas = []
+            for caminho in (Path("clientes.json"), Path(ARQUIVO_CAMERAS)):
+                marcas.append(caminho.stat().st_mtime if caminho.exists() else None)
+            mtime = tuple(marcas)
             if mtime != mtime_visto:
                 mtime_visto = mtime
                 try:
-                    lista = ler_cameras()
+                    lista = cameras_para_analise()
                 except ValueError as exc:
                     print(exc)
                     print("Mantendo as câmeras já em análise.")

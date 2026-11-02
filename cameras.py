@@ -118,6 +118,25 @@ def _normalizar(item, indice: int):
     }
 
 
+def filtrar_ativas(registros) -> list[dict]:
+    """Normaliza uma lista de câmeras e devolve só as ativas."""
+    if not isinstance(registros, list):
+        raise ValueError("A chave cameras deve ser uma lista.")
+    ativas = []
+    vistos = set()
+    for indice, item in enumerate(registros):
+        camera = _normalizar(item, indice)
+        if camera is None:
+            continue
+        if camera["id"] in vistos:
+            print(f"Câmera duplicada ignorada: {camera['id']}")
+            continue
+        vistos.add(camera["id"])
+        if camera["ativa"]:
+            ativas.append(camera)
+    return ativas
+
+
 def ler_cameras(caminho=ARQUIVO_CAMERAS):
     """
     Lê o cadastro e devolve só as câmeras ativas.
@@ -139,22 +158,7 @@ def ler_cameras(caminho=ARQUIVO_CAMERAS):
     else:
         raise ValueError("cameras.json deve ser uma lista ou um objeto com a chave cameras.")
 
-    if not isinstance(registros, list):
-        raise ValueError("A chave cameras deve ser uma lista.")
-
-    ativas = []
-    vistos = set()
-    for indice, item in enumerate(registros):
-        camera = _normalizar(item, indice)
-        if camera is None:
-            continue
-        if camera["id"] in vistos:
-            print(f"Câmera duplicada ignorada: {camera['id']}")
-            continue
-        vistos.add(camera["id"])
-        if camera["ativa"]:
-            ativas.append(camera)
-    return ativas
+    return filtrar_ativas(registros)
 
 
 def cameras_do_ambiente():

@@ -1,0 +1,52 @@
+{
+  "clientes": [
+    {
+      "id": "cli-1",
+      "nome": "Nome do cliente",
+      "rg": "",
+      "documento": "",
+      "tipo_documento": "cpf",
+      "email": "cliente@exemplo.com",
+      "cameras": [
+        {
+          "id": "cam-01",
+          "nome": "Portaria",
+          "marca": "Intelbras",
+          "modelo": "VIP 1230",
+          "ativa": true,
+          "host": "192.168.0.21",
+          "porta": 554,
+          "usuario": "usuario",
+          "senha": "senha",
+          "canal": 1,
+          "subtype": 0
+        }
+      ],
+      "pessoas": [
+        {
+          "face_id": "F0001",
+          "nome": "Pessoa acompanhada",
+          "base_legal": "acompanhamento_familiar",
+          "referencia": "filho",
+          "motivo": "acompanhamento de familiar"
+        }
+      ],
+      "veiculos": [
+        {
+          "placa": "ABC1D23",
+          "nome": "Veículo do cliente",
+          "vinculo": "proprio",
+          "motivo": "veículo da própria conta"
+        }
+      ],
+      "contatos_apoio": [
+        {
+          "nome": "Contato de apoio",
+          "email": "apoio@exemplo.com",
+          "telefone": "5571999999999",
+          "recebe_alerta": true
+        }
+      ]
+    }
+  ]
+}

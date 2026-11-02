@@ -13,6 +13,9 @@ __pycache__/
 !.env.example
 cameras.json
 interesse.json
+clientes.json
+ocorrencias_informadas.json
+fenomenos.json
 memoria_rua.json
 relatorios/
 

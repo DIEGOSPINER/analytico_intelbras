@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 
 from agente.analista import Analista, carregar_memoria, chave_alerta, gravar_alertas, salvar_memoria
 from agente.envio import email_configurado, enviar_email, enviar_whatsapp, whatsapp_configurado
-from agente.fontes import FonteCsv, carregar_interesse, cruzar_interesse
+from agente.fontes import FonteCsv, cruzar_interesse
 from agente.modelo import SessaoGPT, carregar_env
 
 
@@ -173,7 +173,9 @@ class Vigia:
         memoria = carregar_memoria()
         cursores = memoria.setdefault("cursores", {})
         vistos = set(memoria.get("alertas_vistos") or [])
-        interesse = carregar_interesse()
+        from cadastro import interesse_ativo
+
+        interesse = interesse_ativo()
         novos_alertas = []
         agora = datetime.now()
         cooldowns = memoria.setdefault("cooldowns", {})
@@ -256,9 +258,12 @@ class Vigia:
                     f"ALERTA {alerta['tipo']} | {alerta['nome']} ({alerta['id']}) | "
                     f"{alerta['camera']} {alerta['data']} {alerta['hora']}"
                 )
+            from cadastro import cliente_ativo
+
             gravar_alertas(
                 novos_alertas,
                 self.analista.sessao.modelo if self.analista.sessao.disponivel else "",
+                documento=(cliente_ativo() or {}).get("documento") or "",
             )
             self._avisar(novos_alertas)
         memoria["alertas_vistos"] = list(vistos)[-500:]
