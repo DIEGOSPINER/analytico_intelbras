@@ -1329,6 +1329,14 @@ class IdentificadorPlacas:
     def _ler_placa(self, crop):
         if crop is None or crop.size == 0 or crop.shape[0] < 12 or crop.shape[1] < 28:
             return None, 0.0
+        maior = max(crop.shape[:2])
+        if maior > 640:
+            fator = 640 / maior
+            crop = cv2.resize(
+                crop,
+                (max(1, int(crop.shape[1] * fator)), max(1, int(crop.shape[0] * fator))),
+                interpolation=cv2.INTER_AREA,
+            )
         escala = 3 if max(crop.shape[:2]) < 220 else 2
         ampliada = cv2.resize(
             crop, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC
@@ -1371,9 +1379,10 @@ class IdentificadorPlacas:
             self._atualizar_assinatura(placa, assinatura)
         return meta
 
-    def processar(self, camera, frame, veiculos):
+    def processar(self, camera, frame, veiculos, frame_nitido=None):
         """
-        veiculos: dict track_id -> {bbox, classe}
+        veiculos: dict track_id -> {bbox, classe, bbox_nitida}
+        A leitura usa o quadro original da câmera. O quadro da análise só desenha.
         """
         agora = time.time()
         ativos = {(camera, track_id) for track_id in (veiculos or {})}
@@ -1384,11 +1393,12 @@ class IdentificadorPlacas:
         if not self.disponivel or not veiculos:
             return eventos, anotacoes
 
-        h, w = frame.shape[:2]
+        origem = frame_nitido if frame_nitido is not None else frame
+        h, w = origem.shape[:2]
 
         for track_id, info in veiculos.items():
             chave_track = (camera, track_id)
-            x1, y1, x2, y2 = map(int, info["bbox"])
+            x1, y1, x2, y2 = map(int, info.get("bbox_nitida") or info["bbox"])
             largura = max(1, x2 - x1)
             altura = max(1, y2 - y1)
             margem_x = int(largura * 0.06)
@@ -1397,7 +1407,7 @@ class IdentificadorPlacas:
             y1 = max(0, y1 - margem_y)
             x2 = min(w, x2 + margem_x)
             y2 = min(h, y2 + margem_y)
-            veiculo = frame[y1:y2, x1:x2]
+            veiculo = origem[y1:y2, x1:x2]
             if veiculo.size == 0 or veiculo.shape[0] < 30 or veiculo.shape[1] < 40:
                 continue
 
@@ -1412,7 +1422,8 @@ class IdentificadorPlacas:
                 self.ultimo_ocr_track[chave_track] = agora
                 altura_v = veiculo.shape[0]
                 faixas = [
-                    veiculo[int(altura_v * 0.45):, :],
+                    veiculo[int(altura_v * 0.62):, :],
+                    veiculo[int(altura_v * 0.40):, :],
                     veiculo[int(altura_v * 0.25):int(altura_v * 0.80), :],
                 ]
                 melhor_txt, melhor_conf = None, 0.0

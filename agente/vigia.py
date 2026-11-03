@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from collections import Counter
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from agente.analista import Analista, carregar_memoria, chave_alerta, gravar_alertas, salvar_memoria
 from agente.envio import email_configurado, enviar_email, enviar_whatsapp, whatsapp_configurado
@@ -42,6 +42,8 @@ class Vigia:
         self._ultima_tentativa_relatorio = 0.0
         self._ultima_tentativa_email = 0.0
         self._ultima_tentativa_whatsapp = 0.0
+        self._proxima_dataverse = 0.0
+        self._avisou_dataverse = False
 
     def iniciar(self):
         if os.getenv("AGENTE_ATIVO", "1").strip().lower() in ("0", "false", "nao", "não"):
@@ -240,10 +242,11 @@ class Vigia:
             cooldowns[repeticao] = (agora + timedelta(minutes=30)).isoformat(timespec="seconds")
             novos_alertas.append(alerta)
         cursores[arquivo] = len(linhas)
+        self._varrer_dataverse(memoria, novos_alertas, vistos)
 
         if novos_alertas:
             for alerta in novos_alertas:
-                if alerta.get("origem") == "Ocorrencia":
+                if alerta.get("origem") in ("Ocorrencia", "Cidadao"):
                     continue
                 frase = ""
                 try:
@@ -270,6 +273,66 @@ class Vigia:
         salvar_memoria(memoria)
         return novos_alertas
 
+    def _varrer_dataverse(self, memoria, novos_alertas, vistos):
+        if time.time() < self._proxima_dataverse:
+            return
+        self._proxima_dataverse = time.time() + 60
+        from dataverse import ClienteDataverse
+
+        cliente = ClienteDataverse()
+        if not cliente.configurado():
+            return
+        cursores = memoria.setdefault("cursores", {})
+        chave = "dataverse_ocorrencia"
+        primeira = chave not in cursores
+        try:
+            linhas = cliente.listar(desde="" if primeira else str(cursores.get(chave) or ""))
+        except Exception as exc:
+            if not self._avisou_dataverse:
+                print(f"Tabela de ocorrências do aplicativo indisponível: {exc}")
+                self._avisou_dataverse = True
+            return
+        self._avisou_dataverse = False
+        if not linhas:
+            if primeira:
+                cursores[chave] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return
+        cursores[chave] = linhas[-1]["quando"] or cursores.get(chave) or ""
+        if primeira:
+            print(
+                f"Tabela do aplicativo conectada. {len(linhas)} lançamento(s) já existente(s) "
+                "não geram e-mail. O alerta sai só para emergência nova."
+            )
+            return
+        for item in linhas:
+            if not item.get("emergente"):
+                continue
+            alerta = {
+                "tipo": "ocorrencia_cidadao",
+                "id": item.get("id") or "",
+                "nome": item.get("natureza") or item.get("titulo") or "Ocorrência",
+                "motivo": "Emergente",
+                "camera": item.get("endereco") or "",
+                "data": item.get("data") or "",
+                "hora": item.get("hora") or "",
+                "evento": "Aplicativo",
+                "passagens": "",
+                "foto": "",
+                "origem": "Cidadao",
+                "nivel": "critico",
+                "descricao": " ".join(
+                    parte for parte in (
+                        item.get("resumo") or "",
+                        item.get("descricao") or "",
+                    ) if parte
+                )[:500],
+            }
+            codigo = chave_alerta(alerta)
+            if codigo in vistos:
+                continue
+            vistos.add(codigo)
+            novos_alertas.append(alerta)
+
     def _avisar(self, alertas: list[dict]):
         linhas = ["Alerta do analítico"]
         for alerta in alertas:
@@ -280,7 +343,10 @@ class Vigia:
             if alerta.get("descricao"):
                 linhas.append(alerta["descricao"])
         texto = "\n".join(linhas)
-        assunto = f"Alerta analítico: {alertas[0].get('nome') or alertas[0].get('tipo')}"
+        if any(alerta.get("origem") == "Cidadao" for alerta in alertas):
+            assunto = "Ocorrência emergente recebida"
+        else:
+            assunto = f"Alerta analítico: {alertas[0].get('nome') or alertas[0].get('tipo')}"
         enviar_email(assunto, texto)
         if whatsapp_configurado():
             enviar_whatsapp(texto)

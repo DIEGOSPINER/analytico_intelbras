@@ -17,6 +17,7 @@ clientes.json
 ocorrencias_informadas.json
 fenomenos.json
 memoria_rua.json
+dataverse_token.json
 relatorios/
 
 # Modelos e pesos

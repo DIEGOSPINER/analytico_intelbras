@@ -33,6 +33,7 @@ Use somente os números e eventos do JSON recebido. Não invente contagem, placa
 ID de rastreio do YOLO não é identidade de pessoa. Face_ID e Placa é que identificam.
 Compare com a memória anterior quando ela existir e diga o que mudou na rua.
 Relacione ocorrencias_informadas aos eventos, faces e placas do próprio cliente quando o nome, a placa ou a situação coincidirem.
+ocorrencias_cidadao são lançamentos do aplicativo móvel. Use data, hora, natureza, descrição, endereço e o indicador emergente. Não invente lançamento ausente dessa lista.
 fenomenos traz só contagens, sem nome, placa ou endereço de terceiros. Use essas contagens apenas para situar se o tipo de relato também aparece no conjunto.
 Devolva apenas um JSON com as chaves:
 resumo (string),
@@ -330,6 +331,7 @@ def _markdown_local(pacote: dict, alertas: list[dict]) -> str:
         f"- Faces: {pacote['faces']['identidades']} identidades em {pacote['faces']['registros']} registros",
         f"- Placas: {pacote['veiculos']['placas']} em {pacote['veiculos']['registros']} registros",
         f"- Ocorrências informadas pelo cliente: {len(pacote.get('ocorrencias_informadas') or [])}",
+        f"- Ocorrências do aplicativo móvel: {len(pacote.get('ocorrencias_cidadao') or [])}",
         "",
     ]
     for informe in pacote.get("ocorrencias_informadas") or []:
@@ -344,6 +346,15 @@ def _markdown_local(pacote: dict, alertas: list[dict]) -> str:
             + (f" Vínculos: {ligados}." if ligados else "")
         )
     if pacote.get("ocorrencias_informadas"):
+        linhas.append("")
+    for cidadao in pacote.get("ocorrencias_cidadao") or []:
+        marca = "emergente" if cidadao.get("emergente") else "registro"
+        linhas.append(
+            f"- Aplicativo {cidadao.get('data')} {cidadao.get('hora')} | {marca} | "
+            f"{cidadao.get('natureza') or cidadao.get('titulo')}: {cidadao.get('descricao')} "
+            f"{cidadao.get('endereco') or ''}"
+        )
+    if pacote.get("ocorrencias_cidadao"):
         linhas.append("")
     if alertas:
         linhas.append("## Alertas de interesse")
@@ -382,6 +393,15 @@ class Analista:
         from ocorrencias import para_relatorio, resumo_fenomenos
 
         pacote["ocorrencias_informadas"] = para_relatorio(inicio.isoformat(), fim.isoformat())
+        pacote["ocorrencias_cidadao"] = []
+        try:
+            from dataverse import para_relatorio as ocorrencias_do_aplicativo
+
+            pacote["ocorrencias_cidadao"] = ocorrencias_do_aplicativo(
+                inicio.isoformat(), fim.isoformat()
+            )
+        except Exception as exc:
+            print(f"Ocorrências do aplicativo não entraram no relatório: {exc}")
         pacote["fenomenos"] = resumo_fenomenos()
         pacote["alertas_interesse"] = alertas
         pacote["memoria_anterior"] = {
@@ -525,6 +545,16 @@ class Analista:
             adicionar(
                 "Placa", veiculo["placa"], veiculo["total_passagens"],
                 f"{veiculo['tipo']} em {', '.join(veiculo['cameras'])}. Última vez: {veiculo['ultimo']}.",
+            )
+        for cidadao in pacote.get("ocorrencias_cidadao") or []:
+            adicionar(
+                "Aplicativo",
+                cidadao.get("natureza") or cidadao.get("titulo") or "",
+                "emergente" if cidadao.get("emergente") else "registro",
+                (
+                    f"{cidadao.get('data', '')} {cidadao.get('hora', '')}. "
+                    f"{cidadao.get('endereco', '')} {cidadao.get('descricao', '')}"
+                ).strip(),
             )
         for informe in pacote.get("ocorrencias_informadas") or []:
             adicionar(

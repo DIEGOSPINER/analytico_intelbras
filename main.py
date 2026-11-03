@@ -1,3 +1,10 @@
+import os
+
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    "rtsp_transport;tcp|stimeout;4000000",
+)
+
 import cv2
 import threading
 import time
@@ -27,6 +34,7 @@ from identidade import (
     salvar_passagem_face,
     salvar_passagem_placa,
 )
+from painel import desenhar_controle, desenhar_painel, resumir_comportamento, resumir_risco
 
 
 def carregar_env(caminho=".env"):
@@ -64,13 +72,21 @@ CONFIANCA_POSE = 0.45
 
 LARGURA, ALTURA = 640, 480
 
-# IM5 enxerga mais longe: a imagem entra maior e o carro distante passa com limiar menor.
-# IM3 é mais leve: imagem menor e limiar mais alto, para o ruído não virar carro.
+# A detecção roda numa imagem menor para o computador de teste acompanhar a câmera.
+# A placa é lida no quadro original, onde o texto ainda está nítido.
+# frames_veiculo: um quadro que pisca (caixa, muro) não completa a passagem.
 PERFIS_CAMERA = {
-    "im5": {"lado": 960, "conf": 0.35, "conf_veiculo": 0.22},
-    "im3": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.32},
-    "padrao": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.30},
+    "im5": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.32, "frames_veiculo": 4},
+    "im3": {"lado": 640, "conf": 0.45, "conf_veiculo": 0.40, "frames_veiculo": 4},
+    "padrao": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.35, "frames_veiculo": 4},
 }
+
+# Pessoa, carro, moto, ônibus e caminhão. Barco, pássaro e outros objetos ficam de fora.
+CLASSES_ANALISE = [0, 2, 3, 5, 7]
+LADO_MINIMO_VEICULO = 18
+DESLOCAMENTO_PASSAGEM = 0.03
+ABERTURA_CAMERA_MS = 4000
+SONDA_OFFLINE_SEG = 20
 
 
 def perfil_camera(modelo: str) -> dict:
@@ -167,12 +183,42 @@ RISCO_POR_ACAO = {
 # ==========================================================
 
 
+def abrir_captura(src):
+    captura = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+    captura.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    captura.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, ABERTURA_CAMERA_MS)
+    captura.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, ABERTURA_CAMERA_MS)
+    return captura
+
+
+def captura_com_quadro(src):
+    """Abre a câmera e exige um quadro. Sem resposta, devolve None e não segura o analítico."""
+    captura = abrir_captura(src)
+    if not captura.isOpened():
+        captura.release()
+        return None, None
+    try:
+        ok, quadro = captura.read()
+    except cv2.error:
+        ok, quadro = False, None
+    if not ok or quadro is None:
+        captura.release()
+        return None, None
+    return captura, quadro
+
+
 class CameraStream:
 
-    def __init__(self, src):
-        self.stream = cv2.VideoCapture(src)
-        self.ret, self.frame = self.stream.read()
+    def __init__(self, src, captura=None, quadro=None):
+        self.stream = captura if captura is not None else abrir_captura(src)
+        self.frame = quadro
         self.stopped = False
+        if self.frame is None:
+            try:
+                ok, quadro = self.stream.read()
+                self.frame = quadro if ok else None
+            except cv2.error:
+                self.frame = None
 
     def start(self):
         threading.Thread(target=self.update, daemon=True).start()
@@ -184,7 +230,11 @@ class CameraStream:
                 time.sleep(0.1)
                 continue
 
-            ret, frame = self.stream.read()
+            try:
+                ret, frame = self.stream.read()
+            except cv2.error:
+                time.sleep(0.2)
+                continue
             if ret:
                 self.frame = frame
             else:
@@ -863,20 +913,30 @@ class CameraAnalitica:
         identificador_faces=None,
         identificador_placas=None,
         modelo="",
+        captura=None,
+        quadro=None,
     ):
         self.nome = nome
         self.modelo = modelo or ""
         self.perfil = perfil_camera(self.modelo)
-        self.stream = CameraStream(src).start()
-        self.model = YOLO(MODELO_YOLO)
-        self.detector_arma = detector_arma or DetectorArma(MODELO_ARMA)
-        self.pose = pose_analyzer or PoseAnalyzer(MODELO_POSE)
-        self.faces = identificador_faces
-        self.placas = identificador_placas
-
-        self.ids_vistos = set()
-        self.unicos_por_categoria = defaultdict(set)
-        self.comportamento = AnaliseComportamental(nome, self.pose)
+        self.stream = CameraStream(src, captura=captura, quadro=quadro)
+        try:
+            self.model = YOLO(MODELO_YOLO)
+            self.detector_arma = detector_arma or DetectorArma(MODELO_ARMA)
+            self.pose = pose_analyzer or PoseAnalyzer(MODELO_POSE)
+            self.faces = identificador_faces
+            self.placas = identificador_placas
+            self.ids_vistos = set()
+            self.unicos_por_categoria = defaultdict(set)
+            self.estabilidade = {}
+            self.origem_veiculo = {}
+            self._fps = 0.0
+            self._ultimo_quadro = time.time()
+            self.comportamento = AnaliseComportamental(nome, self.pose)
+        except Exception:
+            self.stream.stop()
+            raise
+        self.stream.start()
 
     def classificar(self, cls_id):
         if cls_id == CLASSE_PESSOA:
@@ -894,21 +954,34 @@ class CameraAnalitica:
             return CLASSES_ANIMAIS[cls_id]
         return self.model.names.get(cls_id, f"Classe_{cls_id}")
 
-    def process(self):
+    def process(self, exibir=True):
         vazio = (None, [], {}, [], {}, [], [])
         frame = self.stream.read()
         if frame is None:
             return vazio
 
+        agora = time.time()
+        intervalo = agora - self._ultimo_quadro
+        self._ultimo_quadro = agora
+        if intervalo > 0:
+            self._fps = (0.85 * self._fps) + (0.15 * (1.0 / intervalo))
+
+        original = frame
         frame = redimensionar_para_analise(frame, self.perfil["lado"])
         altura, largura = frame.shape[:2]
+        escala_x = original.shape[1] / max(largura, 1)
+        escala_y = original.shape[0] / max(altura, 1)
         conf_pessoa = self.perfil["conf"]
         conf_veiculo = self.perfil["conf_veiculo"]
+        frames_veiculo = self.perfil["frames_veiculo"]
+        diagonal = math.hypot(largura, altura) or 1.0
 
         results = self.model.track(
             frame,
             conf=min(conf_pessoa, conf_veiculo),
             imgsz=self.perfil["lado"],
+            classes=CLASSES_ANALISE,
+            max_det=30,
             persist=True,
             tracker=TRACKER,
             verbose=False
@@ -916,6 +989,11 @@ class CameraAnalitica:
 
         boxes = results[0].boxes
         if boxes is None:
+            self.estabilidade.clear()
+            self.origem_veiculo.clear()
+            if not exibir:
+                return (None, [], {}, [], {}, [], [])
+            frame = self._compor_painel(frame, defaultdict(int), [], [], [])
             return (frame, [], {}, [], {}, [], [])
 
         if boxes.id is not None:
@@ -927,21 +1005,39 @@ class CameraAnalitica:
         novos_eventos = []
         pessoas_cena = {}
         veiculos_cena = {}
+        presentes = set()
 
         for box, track_id in zip(boxes, ids):
             cls_id = int(box.cls[0].item())
             conf = float(box.conf[0].item())
             x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().tolist())
             categoria = self.classificar(cls_id)
+            if categoria not in ("Pessoa", "Veiculo"):
+                continue
             if categoria == "Veiculo" and conf < conf_veiculo:
                 continue
-            if categoria != "Veiculo" and conf < conf_pessoa:
+            if categoria == "Pessoa" and conf < conf_pessoa:
                 continue
             nome = self.nome_classe(cls_id)
+
+            if categoria == "Veiculo":
+                if track_id is None or (x2 - x1) < LADO_MINIMO_VEICULO or (y2 - y1) < 16:
+                    continue
+                presentes.add(track_id)
+                self.estabilidade[track_id] = self.estabilidade.get(track_id, 0) + 1
+                if self.estabilidade[track_id] < frames_veiculo:
+                    continue
+                centro = ((x1 + x2) / 2, (y1 + y2) / 2)
+                origem = self.origem_veiculo.setdefault(track_id, centro)
+                desloc = math.hypot(centro[0] - origem[0], centro[1] - origem[1])
+                passou = desloc >= DESLOCAMENTO_PASSAGEM * diagonal
+            else:
+                passou = track_id is not None
+
             quantidade_cena[categoria] += 1
 
             chave = (categoria, cls_id, track_id)
-            if track_id is not None and chave not in self.ids_vistos:
+            if passou and track_id is not None and chave not in self.ids_vistos:
                 self.ids_vistos.add(chave)
                 self.unicos_por_categoria[categoria].add(chave)
                 novos_eventos.append((categoria, nome, track_id))
@@ -955,30 +1051,42 @@ class CameraAnalitica:
             if categoria == "Veiculo" and track_id is not None:
                 veiculos_cena[track_id] = {
                     "bbox": (x1, y1, x2, y2),
+                    "bbox_nitida": (
+                        int(x1 * escala_x),
+                        int(y1 * escala_y),
+                        int(x2 * escala_x),
+                        int(y2 * escala_y),
+                    ),
                     "classe": nome
                 }
 
-            cor = CORES[categoria]
-            rotulo = f"{nome} #{track_id}" if track_id is not None else nome
-            acao = self.comportamento.acoes_ativas.get(track_id)
-            if categoria == "Pessoa" and acao:
-                rotulo = f"{rotulo} | {acao}"
+            if exibir:
+                cor = CORES[categoria]
+                rotulo = f"{nome} #{track_id}" if track_id is not None else nome
+                acao = self.comportamento.acoes_ativas.get(track_id)
+                if categoria == "Pessoa" and acao:
+                    rotulo = f"{rotulo} | {acao}"
+                cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
+                cv2.putText(
+                    frame, rotulo, (x1, max(y1 - 5, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, cor, 2
+                )
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
-            cv2.putText(
-                frame, rotulo, (x1, max(y1 - 5, 15)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, cor, 2
-            )
+        for track_id in list(self.estabilidade):
+            if track_id not in presentes:
+                self.estabilidade.pop(track_id, None)
+                self.origem_veiculo.pop(track_id, None)
 
         armas = self.detector_arma.detectar(frame)
-        for arma in armas:
-            x1, y1, x2, y2 = arma["bbox"]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-            cv2.putText(
-                frame, f"ARMA {arma['confianca']:.2f}",
-                (x1, max(y1 - 8, 15)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2
-            )
+        if exibir:
+            for arma in armas:
+                x1, y1, x2, y2 = arma["bbox"]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(
+                    frame, f"ARMA {arma['confianca']:.2f}",
+                    (x1, max(y1 - 8, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2
+                )
 
         eventos_comp, ativos_comp = self.comportamento.analisar(
             frame, pessoas_cena, armas, largura, altura
@@ -993,63 +1101,31 @@ class CameraAnalitica:
         eventos_placas, anot_placas = ([], [])
         if self.placas is not None:
             eventos_placas, anot_placas = self.placas.processar(
-                self.nome, frame, veiculos_cena
+                self.nome, frame, veiculos_cena, frame_nitido=original
             )
 
-        for an in anot_faces:
-            x1, y1, x2, y2 = an["bbox"]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
-            cv2.putText(
-                frame, an["rotulo"], (x1, max(y1 - 5, 15)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2
+        if exibir:
+            for an in anot_faces:
+                x1, y1, x2, y2 = an["bbox"]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+                cv2.putText(
+                    frame, an["rotulo"], (x1, max(y1 - 5, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2
+                )
+
+            for an in anot_placas:
+                x1, y1, x2, y2 = an["bbox"]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                cv2.putText(
+                    frame, an["rotulo"], (x1, max(y1 - 5, 15)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2
+                )
+
+            frame = self._compor_painel(
+                frame, quantidade_cena, eventos_comp, eventos_faces, eventos_placas
             )
-
-        for an in anot_placas:
-            x1, y1, x2, y2 = an["bbox"]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-            cv2.putText(
-                frame, an["rotulo"], (x1, max(y1 - 5, 15)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2
-            )
-
-        cv2.rectangle(frame, (0, 0), (largura, 95), (0, 0, 0), -1)
-
-        texto1 = (
-            f"{self.nome} | P: {quantidade_cena['Pessoa']} | "
-            f"A: {quantidade_cena['Animal']} | "
-            f"V: {quantidade_cena['Veiculo']} | "
-            f"O: {quantidade_cena['Objeto']}"
-        )
-        texto2 = (
-            f"Unicos P/A/V/O: "
-            f"{len(self.unicos_por_categoria['Pessoa'])}/"
-            f"{len(self.unicos_por_categoria['Animal'])}/"
-            f"{len(self.unicos_por_categoria['Veiculo'])}/"
-            f"{len(self.unicos_por_categoria['Objeto'])}"
-        )
-        texto3 = (
-            f"Risco | Queda {ativos_comp.get('Possivel_Queda', 0)} "
-            f"Briga {ativos_comp.get('Possivel_Briga', 0)} "
-            f"Arma {ativos_comp.get('Possivel_Arma_Fogo', 0)} "
-            f"| Faces {len(eventos_faces)} Placas {len(eventos_placas)}"
-        )
-
-        cv2.putText(frame, texto1, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1)
-        cv2.putText(frame, texto2, (8, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (255, 255, 255), 1)
-        cv2.putText(frame, texto3, (8, 74), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 200, 255), 1)
-
-        if eventos_comp:
-            ev = max(eventos_comp, key=lambda e: e["nivel_risco"])
-            cor = CORES_RISCO.get(ev["risco"], (0, 0, 255))
-            cv2.putText(
-                frame,
-                f"{ev['risco']} | {ev['classe']} ID {ev['id']}",
-                (8, altura - 12),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                cor,
-                2
-            )
+        else:
+            frame = None
 
         return (
             frame,
@@ -1059,6 +1135,30 @@ class CameraAnalitica:
             ativos_comp,
             eventos_faces,
             eventos_placas
+        )
+
+    def _compor_painel(self, frame, quantidade_cena, eventos_comp, eventos_faces, eventos_placas):
+        alerta = None
+        if eventos_comp:
+            ev = max(eventos_comp, key=lambda item: item["nivel_risco"])
+            cor = CORES_RISCO.get(ev["risco"], (0, 0, 255))
+            alerta = (f"{ev['risco'].upper()}  {ev['classe']}  ID {ev['id']}", cor)
+        return desenhar_painel(
+            frame,
+            nome=self.nome,
+            fps=self._fps,
+            pessoas_cena=quantidade_cena["Pessoa"],
+            veiculos_cena=quantidade_cena["Veiculo"],
+            passagens_pessoa=len(self.unicos_por_categoria["Pessoa"]),
+            passagens_veiculo=len(self.unicos_por_categoria["Veiculo"]),
+            faces=len(eventos_faces),
+            placas=len(eventos_placas),
+            comportamentos=resumir_comportamento(
+                self.comportamento.unicos_por_classe,
+                self.comportamento.acoes_ativas,
+            ),
+            riscos=resumir_risco(self.comportamento.unicos_por_classe),
+            alerta=alerta,
         )
 
     def total_unicos_categoria(self, categoria):
@@ -1199,6 +1299,18 @@ def salvar_ocorrencia(
 
 # ===================== EXECUÇÃO =====================
 
+JANELA_CONTROLE = "ANALITICO"
+
+
+def _fechar_janelas(titulos):
+    for titulo in list(titulos):
+        try:
+            cv2.destroyWindow(titulo)
+        except Exception:
+            pass
+    titulos.clear()
+
+
 def titulo_janela(nome):
     return f"Analitico - {nome}"
 
@@ -1216,7 +1328,7 @@ def _encerrar_camera(item):
         pass
 
 
-def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
+def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, avisos_offline):
     """Abre câmeras novas e fecha as que saíram da lista ou trocaram de acesso."""
     por_id = {camera["id"]: camera for camera in desejadas}
 
@@ -1245,12 +1357,17 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
                 atual["janela"] = cfg["nome"]
             continue
 
+        captura, quadro = captura_com_quadro(cfg["url"])
+        if captura is None:
+            if ident not in avisos_offline:
+                print(
+                    f"{cfg['nome']} offline ({destino_publico(cfg['url'])}). "
+                    "O monitoramento segue com as câmeras online."
+                )
+                avisos_offline.add(ident)
+            continue
+
         perfil = perfil_camera(cfg.get("modelo") or "")
-        print(
-            f"Câmera iniciada: {cfg['nome']} ({destino_publico(cfg['url'])}) "
-            f"perfil {cfg.get('modelo') or 'padrao'} | imagem {perfil['lado']}px | "
-            f"carro a partir de {perfil['conf_veiculo']}"
-        )
         try:
             analitica = CameraAnalitica(
                 cfg["nome"],
@@ -1260,10 +1377,18 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
                 id_faces,
                 id_placas,
                 modelo=cfg.get("modelo") or "",
+                captura=captura,
+                quadro=quadro,
             )
         except Exception as exc:
             print(f"Falha ao abrir {cfg['nome']}: {exc}")
             continue
+        avisos_offline.discard(ident)
+        print(
+            f"Câmera iniciada: {cfg['nome']} ({destino_publico(cfg['url'])}) "
+            f"perfil {cfg.get('modelo') or 'padrao'} | analise {perfil['lado']}px | "
+            f"carro a partir de {perfil['conf_veiculo']} em {perfil['frames_veiculo']} quadros"
+        )
         estado[ident] = {
             "analitica": analitica,
             "url": cfg["url"],
@@ -1317,9 +1442,13 @@ def main():
     id_placas = IdentificadorPlacas()
 
     estado = {}
+    exibir = True
+    janelas_video = set()
     lista = []
     mtime_visto = None
     avisou_vazio = False
+    avisos_offline = set()
+    proxima_sonda = 0.0
     vigia = None
     try:
         from agente.vigia import Vigia
@@ -1337,7 +1466,8 @@ def main():
     print("Risco: Informativo(1) | Atencao(2) | Prioritario(3) | Critico(4)")
     print("Identidade: faces próximas + placas de veículos")
     print("Câmeras: clientes.json (a conta do cliente é relida durante a execução).")
-    print("Pressione Q para encerrar.")
+    print("V mostra ou oculta o vídeo. O monitoramento continua oculto.")
+    print("Q encerra o monitoramento por completo.")
 
     try:
         while True:
@@ -1353,15 +1483,45 @@ def main():
                     print(exc)
                     print("Mantendo as câmeras já em análise.")
                 else:
-                    aplicar_cameras(lista, estado, detector_arma, id_faces, id_placas)
-                    if not estado and not avisou_vazio:
+                    aplicar_cameras(
+                        lista, estado, detector_arma, id_faces, id_placas, avisos_offline
+                    )
+                    proxima_sonda = time.time() + SONDA_OFFLINE_SEG
+            elif lista and time.time() >= proxima_sonda:
+                aplicar_cameras(
+                    lista, estado, detector_arma, id_faces, id_placas, avisos_offline
+                )
+                proxima_sonda = time.time() + SONDA_OFFLINE_SEG
+
+            if not estado and not avisou_vazio and mtime_visto is not None:
+                if lista:
+                    print(
+                        "Nenhuma câmera online. "
+                        "O monitoramento abre quando alguma responder."
+                    )
+                else:
+                    print(
+                        "Nenhuma câmera ativa. "
+                        f"Inclua registros em {ARQUIVO_CAMERAS}."
+                    )
+                avisou_vazio = True
+            elif estado:
+                avisou_vazio = False
+
+            ativas = {titulo_janela(item["janela"]) for item in estado.values()}
+            janelas_video.intersection_update(ativas)
+
+            if exibir and janelas_video:
+                for titulo in list(janelas_video):
+                    if cv2.getWindowProperty(titulo, cv2.WND_PROP_VISIBLE) < 1:
+                        exibir = False
                         print(
-                            "Nenhuma câmera ativa. "
-                            f"Inclua registros em {ARQUIVO_CAMERAS}."
+                            "Exibição encerrada. O monitoramento continua. "
+                            "V mostra o vídeo de novo. Q encerra tudo."
                         )
-                        avisou_vazio = True
-                    elif estado:
-                        avisou_vazio = False
+                        break
+            if not exibir and janelas_video:
+                _fechar_janelas(janelas_video)
 
             for item in list(estado.values()):
                 cam = item["analitica"]
@@ -1381,20 +1541,37 @@ def main():
                         risco=som["risco"],
                         nivel_risco=som["nivel"],
                     )
-                out, eventos, cena, comp, ativos, faces, placas = cam.process()
+                out, eventos, cena, comp, ativos, faces, placas = cam.process(exibir)
                 _registrar_saida(cam, eventos, cena, comp, ativos)
                 for reg in faces:
                     salvar_passagem_face(reg)
                 for reg in placas:
                     salvar_passagem_placa(reg)
-                if out is not None:
-                    cv2.imshow(titulo_janela(item["janela"]), out)
+                if exibir and out is not None:
+                    titulo = titulo_janela(item["janela"])
+                    cv2.imshow(titulo, out)
+                    janelas_video.add(titulo)
+
+            cv2.imshow(
+                JANELA_CONTROLE,
+                desenhar_controle(exibir, [item["nome"] for item in estado.values()]),
+            )
 
             if not estado:
                 time.sleep(0.3)
 
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            tecla = cv2.waitKey(1) & 0xFF
+            if tecla in (ord("q"), ord("Q")):
                 break
+            if tecla in (ord("v"), ord("V")):
+                exibir = not exibir
+                if exibir:
+                    print("Vídeo aberto.")
+                else:
+                    print(
+                        "Vídeo oculto. O monitoramento continua. "
+                        "V mostra o vídeo de novo. Q encerra tudo."
+                    )
 
     finally:
         print("Encerrando analítico...")
