@@ -139,7 +139,8 @@ def inicializar_csv_placas():
         "Tipo_Veiculo",
         "Confianca",
         "Caminho_Foto",
-        "Foto_Referencia"
+        "Foto_Referencia",
+        "Similaridade"
     ]
     if not os.path.exists(ARQUIVO_PLACAS):
         with open(ARQUIVO_PLACAS, "w", newline="", encoding="utf-8-sig") as f:
@@ -186,7 +187,8 @@ def salvar_passagem_placa(registro: dict):
         registro.get("tipo_veiculo", ""),
         registro.get("confianca", 0),
         registro.get("caminho_foto", ""),
-        registro.get("foto_referencia", "")
+        registro.get("foto_referencia", ""),
+        "" if registro.get("similaridade") is None else registro.get("similaridade"),
     ]
     with open(ARQUIVO_PLACAS, "a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f, delimiter=";").writerow(linha)
@@ -1023,6 +1025,7 @@ class IdentificadorFaces:
                 "total_passagens": meta["total_passagens"],
                 "track_id": track_id,
                 "confianca": round(float(score), 2),
+                "similaridade": round(float(score), 2),
                 "proximidade": round(float(area_pessoa), 3),
                 "caminho_foto": str(caminho).replace("\\", "/"),
                 "foto_referencia": meta.get("foto_referencia", ""),
@@ -1455,6 +1458,8 @@ class IdentificadorPlacas:
 
             meta = self.cadastro.get(placa)
             novo = meta is None
+            anterior = None if novo else (meta or {}).get("assinatura")
+            similaridade = self._cosseno(assinatura, anterior) if anterior is not None else None
             if novo:
                 meta = self._registrar_placa(placa, veiculo, assinatura, True)
 
@@ -1492,6 +1497,7 @@ class IdentificadorPlacas:
                 "track_id": track_id,
                 "tipo_veiculo": info.get("classe", "Veiculo"),
                 "confianca": round(float(conf), 2),
+                "similaridade": None if similaridade is None else round(float(similaridade), 2),
                 "caminho_foto": str(caminho).replace("\\", "/"),
                 "foto_referencia": meta.get("foto_referencia", ""),
             })

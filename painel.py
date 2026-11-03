@@ -266,21 +266,50 @@ def resumir_risco(unicos_por_classe):
     return totais
 
 
-def desenhar_controle(exibir, nomes):
+def desenhar_controle(exibir, nomes, paineis=None, cameras=None):
     """Janela pequena que permanece quando o vídeo está oculto."""
-    imagem = np.zeros((132, 520, 3), dtype=np.uint8)
+    paineis = paineis or {}
+    cameras = cameras or []
+    linhas = max(1, len(cameras))
+    altura = 196 + linhas * 26
+    largura = 920
+    imagem = np.zeros((altura, largura, 3), dtype=np.uint8)
     imagem[:] = FUNDO
-    cv2.rectangle(imagem, (0, 0), (519, 131), AMBAR, 1)
-    _texto(imagem, "C4ISTAR", 14, 24, 0.5, AMBAR, 1)
+    cv2.rectangle(imagem, (0, 0), (largura - 1, altura - 1), AMBAR, 1)
+    fase = int(time.time() * 4) % 5
+    aceso = int(time.time() * 2) % 2 == 0
+    for indice in range(5):
+        cor = (80, 230, 110) if indice == fase else (0, 45, 18)
+        cv2.circle(imagem, (largura - 130 + indice * 16, 22), 4, cor, -1, cv2.LINE_AA)
+    cv2.circle(imagem, (largura - 24, 22), 6, VERDE if aceso else (0, 55, 18), -1, cv2.LINE_AA)
+    _texto(imagem, "C4ISTAR", 14, 28, 0.55, AMBAR, 1)
     if exibir:
-        _texto(imagem, "VIDEO ABERTO", 150, 24, 0.48, VERDE, 1)
+        _texto(imagem, "VIDEO ABERTO", 160, 28, 0.48, VERDE, 1)
     else:
-        _texto(imagem, "VIDEO OCULTO", 150, 24, 0.48, CIANO, 1)
-    _texto(imagem, "Monitoramento em execucao", 14, 52, 0.42, TEXTO, 1)
-    cameras = ", ".join(nomes) if nomes else "aguardando camera online"
-    _texto(imagem, cameras[:52], 14, 74, 0.38, DIM, 1)
-    _texto(imagem, "V  mostra ou oculta o video", 14, 100, 0.42, AMBAR, 1)
-    _texto(imagem, "Q  encerra tudo", 280, 100, 0.42, VERMELHO, 1)
+        _texto(imagem, "VIDEO OCULTO", 160, 28, 0.48, CIANO, 1)
+    _texto(imagem, "Monitoramento em execucao", 14, 58, 0.42, TEXTO, 1)
+    _texto(imagem, "V todas    Q encerra", 14, 86, 0.42, AMBAR, 1)
+    comandos = (("1", "CONTAGENS"), ("2", "COMPORT."), ("3", "LEITURA"), ("4", "MAPAS"))
+    x = 280
+    for tecla, nome in comandos:
+        aberto = bool(paineis.get(tecla))
+        estado = "ON" if aberto else "OFF"
+        _texto(imagem, f"{tecla} {nome} {estado}", x, 86, 0.4, VERDE if aberto else DIM, 1)
+        x += 155
+    _texto(imagem, "Cameras", 14, 118, 0.42, TEXTO, 1)
+    if not cameras:
+        _texto(imagem, "aguardando camera online", 120, 118, 0.4, DIM, 1)
+    y = 148
+    for camera in cameras:
+        ligada = bool(camera.get("aberto"))
+        cv2.circle(imagem, (22, y - 4), 5, VERDE if ligada else (0, 40, 18), -1, cv2.LINE_AA)
+        _texto(
+            imagem,
+            f"{camera.get('tecla')}   Camera {camera.get('indice')}   {camera.get('nome', '')}"[:42],
+            36, y, 0.42, VERDE if ligada else DIM, 1,
+        )
+        _texto(imagem, "ATIVA" if ligada else "OCULTA", 420, y, 0.4, VERDE if ligada else DIM, 1)
+        y += 26
     return imagem
 
 
@@ -297,6 +326,7 @@ def desenhar_painel(
     comportamentos,
     riscos,
     alerta=None,
+    match=None,
 ):
     """Devolve a imagem com a faixa superior e o painel à direita."""
     tele = TELEMETRIA.atualizar()
@@ -319,8 +349,10 @@ def desenhar_painel(
         _faixa(video, altura - 22, altura, 0.78)
         _texto(video, texto_alerta[:42], 10, altura - 7, 0.42, cor_alerta, 1)
 
+    limite_texto = altura - 118
+
     def cabe(y_linha):
-        return y_linha <= altura - 6
+        return y_linha <= limite_texto - 6
 
     def secao(titulo, y_secao):
         if not cabe(y_secao):
@@ -404,5 +436,42 @@ def desenhar_painel(
                 legenda = f"{legenda} agora {item['agora']}"
             y = linha(item["sigla"], f"{item['total']:03d}", legenda, y, cor)
 
+    _desenhar_match(painel, match)
     cv2.line(painel, (0, 0), (0, altura), AMBAR, 1)
     return saida
+
+
+def _miniatura_painel(imagem, largura=108, altura=62):
+    if imagem is None or getattr(imagem, "size", 0) == 0:
+        return None
+    return cv2.resize(imagem, (largura, altura), interpolation=cv2.INTER_AREA)
+
+
+def _desenhar_match(painel, match):
+    altura, largura = painel.shape[:2]
+    y0 = altura - 118
+    cv2.rectangle(painel, (0, y0), (largura, altura), FUNDO, -1)
+    cv2.line(painel, (8, y0), (largura - 8, y0), AMBAR, 1)
+    _texto(painel, "MATCH", 12, y0 + 16, 0.36, AMBAR, 1)
+    if not match:
+        _texto(painel, "sem interesse", 12, y0 + 42, 0.36, DIM, 1)
+        return
+    cor_tipo = (210, 90, 230) if match.get("tipo") == "FACE" else CIANO
+    _texto(painel, match.get("tipo") or "", 68, y0 + 16, 0.32, cor_tipo, 1)
+    taxa = float(match.get("taxa") or 0)
+    _texto(painel, f"{match.get('rotulo_taxa') or 'SIM'} {taxa:.2f}", 138, y0 + 16, 0.38, TEXTO, 1)
+    _barra(painel, 138, y0 + 20, 112, 5, taxa, VERDE if taxa >= 0.60 else AMBAR)
+    for rotulo, imagem, x in (
+        ("REF", match.get("referencia"), 12),
+        ("AGORA", match.get("atual"), 140),
+    ):
+        _texto(painel, rotulo, x, y0 + 36, 0.30, DIM, 1)
+        thumb = _miniatura_painel(imagem)
+        if thumb is None:
+            _texto(painel, "sem foto", x, y0 + 70, 0.32, DIM, 1)
+            continue
+        y = y0 + 42
+        h, w = thumb.shape[:2]
+        painel[y:y + h, x:x + w] = thumb
+    legenda = f"{match.get('id') or ''} {match.get('nome') or ''}".strip()
+    _texto(painel, legenda[:32], 12, altura - 6, 0.32, TEXTO, 1)

@@ -34,6 +34,13 @@ from identidade import (
     salvar_passagem_face,
     salvar_passagem_placa,
 )
+from monitores import (
+    INTERVALO_PAINEL_SEG,
+    JANELAS_PAINEL,
+    Acervo,
+    aplicar_pulso,
+    desenhar_monitor,
+)
 from painel import desenhar_controle, desenhar_painel, resumir_comportamento, resumir_risco
 
 
@@ -76,9 +83,9 @@ LARGURA, ALTURA = 640, 480
 # A placa é lida no quadro original, onde o texto ainda está nítido.
 # frames_veiculo: um quadro que pisca (caixa, muro) não completa a passagem.
 PERFIS_CAMERA = {
-    "im5": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.32, "frames_veiculo": 4},
-    "im3": {"lado": 640, "conf": 0.45, "conf_veiculo": 0.40, "frames_veiculo": 4},
-    "padrao": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.35, "frames_veiculo": 4},
+    "im5": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.32, "frames_veiculo": 2},
+    "im3": {"lado": 640, "conf": 0.45, "conf_veiculo": 0.40, "frames_veiculo": 2},
+    "padrao": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.35, "frames_veiculo": 2},
 }
 
 # Pessoa, carro, moto, ônibus e caminhão. Barco, pássaro e outros objetos ficam de fora.
@@ -95,6 +102,25 @@ def perfil_camera(modelo: str) -> dict:
         if nome != "padrao" and nome in chave:
             return dict(perfil)
     return dict(PERFIS_CAMERA["padrao"])
+
+
+def _ler_foto(caminho):
+    if not caminho or not os.path.exists(caminho):
+        return None
+    return cv2.imread(str(caminho))
+
+
+def _montar_match(tipo, ident, nome, taxa, rotulo, referencia, atual, agora):
+    return {
+        "tipo": tipo,
+        "id": ident,
+        "nome": nome,
+        "taxa": max(0.0, min(1.0, taxa)),
+        "rotulo_taxa": rotulo,
+        "referencia": _ler_foto(referencia),
+        "atual": _ler_foto(atual),
+        "ate": agora + 30,
+    }
 
 
 def redimensionar_para_analise(frame, lado: int):
@@ -212,7 +238,10 @@ class CameraStream:
     def __init__(self, src, captura=None, quadro=None):
         self.stream = captura if captura is not None else abrir_captura(src)
         self.frame = quadro
+        self.preview = None
         self.stopped = False
+        if self.frame is not None:
+            self._guardar(self.frame)
         if self.frame is None:
             try:
                 ok, quadro = self.stream.read()
@@ -236,9 +265,13 @@ class CameraStream:
                 time.sleep(0.2)
                 continue
             if ret:
-                self.frame = frame
+                self._guardar(frame)
             else:
                 time.sleep(0.01)
+
+    def _guardar(self, frame):
+        self.frame = frame
+        self.preview = redimensionar_para_analise(frame, 640)
 
     def read(self):
         return self.frame
@@ -933,10 +966,53 @@ class CameraAnalitica:
             self._fps = 0.0
             self._ultimo_quadro = time.time()
             self.comportamento = AnaliseComportamental(nome, self.pose)
+            self._parar_analise = threading.Event()
+            self._trava = threading.Lock()
+            self._pendentes = []
+            self._visao = {
+                "fps": 0.0,
+                "pessoas_cena": 0,
+                "veiculos_cena": 0,
+                "passagens_pessoa": 0,
+                "passagens_veiculo": 0,
+                "faces": 0,
+                "placas": 0,
+                "comportamentos": [],
+                "riscos": {1: 0, 2: 0, 3: 0, 4: 0},
+                "alerta": None,
+                "anotacoes": [],
+                "quando": 0.0,
+                "match": None,
+            }
+            self._match = None
         except Exception:
             self.stream.stop()
             raise
         self.stream.start()
+        self._analise = threading.Thread(
+            target=self._analisar_continuo, name=f"analise-{nome}", daemon=True
+        )
+        self._analise.start()
+
+    def _analisar_continuo(self):
+        while not self._parar_analise.is_set():
+            try:
+                resultado = self.process(False)
+            except Exception as exc:
+                print(f"Análise de {self.nome} interrompida neste quadro: {exc}")
+                time.sleep(0.2)
+                continue
+            _out, eventos, cena, comp, ativos, faces, placas = resultado
+            with self._trava:
+                self._pendentes.append((eventos, cena, comp, ativos, faces, placas))
+
+    def retirar_resultados(self):
+        with self._trava:
+            pacotes = self._pendentes
+            self._pendentes = []
+            visao = dict(self._visao)
+            visao["anotacoes"] = list(self._visao["anotacoes"])
+        return pacotes, visao
 
     def classificar(self, cls_id):
         if cls_id == CLASSE_PESSOA:
@@ -959,6 +1035,7 @@ class CameraAnalitica:
         frame = self.stream.read()
         if frame is None:
             return vazio
+        frame = frame.copy()
 
         agora = time.time()
         intervalo = agora - self._ultimo_quadro
@@ -1006,6 +1083,7 @@ class CameraAnalitica:
         pessoas_cena = {}
         veiculos_cena = {}
         presentes = set()
+        anotacoes = []
 
         for box, track_id in zip(boxes, ids):
             cls_id = int(box.cls[0].item())
@@ -1020,24 +1098,34 @@ class CameraAnalitica:
                 continue
             nome = self.nome_classe(cls_id)
 
+            centro = ((x1 + x2) / 2, (y1 + y2) / 2)
             if categoria == "Veiculo":
                 if track_id is None or (x2 - x1) < LADO_MINIMO_VEICULO or (y2 - y1) < 16:
                     continue
                 presentes.add(track_id)
                 self.estabilidade[track_id] = self.estabilidade.get(track_id, 0) + 1
-                if self.estabilidade[track_id] < frames_veiculo:
+                # Um carro nítido conta no primeiro quadro. O quadro fraco espera repetir,
+                # para uma caixa piscando não virar passagem quando a imagem congela.
+                nitido = conf >= 0.48 and (x2 - x1) >= 36
+                if self.estabilidade[track_id] < frames_veiculo and not nitido:
                     continue
-                centro = ((x1 + x2) / 2, (y1 + y2) / 2)
-                origem = self.origem_veiculo.setdefault(track_id, centro)
-                desloc = math.hypot(centro[0] - origem[0], centro[1] - origem[1])
-                passou = desloc >= DESLOCAMENTO_PASSAGEM * diagonal
+                passou = True
+            elif track_id is None:
+                grade = (int(centro[0] // 48), int(centro[1] // 48))
+                chave_grade = ("pessoa", grade)
+                passou = chave_grade not in self.ids_vistos
+                if passou:
+                    self.ids_vistos.add(chave_grade)
             else:
-                passou = track_id is not None
+                passou = True
 
             quantidade_cena[categoria] += 1
 
             chave = (categoria, cls_id, track_id)
-            if passou and track_id is not None and chave not in self.ids_vistos:
+            if passou and track_id is None and categoria == "Pessoa":
+                self.unicos_por_categoria[categoria].add(chave_grade)
+                novos_eventos.append((categoria, nome, f"{grade[0]}-{grade[1]}"))
+            elif passou and track_id is not None and chave not in self.ids_vistos:
                 self.ids_vistos.add(chave)
                 self.unicos_por_categoria[categoria].add(chave)
                 novos_eventos.append((categoria, nome, track_id))
@@ -1060,12 +1148,13 @@ class CameraAnalitica:
                     "classe": nome
                 }
 
+            cor = CORES[categoria]
+            rotulo = f"{nome} #{track_id}" if track_id is not None else nome
+            acao = self.comportamento.acoes_ativas.get(track_id)
+            if categoria == "Pessoa" and acao:
+                rotulo = f"{rotulo} | {acao}"
+            anotacoes.append((x1, y1, x2, y2, rotulo, cor))
             if exibir:
-                cor = CORES[categoria]
-                rotulo = f"{nome} #{track_id}" if track_id is not None else nome
-                acao = self.comportamento.acoes_ativas.get(track_id)
-                if categoria == "Pessoa" and acao:
-                    rotulo = f"{rotulo} | {acao}"
                 cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
                 cv2.putText(
                     frame, rotulo, (x1, max(y1 - 5, 15)),
@@ -1074,8 +1163,10 @@ class CameraAnalitica:
 
         for track_id in list(self.estabilidade):
             if track_id not in presentes:
-                self.estabilidade.pop(track_id, None)
-                self.origem_veiculo.pop(track_id, None)
+                self.estabilidade[track_id] = self.estabilidade.get(track_id, 1) - 1
+                if self.estabilidade[track_id] <= 0:
+                    self.estabilidade.pop(track_id, None)
+                    self.origem_veiculo.pop(track_id, None)
 
         armas = self.detector_arma.detectar(frame)
         if exibir:
@@ -1127,6 +1218,33 @@ class CameraAnalitica:
         else:
             frame = None
 
+        self._definir_match(eventos_faces, eventos_placas)
+        with self._trava:
+            self._visao = {
+                "fps": self._fps,
+                "pessoas_cena": quantidade_cena["Pessoa"],
+                "veiculos_cena": quantidade_cena["Veiculo"],
+                "passagens_pessoa": len(self.unicos_por_categoria["Pessoa"]),
+                "passagens_veiculo": len(self.unicos_por_categoria["Veiculo"]),
+                "faces": len(eventos_faces),
+                "placas": len(eventos_placas),
+                "comportamentos": resumir_comportamento(
+                    self.comportamento.unicos_por_classe,
+                    self.comportamento.acoes_ativas,
+                ),
+                "riscos": resumir_risco(self.comportamento.unicos_por_classe),
+                "alerta": None,
+                "anotacoes": anotacoes,
+                "quando": time.time(),
+                "match": self._match if self._match and time.time() <= self._match.get("ate", 0) else None,
+            }
+            if eventos_comp:
+                ev = max(eventos_comp, key=lambda item: item["nivel_risco"])
+                self._visao["alerta"] = (
+                    f"{ev['risco'].upper()}  {ev['classe']}  ID {ev['id']}",
+                    CORES_RISCO.get(ev["risco"], (0, 0, 255)),
+                )
+
         return (
             frame,
             novos_eventos,
@@ -1161,10 +1279,63 @@ class CameraAnalitica:
             alerta=alerta,
         )
 
+    def _definir_match(self, eventos_faces, eventos_placas):
+        agora = time.time()
+        if self._match and agora > self._match.get("ate", 0):
+            self._match = None
+        try:
+            from cadastro import interesse_ativo
+            interesse = interesse_ativo()
+        except Exception:
+            return
+        nomes_face = {
+            str(pessoa.get("face_id") or ""): str(pessoa.get("nome") or "")
+            for pessoa in interesse.get("pessoas") or []
+            if pessoa.get("face_id")
+        }
+        nomes_placa = {
+            str(veiculo.get("placa") or "").upper(): str(veiculo.get("nome") or "")
+            for veiculo in interesse.get("veiculos") or []
+            if veiculo.get("placa")
+        }
+        face = None
+        for ev in eventos_faces or []:
+            ident = str(ev.get("face_id") or "")
+            if ident not in nomes_face:
+                continue
+            taxa = ev.get("similaridade")
+            if taxa is None:
+                taxa = ev.get("confianca") or 0
+            face = _montar_match(
+                "FACE", ident, nomes_face[ident], float(taxa), "SIM",
+                ev.get("foto_referencia"), ev.get("caminho_foto"), agora,
+            )
+        placa = None
+        for ev in eventos_placas or []:
+            ident = str(ev.get("placa") or "").upper()
+            if ident not in nomes_placa:
+                continue
+            sim = ev.get("similaridade")
+            if sim is None:
+                taxa, rotulo = float(ev.get("confianca") or 0), "LEIT"
+            else:
+                taxa, rotulo = float(sim), "SIM"
+            placa = _montar_match(
+                "PLACA", ident, nomes_placa[ident], taxa, rotulo,
+                ev.get("foto_referencia"), ev.get("caminho_foto"), agora,
+            )
+        if face:
+            self._match = face
+        elif placa:
+            self._match = placa
+
     def total_unicos_categoria(self, categoria):
         return len(self.unicos_por_categoria[categoria])
 
     def stop(self):
+        self._parar_analise.set()
+        if getattr(self, "_analise", None) is not None and self._analise.is_alive():
+            self._analise.join(timeout=2)
         self.stream.stop()
         self.comportamento.stop()
 
@@ -1467,7 +1638,23 @@ def main():
     print("Identidade: faces próximas + placas de veículos")
     print("Câmeras: clientes.json (a conta do cliente é relida durante a execução).")
     print("V mostra ou oculta o vídeo. O monitoramento continua oculto.")
+    print("1 abre ou fecha o painel de contagens.")
+    print("2 abre ou fecha o painel de comportamento.")
+    print("3 abre ou fecha o painel de leitura.")
+    print("4 abre ou fecha os mapas. D dia, S semana, M mês, P pontos, C calor.")
+    print("5 liga a Camera 1, 6 a Camera 2, e assim por diante.")
     print("Q encerra o monitoramento por completo.")
+
+    acervo = Acervo()
+    acervo.iniciar()
+    paineis = {"1": False, "2": False, "3": False, "4": False}
+    video_cameras = {}
+    janelas_painel = set()
+    cache_painel = {}
+    sumiu_painel = {}
+    sumiu_camera = {}
+    proxima_tela = 0.0
+    versao_mapa_vista = 0
 
     try:
         while True:
@@ -1511,18 +1698,30 @@ def main():
             ativas = {titulo_janela(item["janela"]) for item in estado.values()}
             janelas_video.intersection_update(ativas)
 
-            if exibir and janelas_video:
-                for titulo in list(janelas_video):
-                    if cv2.getWindowProperty(titulo, cv2.WND_PROP_VISIBLE) < 1:
-                        exibir = False
-                        print(
-                            "Exibição encerrada. O monitoramento continua. "
-                            "V mostra o vídeo de novo. Q encerra tudo."
-                        )
-                        break
-            if not exibir and janelas_video:
-                _fechar_janelas(janelas_video)
+            for item in list(estado.values()):
+                video_cameras.setdefault(item["nome"], True)
+                titulo = titulo_janela(item["janela"])
+                if titulo not in janelas_video or not video_cameras.get(item["nome"], True):
+                    continue
+                try:
+                    visivel = cv2.getWindowProperty(titulo, cv2.WND_PROP_VISIBLE) >= 1
+                except Exception:
+                    visivel = False
+                if visivel:
+                    sumiu_camera.pop(titulo, None)
+                    continue
+                sumiu_camera[titulo] = sumiu_camera.get(titulo, 0) + 1
+                if sumiu_camera[titulo] < 8:
+                    continue
+                video_cameras[item["nome"]] = False
+                janelas_video.discard(titulo)
+                sumiu_camera.pop(titulo, None)
+                print(
+                    f"{item['nome']} oculta. O monitoramento continua. "
+                    "A tecla da camera mostra de novo."
+                )
 
+            matches_vivos = []
             for item in list(estado.values()):
                 cam = item["analitica"]
                 for som in item.get("audio").drenar() if item.get("audio") else []:
@@ -1541,20 +1740,117 @@ def main():
                         risco=som["risco"],
                         nivel_risco=som["nivel"],
                     )
-                out, eventos, cena, comp, ativos, faces, placas = cam.process(exibir)
-                _registrar_saida(cam, eventos, cena, comp, ativos)
-                for reg in faces:
-                    salvar_passagem_face(reg)
-                for reg in placas:
-                    salvar_passagem_placa(reg)
-                if exibir and out is not None:
-                    titulo = titulo_janela(item["janela"])
-                    cv2.imshow(titulo, out)
+                pacotes, visao = cam.retirar_resultados()
+                match = visao.get("match")
+                if match and time.time() <= float(match.get("ate") or 0):
+                    ativo = dict(match)
+                    ativo["camera"] = cam.nome
+                    matches_vivos.append(ativo)
+                for eventos, cena, comp, ativos, faces, placas in pacotes:
+                    _registrar_saida(cam, eventos, cena, comp, ativos)
+                    for reg in faces:
+                        salvar_passagem_face(reg)
+                    for reg in placas:
+                        salvar_passagem_placa(reg)
+                titulo = titulo_janela(item["janela"])
+                if video_cameras.get(cam.nome, True) and cam.stream.preview is not None:
+                    tela = cam.stream.preview.copy()
+                    if time.time() - visao["quando"] < 0.6:
+                        for x1, y1, x2, y2, rotulo, cor in visao["anotacoes"]:
+                            cv2.rectangle(tela, (x1, y1), (x2, y2), cor, 2)
+                            cv2.putText(
+                                tela, rotulo, (x1, max(y1 - 5, 15)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, cor, 2,
+                            )
+                    tela = desenhar_painel(
+                        tela,
+                        nome=cam.nome,
+                        fps=visao["fps"],
+                        pessoas_cena=visao["pessoas_cena"],
+                        veiculos_cena=visao["veiculos_cena"],
+                        passagens_pessoa=visao["passagens_pessoa"],
+                        passagens_veiculo=visao["passagens_veiculo"],
+                        faces=visao["faces"],
+                        placas=visao["placas"],
+                        comportamentos=visao["comportamentos"],
+                        riscos=visao["riscos"],
+                        alerta=visao["alerta"],
+                        match=visao.get("match"),
+                    )
+                    cv2.imshow(titulo, aplicar_pulso(tela))
                     janelas_video.add(titulo)
+                elif titulo in janelas_video:
+                    try:
+                        cv2.destroyWindow(titulo)
+                    except Exception:
+                        pass
+                    janelas_video.discard(titulo)
 
+            cameras_online = [{"nome": item["nome"]} for item in estado.values()]
+            acervo.quer_leitura = bool(paineis.get("3") or paineis.get("4"))
+            acervo.quer_mapas = bool(paineis.get("4"))
+            if (paineis.get("3") or paineis.get("4")) and acervo.mapa_versao != versao_mapa_vista:
+                proxima_tela = min(proxima_tela, time.time())
+            if any(paineis.values()) and time.time() >= proxima_tela:
+                pacote = acervo.pacote(cameras_online, matches_vivos)
+                for chave, aberto in paineis.items():
+                    if aberto:
+                        cache_painel[chave] = desenhar_monitor(chave, pacote)
+                versao_mapa_vista = acervo.mapa_versao
+                proxima_tela = time.time() + INTERVALO_PAINEL_SEG
+
+            for chave, titulo in JANELAS_PAINEL.items():
+                if not paineis[chave]:
+                    if titulo in janelas_painel:
+                        try:
+                            cv2.destroyWindow(titulo)
+                        except Exception:
+                            pass
+                        janelas_painel.discard(titulo)
+                    continue
+                imagem = cache_painel.get(chave)
+                if imagem is None:
+                    cache_painel[chave] = desenhar_monitor(
+                        chave, acervo.pacote(cameras_online, matches_vivos),
+                    )
+                    imagem = cache_painel[chave]
+                cv2.imshow(titulo, aplicar_pulso(imagem.copy()))
+                if titulo in janelas_painel:
+                    try:
+                        visivel = cv2.getWindowProperty(titulo, cv2.WND_PROP_VISIBLE) >= 1
+                    except Exception:
+                        visivel = False
+                    if visivel:
+                        sumiu_painel.pop(titulo, None)
+                    else:
+                        sumiu_painel[titulo] = sumiu_painel.get(titulo, 0) + 1
+                        if sumiu_painel[titulo] >= 8:
+                            paineis[chave] = False
+                            janelas_painel.discard(titulo)
+                            sumiu_painel.pop(titulo, None)
+                            print(f"Painel fechado. {chave} abre de novo.")
+                            continue
+                janelas_painel.add(titulo)
+
+            ordem = list(estado.values())
+            menu_cameras = [
+                {
+                    "indice": indice,
+                    "nome": item["nome"],
+                    "tecla": str(4 + indice),
+                    "aberto": video_cameras.get(item["nome"], True),
+                }
+                for indice, item in enumerate(ordem, start=1)
+                if indice <= 5
+            ]
             cv2.imshow(
                 JANELA_CONTROLE,
-                desenhar_controle(exibir, [item["nome"] for item in estado.values()]),
+                desenhar_controle(
+                    any(camera["aberto"] for camera in menu_cameras),
+                    [item["nome"] for item in ordem],
+                    paineis,
+                    menu_cameras,
+                ),
             )
 
             if not estado:
@@ -1564,17 +1860,42 @@ def main():
             if tecla in (ord("q"), ord("Q")):
                 break
             if tecla in (ord("v"), ord("V")):
-                exibir = not exibir
-                if exibir:
-                    print("Vídeo aberto.")
+                ligar = not any(video_cameras.get(item["nome"], True) for item in estado.values())
+                for item in estado.values():
+                    video_cameras[item["nome"]] = ligar
+                if ligar:
+                    print("Vídeo de todas as câmeras aberto.")
                 else:
-                    print(
-                        "Vídeo oculto. O monitoramento continua. "
-                        "V mostra o vídeo de novo. Q encerra tudo."
-                    )
+                    print("Vídeo oculto. O monitoramento continua. V mostra de novo.")
+            if ord("5") <= tecla <= ord("9"):
+                posicao = tecla - ord("5")
+                ordem = list(estado.values())
+                if posicao < len(ordem):
+                    nome = ordem[posicao]["nome"]
+                    video_cameras[nome] = not video_cameras.get(nome, True)
+                    estado_camera = "ativa" if video_cameras[nome] else "oculta"
+                    print(f"Camera {posicao + 1} {estado_camera}. O monitoramento continua.")
+            if tecla in (ord("1"), ord("2"), ord("3"), ord("4")):
+                chave = chr(tecla)
+                paineis[chave] = not paineis[chave]
+                proxima_tela = 0.0
+                if paineis[chave]:
+                    print(f"Painel {JANELAS_PAINEL[chave]} aberto. {chave} fecha.")
+                else:
+                    cache_painel.pop(chave, None)
+                    print(f"Painel {JANELAS_PAINEL[chave]} fechado. {chave} abre.")
+            if tecla in (ord("d"), ord("D"), ord("s"), ord("S"), ord("m"), ord("M")):
+                acervo.modo_periodo = {ord("d"): "dia", ord("s"): "semana", ord("m"): "mes"}[tecla | 32]
+                acervo._mapa_painel_chave = None
+                proxima_tela = 0.0
+            if tecla in (ord("p"), ord("P"), ord("c"), ord("C")):
+                acervo.modo_desenho = "pontos" if tecla in (ord("p"), ord("P")) else "calor"
+                acervo._mapa_painel_chave = None
+                proxima_tela = 0.0
 
     finally:
         print("Encerrando analítico...")
+        acervo.parar()
         if vigia is not None:
             vigia.parar()
         for item in estado.values():
