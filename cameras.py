@@ -18,7 +18,12 @@ Cada câmera aceita o endereço completo ou os campos de acesso Intelbras:
       "usuario": "admin",
       "senha": "senha",
       "canal": 1,
-      "subtype": 0
+      "subtype": 0,
+      "rua": "Rua da camera",
+      "bairro": "Bairro",
+      "cidade": "Cidade/UF",
+      "latitude": 0.0,
+      "longitude": 0.0
     }
   ]
 }
@@ -76,6 +81,18 @@ def destino_publico(url: str) -> str:
     return f"{parsed.hostname}{porta}"
 
 
+def _coordenada(valor):
+    if valor in (None, ""):
+        return None
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return None
+    if not -180 <= numero <= 180:
+        return None
+    return numero
+
+
 def _como_bool(valor, padrao=True) -> bool:
     if valor is None:
         return padrao
@@ -116,6 +133,11 @@ def _normalizar(item, indice: int):
         "url": url,
         "ativa": _como_bool(item.get("ativa"), True),
         "modelo": str(item.get("modelo") or item.get("perfil") or "").strip(),
+        "rua": str(item.get("rua") or "").strip(),
+        "bairro": str(item.get("bairro") or "").strip(),
+        "cidade": str(item.get("cidade") or "").strip(),
+        "latitude": _coordenada(item.get("latitude")),
+        "longitude": _coordenada(item.get("longitude")),
     }
 
 

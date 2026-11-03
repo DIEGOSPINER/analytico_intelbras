@@ -19,7 +19,12 @@
           "usuario": "usuario",
           "senha": "senha",
           "canal": 1,
-          "subtype": 0
+          "subtype": 0,
+          "rua": "Rua da camera",
+          "bairro": "Bairro",
+          "cidade": "Cidade/UF",
+          "latitude": 0.0,
+          "longitude": 0.0
         }
       ],
       "pessoas": [

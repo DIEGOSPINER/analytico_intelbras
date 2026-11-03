@@ -5,6 +5,16 @@ os.environ.setdefault(
     "rtsp_transport;tcp|stimeout;4000000",
 )
 
+import ctypes
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 import cv2
 import threading
 import time
@@ -1473,12 +1483,75 @@ def salvar_ocorrencia(
 JANELA_CONTROLE = "ANALITICO"
 
 
-def _fechar_janelas(titulos):
-    for titulo in list(titulos):
+_JANELAS_PREPARADAS = set()
+
+
+def _tamanho_inicial(largura, altura):
+    """Cabe no monitor atual. Depois o operador estica para o video wall."""
+    tela_w = ctypes.windll.user32.GetSystemMetrics(0)
+    tela_h = ctypes.windll.user32.GetSystemMetrics(1)
+    if tela_w <= 0 or tela_h <= 0:
+        return largura, altura
+    limite_w = int(tela_w * 0.92)
+    limite_h = int(tela_h * 0.92)
+    if largura <= limite_w and altura <= limite_h:
+        return largura, altura
+    escala = min(limite_w / max(largura, 1), limite_h / max(altura, 1))
+    return max(320, int(largura * escala)), max(180, int(altura * escala))
+
+
+def mostrar_janela(titulo, imagem):
+    if titulo not in _JANELAS_PREPARADAS:
+        cv2.namedWindow(
+            titulo,
+            cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO | cv2.WINDOW_GUI_NORMAL,
+        )
         try:
-            cv2.destroyWindow(titulo)
+            cv2.setWindowProperty(titulo, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_FREERATIO)
         except Exception:
             pass
+        altura, largura = imagem.shape[:2]
+        largura, altura = _tamanho_inicial(largura, altura)
+        cv2.resizeWindow(titulo, largura, altura)
+        _JANELAS_PREPARADAS.add(titulo)
+    cv2.imshow(titulo, imagem)
+
+
+def fechar_janela(titulo):
+    _JANELAS_PREPARADAS.discard(titulo)
+    try:
+        cv2.destroyWindow(titulo)
+    except Exception:
+        pass
+
+
+def _titulo_em_foco():
+    hwnd = ctypes.windll.user32.GetForegroundWindow()
+    if not hwnd:
+        return ""
+    tamanho = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+    if tamanho <= 0:
+        return ""
+    buffer = ctypes.create_unicode_buffer(tamanho + 1)
+    ctypes.windll.user32.GetWindowTextW(hwnd, buffer, tamanho + 1)
+    return buffer.value
+
+
+def alternar_tela_cheia():
+    titulo = _titulo_em_foco()
+    if titulo not in _JANELAS_PREPARADAS:
+        return
+    try:
+        atual = cv2.getWindowProperty(titulo, cv2.WND_PROP_FULLSCREEN)
+        destino = cv2.WINDOW_NORMAL if atual >= 1 else cv2.WINDOW_FULLSCREEN
+        cv2.setWindowProperty(titulo, cv2.WND_PROP_FULLSCREEN, destino)
+    except Exception:
+        pass
+
+
+def _fechar_janelas(titulos):
+    for titulo in list(titulos):
+        fechar_janela(titulo)
     titulos.clear()
 
 
@@ -1493,10 +1566,15 @@ def _encerrar_camera(item):
     if audio is not None:
         audio.stop()
     analitica.stop()
-    try:
-        cv2.destroyWindow(titulo_janela(item["janela"]))
-    except Exception:
-        pass
+    fechar_janela(titulo_janela(item["janela"]))
+
+
+def _copiar_local(destino, cfg):
+    destino["rua"] = cfg.get("rua") or ""
+    destino["bairro"] = cfg.get("bairro") or ""
+    destino["cidade"] = cfg.get("cidade") or ""
+    destino["latitude"] = cfg.get("latitude")
+    destino["longitude"] = cfg.get("longitude")
 
 
 def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, avisos_offline):
@@ -1513,15 +1591,13 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, aviso
     for ident, cfg in por_id.items():
         if ident in estado:
             atual = estado[ident]
+            _copiar_local(atual, cfg)
             if cfg.get("modelo") != atual.get("modelo"):
                 atual["modelo"] = cfg.get("modelo") or ""
                 atual["analitica"].modelo = atual["modelo"]
                 atual["analitica"].perfil = perfil_camera(atual["modelo"])
             if cfg["nome"] != atual["nome"]:
-                try:
-                    cv2.destroyWindow(titulo_janela(atual["janela"]))
-                except Exception:
-                    pass
+                fechar_janela(titulo_janela(atual["janela"]))
                 atual["analitica"].nome = cfg["nome"]
                 atual["analitica"].comportamento.nome = cfg["nome"]
                 atual["nome"] = cfg["nome"]
@@ -1568,6 +1644,7 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, aviso
             "janela": cfg["nome"],
             "audio": EscutaAudio(cfg["nome"], cfg["url"]).start(),
         }
+        _copiar_local(estado[ident], cfg)
 
 
 def _registrar_saida(cam, eventos, cena, comp, ativos):
@@ -1638,12 +1715,16 @@ def main():
     print("Identidade: faces próximas + placas de veículos")
     print("Câmeras: clientes.json (a conta do cliente é relida durante a execução).")
     print("V mostra ou oculta o vídeo. O monitoramento continua oculto.")
-    print("1 abre ou fecha o painel de contagens.")
-    print("2 abre ou fecha o painel de comportamento.")
-    print("3 abre ou fecha o painel de leitura.")
-    print("4 abre ou fecha os mapas. D dia, S semana, M mês, P pontos, C calor.")
+    print("1 abre ou fecha Contagens.")
+    print("2 abre ou fecha Comportamento.")
+    print("3 abre ou fecha Alertas de RF e LPR.")
+    print("4 abre ou fecha Mapas. D dia, S semana, M mês, P pontos, C calor.")
     print("5 liga a Camera 1, 6 a Camera 2, e assim por diante.")
     print("Q encerra o monitoramento por completo.")
+    print(
+        "As janelas esticam pela borda, maximizam e encaixam com Win+Tab. "
+        "F alterna tela cheia na janela em foco."
+    )
 
     acervo = Acervo()
     acervo.iniciar()
@@ -1714,6 +1795,7 @@ def main():
                 if sumiu_camera[titulo] < 8:
                     continue
                 video_cameras[item["nome"]] = False
+                fechar_janela(titulo)
                 janelas_video.discard(titulo)
                 sumiu_camera.pop(titulo, None)
                 print(
@@ -1777,13 +1859,10 @@ def main():
                         alerta=visao["alerta"],
                         match=visao.get("match"),
                     )
-                    cv2.imshow(titulo, aplicar_pulso(tela))
+                    mostrar_janela(titulo, aplicar_pulso(tela))
                     janelas_video.add(titulo)
                 elif titulo in janelas_video:
-                    try:
-                        cv2.destroyWindow(titulo)
-                    except Exception:
-                        pass
+                    fechar_janela(titulo)
                     janelas_video.discard(titulo)
 
             cameras_online = [{"nome": item["nome"]} for item in estado.values()]
@@ -1802,10 +1881,7 @@ def main():
             for chave, titulo in JANELAS_PAINEL.items():
                 if not paineis[chave]:
                     if titulo in janelas_painel:
-                        try:
-                            cv2.destroyWindow(titulo)
-                        except Exception:
-                            pass
+                        fechar_janela(titulo)
                         janelas_painel.discard(titulo)
                     continue
                 imagem = cache_painel.get(chave)
@@ -1814,7 +1890,7 @@ def main():
                         chave, acervo.pacote(cameras_online, matches_vivos),
                     )
                     imagem = cache_painel[chave]
-                cv2.imshow(titulo, aplicar_pulso(imagem.copy()))
+                mostrar_janela(titulo, aplicar_pulso(imagem.copy()))
                 if titulo in janelas_painel:
                     try:
                         visivel = cv2.getWindowProperty(titulo, cv2.WND_PROP_VISIBLE) >= 1
@@ -1826,6 +1902,7 @@ def main():
                         sumiu_painel[titulo] = sumiu_painel.get(titulo, 0) + 1
                         if sumiu_painel[titulo] >= 8:
                             paineis[chave] = False
+                            fechar_janela(titulo)
                             janelas_painel.discard(titulo)
                             sumiu_painel.pop(titulo, None)
                             print(f"Painel fechado. {chave} abre de novo.")
@@ -1837,13 +1914,14 @@ def main():
                 {
                     "indice": indice,
                     "nome": item["nome"],
+                    "rua": item.get("rua") or "",
                     "tecla": str(4 + indice),
                     "aberto": video_cameras.get(item["nome"], True),
                 }
                 for indice, item in enumerate(ordem, start=1)
                 if indice <= 5
             ]
-            cv2.imshow(
+            mostrar_janela(
                 JANELA_CONTROLE,
                 desenhar_controle(
                     any(camera["aberto"] for camera in menu_cameras),
@@ -1859,6 +1937,8 @@ def main():
             tecla = cv2.waitKey(1) & 0xFF
             if tecla in (ord("q"), ord("Q")):
                 break
+            if tecla in (ord("f"), ord("F")):
+                alternar_tela_cheia()
             if tecla in (ord("v"), ord("V")):
                 ligar = not any(video_cameras.get(item["nome"], True) for item in estado.values())
                 for item in estado.values():

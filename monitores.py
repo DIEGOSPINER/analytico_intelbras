@@ -13,15 +13,15 @@ from datetime import date, datetime, timedelta
 import cv2
 import numpy as np
 
-from mapa import compor_calor, compor_mapa
+from mapa import compor_bolhas, compor_calor, compor_mapa
 
 INTERVALO_PAINEL_SEG = 15
 
 JANELAS_PAINEL = {
-    "1": "MONITORAMENTO CONTAGENS",
-    "2": "MONITORAMENTO COMPORTAMENTO",
-    "3": "MONITORAMENTO LEITURA",
-    "4": "MONITORAMENTO MAPAS",
+    "1": "C4ISTAR MONITOR  CONTAGENS",
+    "2": "C4ISTAR MONITOR  COMPORTAMENTO",
+    "3": "C4ISTAR MONITOR  ALERTAS DE RF E LPR",
+    "4": "C4ISTAR MONITOR  MAPAS",
 }
 
 LARGURA = 1200
@@ -62,6 +62,7 @@ COR_FAIXA = {
     "Alerta": VERMELHO,
 }
 CORES_SERIE = (ROSA, AZUL, LARANJA, VERDE, CIANO, ROXO, AMBAR)
+CORES_CAMERA = (AZUL, LARANJA, VERDE, CIANO, ROXO, ROSA, AMBAR, VERMELHO)
 
 
 def _limpo(texto) -> str:
@@ -115,9 +116,80 @@ def _base():
     return imagem
 
 
+def cor_camera(nome, indice=0):
+    digitos = "".join(caractere for caractere in str(nome or "") if caractere.isdigit())
+    if digitos:
+        indice = max(int(digitos) - 1, 0)
+    return CORES_CAMERA[indice % len(CORES_CAMERA)]
+
+
+def _quando(texto):
+    bruto = str(texto or "").strip().replace("T", " ")
+    if len(bruto) >= 10 and bruto[4] == "-" and bruto[7] == "-":
+        data = f"{bruto[8:10]}/{bruto[5:7]}/{bruto[0:4]}"
+        hora = bruto[11:16] if len(bruto) >= 16 else ""
+        return f"{data} {hora}".strip()
+    return bruto
+
+
+def _linha_relatorio(pacote):
+    inicio = _quando(pacote.get("leitura_inicio"))[:10]
+    fim = _quando(pacote.get("leitura_fim"))[:10]
+    gerado = _quando(pacote.get("leitura_quando"))
+    if inicio and fim and inicio != fim:
+        periodo = f"{inicio} a {fim}"
+    else:
+        periodo = inicio or fim
+    if periodo and gerado:
+        return f"Relatorio {periodo}   gerado {gerado}"
+    if gerado:
+        return f"Relatorio gerado {gerado}"
+    return "relatorio do dia ainda nao fechou"
+
+
+def _pontos_geo(pacote, contagens):
+    pontos = []
+    for indice, local in enumerate(pacote.get("locais") or []):
+        if local.get("latitude") is None or local.get("longitude") is None:
+            continue
+        nome = local.get("nome") or ""
+        pontos.append({
+            "lat": local["latitude"],
+            "lon": local["longitude"],
+            "nome": nome,
+            "rua": local.get("rua") or "",
+            "valor": int((contagens or {}).get(nome, 0) or 0),
+            "cor": cor_camera(nome, indice),
+        })
+    return pontos
+
+
+def _desenhar_mapa_cameras(imagem, x, y, largura, altura, pontos, legenda=True):
+    if not pontos:
+        _texto(imagem, "cameras sem latitude", x, y + 24, 0.38, DIM, 1)
+        return
+    reserva = (18 * min(len(pontos), 3) + 8) if legenda else 0
+    mapa_h = max(72, altura - reserva)
+    try:
+        mapa = compor_bolhas(pontos, largura, mapa_h)
+    except Exception:
+        _texto(imagem, "mapa de cameras indisponivel", x, y + 24, 0.38, DIM, 1)
+        return
+    if not _colar(imagem, mapa, x, y):
+        return
+    if not legenda:
+        return
+    ly = y + mapa_h + 16
+    for ponto in pontos[:3]:
+        cv2.circle(imagem, (x + 8, ly - 4), 5, ponto["cor"], -1, cv2.LINE_AA)
+        rotulo = ponto["rua"] or ponto["nome"]
+        _texto(imagem, rotulo[:24], x + 18, ly, 0.3, ponto["cor"], 1)
+        _texto(imagem, str(ponto["valor"]), x + largura - 40, ly, 0.32, TEXTO, 1)
+        ly += 18
+
+
 def _cabecalho(imagem, titulo, pacote):
-    nome = pacote.get("titulo") or "MONITORAMENTO"
-    _texto(imagem, nome, 16, 28, 0.62, TEXTO, 1)
+    _texto(imagem, "C4ISTAR MONITOR", 16, 28, 0.62, TEXTO, 1)
     _texto(imagem, titulo, 16, 52, 0.48, AZUL_CLARO, 1)
     _texto(
         imagem,
@@ -150,22 +222,33 @@ def _maximo(valores):
 
 def desenhar_fluxo(pacote):
     imagem = _base()
-    _cabecalho(imagem, "CONTAGENS", pacote)
+    _cabecalho(imagem, "Contagens", pacote)
     categorias = pacote.get("categorias") or {}
     total = pacote.get("total") or 0
     cameras = pacote.get("cameras") or []
 
     _cartao(imagem, 12, 68, 360, 300, "ACESSOS POR CAMERA")
-    _texto(imagem, "Camera", 28, 108, 0.4, DIM, 1)
-    y = 136
+    _texto(imagem, "Camera", 28, 104, 0.36, DIM, 1)
+    _texto(imagem, "Total", 300, 104, 0.36, DIM, 1)
+    y = 128
     if not cameras:
         _texto(imagem, "nenhuma camera no dia", 28, y, 0.42, DIM, 1)
-    for camera in cameras[:6]:
-        cor = AZUL if camera.get("online") else DIM
-        cv2.circle(imagem, (36, y - 4), 5, cor, -1, cv2.LINE_AA)
-        _texto(imagem, str(camera.get("nome") or "")[:20], 52, y, 0.46, TEXTO, 1)
+    for camera in cameras[:4]:
+        cor = cor_camera(camera.get("nome"))
+        cv2.circle(imagem, (32, y - 4), 5, cor, -1, cv2.LINE_AA)
+        _texto(imagem, str(camera.get("nome") or "")[:16], 46, y, 0.42, TEXTO, 1)
         _texto(imagem, str(camera.get("itens") or 0), 300, y, 0.46, AZUL_CLARO, 1)
-        y += 32
+        rua = str(camera.get("rua") or "")
+        if rua:
+            _texto(imagem, rua[:28], 46, y + 16, 0.34, DIM, 1)
+            y += 16
+        x = 46
+        y += 18
+        for nome_cat, sigla in (("Veiculo", "Vei"), ("Pessoa", "Pes"), ("Objeto", "Obj"), ("Animal", "Ani")):
+            valor = int((camera.get("categorias") or {}).get(nome_cat, 0))
+            _texto(imagem, f"{sigla} {valor}", x, y, 0.34, COR_CATEGORIA[nome_cat], 1)
+            x += 76
+        y += 28
 
     _cartao(imagem, 384, 68, 500, 108, "")
     _texto(imagem, str(total), 404, 128, 1.35, TEXTO, 2)
@@ -214,7 +297,7 @@ def desenhar_fluxo(pacote):
         _texto(imagem, f"[x] {nome[:14]}  {valor}", 910, y, 0.36, TEXTO, 1)
         y += 18
 
-    _cartao(imagem, 12, 380, 1176, 286, "HISTORICO")
+    _cartao(imagem, 12, 380, 760, 286, "HISTORICO")
     _texto(imagem, "Categoria", 28, 412, 0.36, DIM, 1)
     x = 120
     for nome in CATEGORIAS:
@@ -224,9 +307,14 @@ def desenhar_fluxo(pacote):
     horas = pacote.get("horas") or {}
     series = [(nome, horas.get(nome) or [0] * 24, COR_CATEGORIA[nome]) for nome in CATEGORIAS]
     _grafico(
-        imagem, 48, 428, 1100, 190, series,
+        imagem, 36, 428, 700, 190, series,
         [f"{hora:02d}:00" for hora in range(24)],
-        passo=3, marcar=True,
+        passo=4, marcar=True,
+    )
+    _cartao(imagem, 784, 380, 402, 286, "MAPA DAS CAMERAS")
+    _desenhar_mapa_cameras(
+        imagem, 800, 412, 370, 240,
+        _pontos_geo(pacote, {item.get("nome"): item.get("itens") or 0 for item in cameras}),
     )
     _rodape(imagem)
     return imagem
@@ -234,7 +322,7 @@ def desenhar_fluxo(pacote):
 
 def desenhar_comportamento(pacote):
     imagem = _base()
-    _cabecalho(imagem, "COMPORTAMENTOS", pacote)
+    _cabecalho(imagem, "Comportamento", pacote)
     riscos = pacote.get("riscos") or {}
     total_risco = sum(int(riscos.get(nome, 0)) for nome in RISCOS) or 0
 
@@ -266,18 +354,17 @@ def desenhar_comportamento(pacote):
     for nome in FAIXAS:
         _texto(imagem, nome[:14], 438, y, 0.38, TEXTO, 1)
         inicio = 560
-        for indice, camera in enumerate(cameras[:3]):
+        for camera in cameras[:3]:
             valor = int((faixas.get(nome) or {}).get(camera, 0))
             largura = int(180 * valor / maior)
-            cor = AZUL if indice == 0 else AZUL_CLARO if indice == 1 else VERDE
+            cor = cor_camera(camera)
             if largura > 0:
                 cv2.rectangle(imagem, (inicio, y - 12), (inicio + largura, y), cor, -1)
                 inicio += largura
         y += 42
     x = 438
-    for indice, camera in enumerate(cameras[:3]):
-        cor = AZUL if indice == 0 else AZUL_CLARO if indice == 1 else VERDE
-        _texto(imagem, str(camera)[:12], x, 352, 0.34, cor, 1)
+    for camera in cameras[:3]:
+        _texto(imagem, str(camera)[:12], x, 352, 0.34, cor_camera(camera), 1)
         x += 110
 
     _cartao(imagem, 796, 68, 390, 300, "TIPO DE COMPORTAMENTO")
@@ -285,101 +372,113 @@ def desenhar_comportamento(pacote):
     maior_tipo = 1
     for item in tipos[:6]:
         maior_tipo = max(maior_tipo, sum(int(v) for v in (item.get("cameras") or {}).values()))
-    y = 112
+    y = 128
     for item in tipos[:6]:
-        _texto(imagem, str(item.get("classe") or "")[:18], 810, y, 0.38, TEXTO, 1)
-        inicio = 980
-        for indice, camera in enumerate(cameras[:3]):
+        _texto(imagem, str(item.get("classe") or "")[:16], 810, y, 0.36, TEXTO, 1)
+        inicio = 960
+        total_barra = 0
+        for camera in cameras[:3]:
             valor = int((item.get("cameras") or {}).get(camera, 0))
-            largura = int(170 * valor / maior_tipo)
-            cor = AZUL if indice == 0 else AZUL_CLARO if indice == 1 else VERDE
+            largura = int(150 * valor / maior_tipo)
+            total_barra += valor
             if largura > 0:
-                cv2.rectangle(imagem, (inicio, y - 12), (inicio + largura, y), cor, -1)
+                cv2.rectangle(imagem, (inicio, y - 12), (inicio + largura, y), cor_camera(camera), -1)
                 inicio += largura
+        centro = 960 + max(inicio - 960, 36) // 2
+        _texto(imagem, str(total_barra), centro - 8, y - 24, 0.36, TEXTO, 1)
         y += 36
 
-    _cartao(imagem, 12, 380, 760, 286, "PRIORIDADE AO LONGO DOS DIAS")
+    _cartao(imagem, 12, 380, 500, 286, "PRIORIDADE AO LONGO DOS DIAS")
     serie = pacote.get("serie") or {}
     rotulos = serie.get("rotulos") or []
     curvas = []
     for indice, (nome, valores) in enumerate((serie.get("curvas") or [])[:6]):
         curvas.append((nome, valores, CORES_SERIE[indice % len(CORES_SERIE)]))
-    _grafico(imagem, 36, 430, 710, 190, curvas, rotulos, passo=1)
-    x = 36
-    for nome, _, cor in curvas[:4]:
-        _texto(imagem, str(nome)[:14], x, 418, 0.34, cor, 1)
+    _grafico(imagem, 28, 436, 468, 184, curvas, rotulos, passo=1)
+    x = 28
+    for nome, _, cor in curvas[:3]:
+        _texto(imagem, str(nome)[:12], x, 418, 0.32, cor, 1)
         x += 150
 
-    _cartao(imagem, 784, 380, 402, 286, "APP")
+    _cartao(imagem, 524, 380, 300, 286, "MAPA DAS CAMERAS")
+    _desenhar_mapa_cameras(
+        imagem, 536, 412, 276, 240,
+        _pontos_geo(pacote, pacote.get("contagem_comportamento") or {}),
+    )
+
+    _cartao(imagem, 836, 380, 352, 286, "APP")
     avisos = pacote.get("app") or []
     if not avisos:
-        _texto(imagem, "sem ocorrencia informada", 800, 430, 0.42, DIM, 1)
+        _texto(imagem, "sem ocorrencia informada", 852, 430, 0.4, DIM, 1)
     y = 424
     for aviso in avisos[:4]:
-        _texto(imagem, str(aviso.get("quando") or ""), 800, y, 0.36, AZUL_CLARO, 1)
-        _texto(imagem, str(aviso.get("titulo") or "")[:32], 800, y + 18, 0.42, TEXTO, 1)
-        _texto(imagem, str(aviso.get("lugar") or "")[:32], 800, y + 36, 0.36, DIM, 1)
+        _texto(imagem, str(aviso.get("quando") or ""), 852, y, 0.34, AZUL_CLARO, 1)
+        _texto(imagem, str(aviso.get("titulo") or "")[:28], 852, y + 18, 0.38, TEXTO, 1)
+        _texto(imagem, str(aviso.get("lugar") or "")[:28], 852, y + 36, 0.34, DIM, 1)
         y += 58
     _rodape(imagem)
     return imagem
 
 
 def desenhar_leitura(pacote):
-    altura = 780
+    altura = 860
     imagem = np.zeros((altura, LARGURA, 3), dtype=np.uint8)
     imagem[:] = FUNDO
-    _cabecalho(imagem, "LEITURA", pacote)
-    _cartao(imagem, 12, 68, 520, 210, "ALERTAS DE RF E LPR")
-    _match_grande(imagem, 28, 100, pacote.get("match"))
+    _cabecalho(imagem, "Alertas de RF e LPR", pacote)
+    _cartao(imagem, 12, 68, 560, 200, "ALERTAS DE RF E LPR")
+    _match_grande(imagem, 28, 96, pacote.get("match"))
 
-    _cartao(imagem, 544, 68, 644, 210, "ULTIMOS ALERTAS  FACE E PLACA")
+    _cartao(imagem, 584, 68, 604, 200, "ULTIMOS ALERTAS DE RF E LPR")
     interesses = pacote.get("interesse") or []
     if not interesses:
-        _texto(imagem, "nenhum rosto ou placa de interesse ainda", 560, 120, 0.4, DIM, 1)
+        _texto(imagem, "nenhum rosto ou placa de interesse ainda", 600, 120, 0.4, DIM, 1)
     for indice, item in enumerate(interesses[:4]):
-        _linha_interesse(imagem, 560, 104 + indice * 40, item)
+        _linha_interesse(imagem, 600, 108 + indice * 38, item)
 
-    _cartao(imagem, 12, 290, 760, 220, "OCORRENCIAS")
-    mapa = pacote.get("mapa")
-    if mapa is not None and getattr(mapa, "size", 0):
-        thumb = cv2.resize(mapa, (736, 180), interpolation=cv2.INTER_AREA)
-        _colar(imagem, thumb, 24, 318)
-    else:
-        _texto(imagem, "sem latitude e longitude nas ocorrencias do app", 28, 380, 0.42, DIM, 1)
-
-    _cartao(imagem, 784, 290, 404, 220, "LEGENDA POR TIPO")
-    y = 328
-    legenda = pacote.get("legenda_mapa") or []
-    if not legenda:
-        _texto(imagem, "nenhum ponto no mapa", 800, y, 0.4, DIM, 1)
-        y += 24
-    for item in legenda[:6]:
-        cv2.circle(imagem, (808, y - 4), 6, item.get("cor") or AZUL, -1, cv2.LINE_AA)
-        _texto(
-            imagem,
-            f"{item.get('tipo') or 'Ocorrencia'}"[:22],
-            824, y, 0.38, TEXTO, 1,
-        )
-        _texto(imagem, str(item.get("quantidade") or 0), 1104, y, 0.38, DIM, 1)
+    _cartao(imagem, 12, 278, 1176, 250, "OCORRENCIAS")
+    _texto(imagem, _linha_relatorio(pacote), 620, 302, 0.36, AZUL_CLARO, 1)
+    _texto(imagem, "MEMORIAS DE RUA", 28, 332, 0.38, AMBAR, 1)
+    memorias = pacote.get("memorias") or []
+    if not memorias:
+        _texto(imagem, "sem memoria registrada", 28, 360, 0.38, DIM, 1)
+    y = 358
+    for memoria in memorias[:3]:
+        _texto(imagem, _quando(memoria.get("quando"))[:16], 28, y, 0.34, AZUL_CLARO, 1)
+        for linha in _quebrar(memoria.get("texto") or "", 360, 0.38)[:2]:
+            y += 16
+            _texto(imagem, linha, 28, y, 0.36, TEXTO, 1)
         y += 22
-    informe = (pacote.get("enviados") or [None])[0]
-    insight = (pacote.get("insights") or [None])[0]
-    if informe and y < 470:
-        _texto(imagem, str(informe.get("descricao") or informe.get("tipo") or "")[:36], 800, y + 4, 0.32, AZUL_CLARO, 1)
-        y += 18
-    if insight and y < 492:
-        _texto(imagem, str(insight.get("descricao") or "")[:36], 800, y + 4, 0.32, AMBAR, 1)
 
-    _cartao(imagem, 12, 522, 580, 220, "RESUMO")
-    _bloco(imagem, 28, 582, 548, pacote.get("resumo") or (
+    _texto(imagem, "ULTIMOS INFORMES", 420, 332, 0.38, AMBAR, 1)
+    informes = pacote.get("enviados") or pacote.get("insights") or []
+    if not informes:
+        _texto(imagem, "nenhum informe enviado", 420, 360, 0.38, DIM, 1)
+    y = 360
+    for informe in informes[:4]:
+        _texto(imagem, _quando(informe.get("quando"))[:16], 420, y, 0.34, AZUL_CLARO, 1)
+        _texto(imagem, str(informe.get("descricao") or informe.get("tipo") or "")[:34], 560, y, 0.34, TEXTO, 1)
+        y += 40
+
+    _desenhar_mapa_cameras(
+        imagem, 900, 328, 270, 180,
+        _pontos_geo(pacote, pacote.get("contagem_alertas") or {}),
+        legenda=False,
+    )
+
+    _cartao(imagem, 12, 540, 384, 280, "RESUMO")
+    _bloco(imagem, 28, 598, 352, pacote.get("resumo") or (
         "O relatorio do dia ainda nao tem resumo. "
         "O agente grava este texto no fechamento do dia."
-    ), limite=6)
-    _cartao(imagem, 604, 522, 584, 220, "ASSESSORAMENTO")
-    _bloco(imagem, 620, 582, 548, pacote.get("assessoramento") or (
-        "O assessoramento entra no mesmo relatorio, "
+    ), limite=8)
+    _cartao(imagem, 408, 540, 384, 280, "ASSESSORAMENTO")
+    _bloco(imagem, 424, 598, 352, pacote.get("assessoramento") or (
+        "O assessoramento entra no relatorio, "
         "com a conclusao de risco e a orientacao do periodo."
-    ), limite=6)
+    ), limite=8)
+    _cartao(imagem, 804, 540, 384, 280, "APRENDIZADO")
+    _bloco(imagem, 820, 598, 352, pacote.get("aprendizado") or (
+        "O aprendizado da rua entra quando o relatorio fecha o dia."
+    ), limite=8)
     _texto(
         imagem,
         "METODOLOGIA: CONTAGEM DE FACES OBJETOS POR INTELIGENCIA ARTIFICIAL",
@@ -515,7 +614,7 @@ def _grafico(imagem, x, y, largura, altura, series, rotulos, passo=1, marcar=Fal
 
 def desenhar_mapas(pacote):
     imagem = _base()
-    _cabecalho(imagem, "MAPAS", pacote)
+    _cabecalho(imagem, "Mapas", pacote)
     periodo = pacote.get("modo_periodo") or "dia"
     desenho = pacote.get("modo_desenho") or "pontos"
     rotulos = (("dia", "D DIA"), ("semana", "S SEMANA"), ("mes", "M MES"))
@@ -541,21 +640,25 @@ def desenhar_mapas(pacote):
         _texto(imagem, "sem latitude e longitude neste periodo", 40, 360, 0.5, DIM, 1)
         _texto(imagem, "o mapa usa as ocorrencias do aplicativo", 40, 390, 0.42, DIM, 1)
 
-    _cartao(imagem, 924, 96, 264, 560, "LEGENDA POR TIPO")
-    y = 140
+    _cartao(imagem, 924, 96, 264, 268, "CAMERAS")
+    _desenhar_mapa_cameras(
+        imagem, 936, 124, 240, 224,
+        _pontos_geo(pacote, {item.get("nome"): item.get("itens") or 0 for item in pacote.get("cameras") or []}),
+    )
+    _cartao(imagem, 924, 376, 264, 280, "LEGENDA POR TIPO")
+    y = 412
     legenda = pacote.get("legenda_painel") or []
     if not legenda:
         _texto(imagem, "nenhum ponto", 940, y, 0.4, DIM, 1)
-    for item in legenda[:12]:
+    for item in legenda[:7]:
         cv2.circle(imagem, (948, y - 4), 6, item.get("cor") or AZUL, -1, cv2.LINE_AA)
-        _texto(imagem, str(item.get("tipo") or "")[:16], 964, y, 0.38, TEXTO, 1)
-        _texto(imagem, str(item.get("quantidade") or 0), 1128, y, 0.38, DIM, 1)
-        y += 28
-    if desenho == "calor":
-        _texto(imagem, "CALOR", 940, 620, 0.4, AMBAR, 1)
+        _texto(imagem, str(item.get("tipo") or "")[:14], 964, y, 0.36, TEXTO, 1)
+        _texto(imagem, str(item.get("quantidade") or 0), 1128, y, 0.36, DIM, 1)
+        y += 26
+    if desenho == "calor" and y < 630:
+        _texto(imagem, "CALOR", 940, y + 8, 0.36, AMBAR, 1)
         for indice, cor in enumerate(((255, 40, 20), (40, 220, 220), (20, 40, 255))):
-            cv2.circle(imagem, (940 + indice * 28, 644), 6, cor, -1, cv2.LINE_AA)
-        _texto(imagem, "frio        quente", 940, 668, 0.34, DIM, 1)
+            cv2.circle(imagem, (1020 + indice * 22, y + 4), 5, cor, -1, cv2.LINE_AA)
     _rodape(imagem)
     return imagem
 
@@ -746,7 +849,13 @@ class Acervo:
         self.ids = set()
         self.resumo = ""
         self.assessoramento = ""
+        self.aprendizado = ""
         self.leitura_quando = ""
+        self.leitura_inicio = ""
+        self.leitura_fim = ""
+        self.memorias = []
+        self._mtime_memoria = None
+        self.interesse_cam = {}
         self.insights_relatorio = []
         self.app = []
         self.app_remoto = []
@@ -774,14 +883,7 @@ class Acervo:
         self._parar = True
 
     def _titulo(self):
-        try:
-            from cadastro import cliente_ativo
-            cliente = cliente_ativo() or {}
-            nome = str(cliente.get("nome") or "").strip()
-            if nome:
-                self.titulo = f"MONITORAMENTO {nome}".upper()
-        except Exception:
-            pass
+        self.titulo = "C4ISTAR MONITOR"
 
     def _loop(self):
         while not self._parar:
@@ -792,6 +894,7 @@ class Acervo:
                 self._consumir_alertas()
                 self._consumir_insights()
                 self._ler_leitura()
+                self._ler_memorias()
                 self._ler_app()
                 self._agendar_app_remoto()
                 if self.quer_leitura or self.quer_mapas:
@@ -938,6 +1041,12 @@ class Acervo:
             item["referencia"] = _thumb(item.pop("ref", ""))
         with self._trava:
             self.interesse.extend(novos[-8:])
+            for item in novos:
+                dia = str(item.get("quando") or "")[:10]
+                camera = item.get("camera") or ""
+                if dia and camera:
+                    chave = (dia, camera)
+                    self.interesse_cam[chave] = self.interesse_cam.get(chave, 0) + 1
 
     def _consumir_alertas(self):
         novos = []
@@ -997,11 +1106,39 @@ class Acervo:
                 textos.append(item.strip())
             elif isinstance(item, dict) and (item.get("descricao") or item.get("texto")):
                 textos.append(str(item.get("descricao") or item.get("texto")))
+        leitura = ultimo.get("leitura") or {}
         with self._trava:
-            self.resumo = str(ultimo.get("resumo") or "")
-            self.assessoramento = str(ultimo.get("assessoramento") or "")
+            self.resumo = str(leitura.get("resumo") or ultimo.get("resumo") or "")
+            self.assessoramento = str(leitura.get("assessoramento") or ultimo.get("assessoramento") or "")
+            self.aprendizado = str(leitura.get("aprendizado") or "")
             self.leitura_quando = str(ultimo.get("gerado_em") or ultimo.get("fim") or "")
+            self.leitura_inicio = str(ultimo.get("inicio") or "")
+            self.leitura_fim = str(ultimo.get("fim") or "")
             self.insights_relatorio = textos[:6]
+
+    def _ler_memorias(self):
+        caminho = "memoria_rua.json"
+        if not os.path.exists(caminho):
+            return
+        marca = os.path.getmtime(caminho)
+        if marca == self._mtime_memoria:
+            return
+        self._mtime_memoria = marca
+        try:
+            with open(caminho, encoding="utf-8") as arquivo:
+                bruto = json.loads(arquivo.read())
+        except (OSError, json.JSONDecodeError):
+            return
+        itens = []
+        for item in (bruto or {}).get("aprendizados") or []:
+            if not isinstance(item, dict):
+                continue
+            texto = str(item.get("texto") or "").strip()
+            if not texto:
+                continue
+            itens.append({"quando": str(item.get("quando") or ""), "texto": texto})
+        with self._trava:
+            self.memorias = list(reversed(itens[-6:]))
 
     def _ler_app(self):
         caminho = "ocorrencias_informadas.json"
@@ -1116,14 +1253,23 @@ class Acervo:
     def pacote(self, cameras_online, matches=None):
         hoje = date.today().isoformat()
         dias = [(date.today() - timedelta(days=offset)).isoformat() for offset in range(7, -1, -1)]
+        try:
+            from cadastro import locais_cameras
+            locais = locais_cameras()
+        except Exception:
+            locais = []
+        por_rua = {item.get("nome"): item for item in locais}
         with self._trava:
             categorias = {nome: 0 for nome in CATEGORIAS}
             por_camera = {}
+            por_categoria = {}
             for (dia, camera, categoria), valor in self.cat.items():
                 if dia != hoje:
                     continue
                 categorias[categoria] = categorias.get(categoria, 0) + valor
                 por_camera[camera] = por_camera.get(camera, 0) + valor
+                grupo = por_categoria.setdefault(camera, {})
+                grupo[categoria] = grupo.get(categoria, 0) + valor
             classes = {}
             for (dia, classe), valor in self.classe.items():
                 if dia == hoje:
@@ -1147,16 +1293,28 @@ class Acervo:
                 if camera not in vistos:
                     nomes.append(camera)
                     vistos.add(camera)
+            for local in locais:
+                nome = local.get("nome")
+                if nome and nome not in vistos:
+                    nomes.append(nome)
+                    vistos.add(nome)
             faixas = {nome: {} for nome in FAIXAS}
             for (dia, faixa, camera), valor in self.faixa.items():
                 if dia == hoje and faixa in faixas:
                     faixas[faixa][camera] = faixas[faixa].get(camera, 0) + valor
             tipos_mapa = {}
+            comportamento_cam = {}
             for (dia, classe, camera), valor in self.tipo.items():
                 if dia != hoje or not classe:
                     continue
                 item = tipos_mapa.setdefault(classe, {})
                 item[camera] = item.get(camera, 0) + valor
+                comportamento_cam[camera] = comportamento_cam.get(camera, 0) + valor
+            alertas_cam = {
+                camera: valor
+                for (dia, camera), valor in self.interesse_cam.items()
+                if dia == hoje
+            }
             curvas_mapa = {}
             for (dia, classe, _camera), valor in self.tipo.items():
                 if dia in dias and classe:
@@ -1165,7 +1323,11 @@ class Acervo:
             ids = sum(1 for dia, *_resto in self.ids if dia == hoje)
             resumo = self.resumo
             assessoramento = self.assessoramento
+            aprendizado = self.aprendizado
             leitura_quando = self.leitura_quando
+            leitura_inicio = self.leitura_inicio
+            leitura_fim = self.leitura_fim
+            memorias = [dict(item) for item in self.memorias]
             app = [dict(item) for item in self.app]
             app.extend(dict(item) for item in self.app_remoto)
             interesse = list(self.interesse)
@@ -1226,8 +1388,10 @@ class Acervo:
         for nome in nomes:
             cameras.append({
                 "nome": nome,
+                "rua": (por_rua.get(nome) or {}).get("rua") or "",
                 "online": any(item.get("nome") == nome for item in cameras_online or []),
                 "itens": por_camera.get(nome, 0),
+                "categorias": dict(por_categoria.get(nome) or {}),
             })
         tipos = [
             {"classe": classe, "cameras": dict(contagem)}
@@ -1271,5 +1435,12 @@ class Acervo:
             "match": vivo,
             "resumo": resumo,
             "assessoramento": assessoramento,
+            "aprendizado": aprendizado,
             "leitura_quando": leitura_quando,
+            "leitura_inicio": leitura_inicio,
+            "leitura_fim": leitura_fim,
+            "memorias": memorias,
+            "locais": locais,
+            "contagem_comportamento": comportamento_cam,
+            "contagem_alertas": alertas_cam,
         }

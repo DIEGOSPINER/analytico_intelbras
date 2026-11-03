@@ -283,6 +283,42 @@ def _exigir(documento: str) -> dict:
     return cliente
 
 
+def locais_cameras() -> list[dict]:
+    """Rua e coordenadas das câmeras ativas, sem endereço de acesso."""
+    garantir_cliente_local()
+    cliente = cliente_ativo()
+    registros = list((cliente or {}).get("cameras") or [])
+    if not registros:
+        caminho = Path("cameras.json")
+        if caminho.exists():
+            try:
+                bruto = json.loads(caminho.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                bruto = {}
+            if isinstance(bruto, dict):
+                registros = list(bruto.get("cameras") or [])
+            elif isinstance(bruto, list):
+                registros = bruto
+    locais = []
+    for item in registros:
+        if not isinstance(item, dict) or item.get("ativa") is False:
+            continue
+        try:
+            latitude = float(item.get("latitude"))
+            longitude = float(item.get("longitude"))
+        except (TypeError, ValueError):
+            latitude = longitude = None
+        locais.append({
+            "nome": str(item.get("nome") or "").strip(),
+            "rua": str(item.get("rua") or "").strip(),
+            "bairro": str(item.get("bairro") or "").strip(),
+            "cidade": str(item.get("cidade") or "").strip(),
+            "latitude": latitude,
+            "longitude": longitude,
+        })
+    return locais
+
+
 def cameras_para_analise() -> list[dict]:
     from cameras import filtrar_ativas, ler_cameras
 

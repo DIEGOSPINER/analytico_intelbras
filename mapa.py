@@ -59,16 +59,18 @@ def _baixar(zoom, x, y):
     return cv2.imdecode(np.frombuffer(dados, np.uint8), cv2.IMREAD_COLOR)
 
 
-def _zoom(pontos):
+def _zoom(pontos, apertado=False):
     if len(pontos) <= 1:
-        return 15
+        return 18 if apertado else 15
     lats = [ponto["lat"] for ponto in pontos]
     lons = [ponto["lon"] for ponto in pontos]
-    span = max(max(lats) - min(lats), max(lons) - min(lons), 0.0015)
-    for zoom in range(16, 9, -1):
-        if span / (360.0 / (2 ** zoom)) <= 2.0:
+    piso = 0.00012 if apertado else 0.0015
+    span = max(max(lats) - min(lats), max(lons) - min(lons), piso)
+    inicio = 18 if apertado else 16
+    for zoom in range(inicio, 9, -1):
+        if span / (360.0 / (2 ** zoom)) <= (1.2 if apertado else 2.0):
             return zoom
-    return 10
+    return 14 if apertado else 10
 
 
 def _validos(pontos):
@@ -101,7 +103,7 @@ def _legenda(validos):
     ]
 
 
-def _projetar(pontos, largura, altura, baixar=None):
+def _projetar(pontos, largura, altura, baixar=None, apertado=False):
     baixar = baixar or _baixar
     validos = _validos(pontos)
     legenda = _legenda(validos)
@@ -110,11 +112,11 @@ def _projetar(pontos, largura, altura, baixar=None):
     if not validos:
         return imagem, [], legenda
 
-    zoom = _zoom(validos)
+    zoom = _zoom(validos, apertado)
     fracoes = [_fracao(ponto["lat"], ponto["lon"], zoom) for ponto in validos]
     xs = [item[0] for item in fracoes]
     ys = [item[1] for item in fracoes]
-    margem = 0.6
+    margem = 0.45 if apertado else 0.6
     x0, x1 = min(xs) - margem, max(xs) + margem
     y0, y1 = min(ys) - margem, max(ys) + margem
     tx0, ty0, tx1, ty1 = _limites(x0, y0, x1, y1, zoom)
@@ -169,6 +171,41 @@ def compor_mapa(pontos, largura, altura, baixar=None):
         cv2.circle(mapa, (cx, cy), 7, (255, 255, 255), -1, cv2.LINE_AA)
         cv2.circle(mapa, (cx, cy), 5, cor, -1, cv2.LINE_AA)
     return mapa, legenda
+
+
+def compor_bolhas(pontos, largura, altura, baixar=None):
+    """Bolhas no mapa. O raio cresce com a contagem e a cor segue a câmera."""
+    preparados = []
+    for ponto in pontos or []:
+        item = dict(ponto)
+        item["tipo"] = str(ponto.get("nome") or ponto.get("tipo") or "Camera")
+        preparados.append(item)
+    mapa, marcas, _legenda = _projetar(preparados, largura, altura, baixar, apertado=True)
+    validos = _validos(preparados)
+    if not marcas or not validos:
+        return mapa
+    pico = max(float(ponto.get("valor") or 0) for ponto in validos) or 1.0
+    overlay = mapa.copy()
+    desenhos = []
+    for (cx, cy, _cor), ponto in zip(marcas, validos):
+        valor = float(ponto.get("valor") or 0)
+        raio = int(8 + 16 * (valor / pico))
+        cor = ponto.get("cor") or cor_tipo(ponto.get("nome") or "")
+        cor = tuple(int(canal) for canal in cor[:3])
+        cv2.circle(overlay, (cx, cy), raio, cor, -1, cv2.LINE_AA)
+        desenhos.append((cx, cy, raio, valor))
+    mapa = cv2.addWeighted(overlay, 0.62, mapa, 0.38, 0)
+    for indice, (cx, cy, raio, valor) in enumerate(desenhos):
+        cv2.circle(mapa, (cx, cy), raio, (255, 255, 255), 1, cv2.LINE_AA)
+        texto = str(int(valor))
+        ty = cy - raio - 6
+        if ty < 14 or indice % 2:
+            ty = min(altura - 8, cy + raio + 14)
+        cv2.putText(
+            mapa, texto, (max(4, cx - 8), ty),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA,
+        )
+    return mapa
 
 
 def compor_calor(pontos, largura, altura, baixar=None):

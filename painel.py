@@ -272,7 +272,7 @@ def desenhar_controle(exibir, nomes, paineis=None, cameras=None):
     cameras = cameras or []
     linhas = max(1, len(cameras))
     altura = 196 + linhas * 26
-    largura = 920
+    largura = 1040
     imagem = np.zeros((altura, largura, 3), dtype=np.uint8)
     imagem[:] = FUNDO
     cv2.rectangle(imagem, (0, 0), (largura - 1, altura - 1), AMBAR, 1)
@@ -289,7 +289,7 @@ def desenhar_controle(exibir, nomes, paineis=None, cameras=None):
         _texto(imagem, "VIDEO OCULTO", 160, 28, 0.48, CIANO, 1)
     _texto(imagem, "Monitoramento em execucao", 14, 58, 0.42, TEXTO, 1)
     _texto(imagem, "V todas    Q encerra", 14, 86, 0.42, AMBAR, 1)
-    comandos = (("1", "CONTAGENS"), ("2", "COMPORT."), ("3", "LEITURA"), ("4", "MAPAS"))
+    comandos = (("1", "CONTAGENS"), ("2", "COMPORT."), ("3", "RF/LPR"), ("4", "MAPAS"))
     x = 280
     for tecla, nome in comandos:
         aberto = bool(paineis.get(tecla))
@@ -303,12 +303,13 @@ def desenhar_controle(exibir, nomes, paineis=None, cameras=None):
     for camera in cameras:
         ligada = bool(camera.get("aberto"))
         cv2.circle(imagem, (22, y - 4), 5, VERDE if ligada else (0, 40, 18), -1, cv2.LINE_AA)
+        lugar = camera.get("rua") or camera.get("nome") or ""
         _texto(
             imagem,
-            f"{camera.get('tecla')}   Camera {camera.get('indice')}   {camera.get('nome', '')}"[:42],
+            f"{camera.get('tecla')}   Camera {camera.get('indice')}   {lugar}"[:52],
             36, y, 0.42, VERDE if ligada else DIM, 1,
         )
-        _texto(imagem, "ATIVA" if ligada else "OCULTA", 420, y, 0.4, VERDE if ligada else DIM, 1)
+        _texto(imagem, "ATIVA" if ligada else "OCULTA", 860, y, 0.4, VERDE if ligada else DIM, 1)
         y += 26
     return imagem
 
