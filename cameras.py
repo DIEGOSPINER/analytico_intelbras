@@ -115,6 +115,7 @@ def _normalizar(item, indice: int):
         "nome": nome,
         "url": url,
         "ativa": _como_bool(item.get("ativa"), True),
+        "modelo": str(item.get("modelo") or item.get("perfil") or "").strip(),
     }
 
 

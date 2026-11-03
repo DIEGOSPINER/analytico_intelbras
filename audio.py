@@ -7,8 +7,10 @@ porta e conversa alta também fazem barulho.
 
 from __future__ import annotations
 
+import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -26,8 +28,26 @@ from cameras import destino_publico
 TAXA = 16000
 JANELA_SEGUNDOS = 6
 PALAVRAS_BRIGA = (
-    "briga", "brigando", "agress", "porrada", "tapa", "empurra",
-    "cala a boca", "te mato", "vou te matar", "arma", "tiro", "disparo",
+    r"\bbrig(?:a|as|ando|aram|ou)\b",
+    r"\bagress\w*",
+    r"\bporrada\b",
+    r"\btapa\b",
+    r"\bempurra\w*",
+    r"\bcala a boca\b",
+    r"\bte mato\b",
+    r"\bvou te matar\b",
+    r"\barma\b",
+    r"\btiro\b",
+    r"\bdisparo\b",
+)
+FRASES_INVENTADAS = (
+    "obrigado por assistir",
+    "thanks for watching",
+    "inscreva-se",
+    "legendas pela comunidade",
+    "amara.org",
+    "até a próxima",
+    "tchau tchau",
 )
 
 
@@ -67,7 +87,7 @@ def classificar_pcm(pcm: bytes):
     pico = float(serie.max())
     base = float(np.median(serie))
     altos = int(np.sum(serie > max(0.08, base * 8)))
-    if pico > 0.22 and altos <= 4 and pico > base * 12:
+    if pico > 0.45 and altos <= 3 and pico > base * 20:
         return "disparo", pico
     voz = int(np.sum(serie > 0.015))
     if voz >= 40:
@@ -75,10 +95,16 @@ def classificar_pcm(pcm: bytes):
     return None
 
 
-def _transcrever(wav: bytes, api_key: str) -> str:
+def _transcrever(wav: bytes, api_key: str) -> dict:
     limite = "----audioanalitico"
     partes = []
-    for nome, valor in (("model", "whisper-1"), ("language", "pt")):
+    campos = (
+        ("model", "whisper-1"),
+        ("language", "pt"),
+        ("temperature", "0"),
+        ("response_format", "verbose_json"),
+    )
+    for nome, valor in campos:
         partes.append(
             f"--{limite}\r\nContent-Disposition: form-data; name=\"{nome}\"\r\n\r\n{valor}\r\n".encode()
         )
@@ -99,14 +125,27 @@ def _transcrever(wav: bytes, api_key: str) -> str:
         method="POST",
     )
     with urllib.request.urlopen(pedido, timeout=60) as resposta:
-        import json
         corpo = json.loads(resposta.read().decode("utf-8"))
-    return str(corpo.get("text") or "").strip()
+    return corpo if isinstance(corpo, dict) else {"text": str(corpo)}
+
+
+def _transcricao_confiavel(corpo: dict) -> str:
+    texto = str(corpo.get("text") or "").strip()
+    baixo = texto.lower()
+    if len(texto) < 12 or any(frase in baixo for frase in FRASES_INVENTADAS):
+        return ""
+    segmentos = corpo.get("segments") or []
+    if segmentos:
+        silencio = sum(float(item.get("no_speech_prob") or 0) for item in segmentos) / len(segmentos)
+        confianca = sum(float(item.get("avg_logprob") or -10) for item in segmentos) / len(segmentos)
+        if silencio > 0.45 or confianca < -1.0:
+            return ""
+    return texto
 
 
 def _fala_de_briga(texto: str) -> bool:
     baixo = (texto or "").lower()
-    return any(palavra in baixo for palavra in PALAVRAS_BRIGA)
+    return any(re.search(padrao, baixo) for padrao in PALAVRAS_BRIGA)
 
 
 class EscutaAudio:
@@ -205,11 +244,12 @@ class EscutaAudio:
             return
         self._ultima_fala = agora
         try:
-            texto = _transcrever(_pcm_para_wav(pcm), chave)
+            corpo = _transcrever(_pcm_para_wav(pcm), chave)
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
             print(f"Transcrição de {self.nome} não concluída: {_sem_segredo(str(exc), self.url)[:180]}")
             return
-        if not _fala_de_briga(texto):
+        texto = _transcricao_confiavel(corpo)
+        if not texto or not _fala_de_briga(texto):
             return
         trecho = " ".join(texto.split())[:240]
         self.eventos.put({

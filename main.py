@@ -64,6 +64,32 @@ CONFIANCA_POSE = 0.45
 
 LARGURA, ALTURA = 640, 480
 
+# IM5 enxerga mais longe: a imagem entra maior e o carro distante passa com limiar menor.
+# IM3 é mais leve: imagem menor e limiar mais alto, para o ruído não virar carro.
+PERFIS_CAMERA = {
+    "im5": {"lado": 960, "conf": 0.35, "conf_veiculo": 0.22},
+    "im3": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.32},
+    "padrao": {"lado": 640, "conf": 0.40, "conf_veiculo": 0.30},
+}
+
+
+def perfil_camera(modelo: str) -> dict:
+    chave = (modelo or "").lower().replace(" ", "").replace("-", "")
+    for nome, perfil in PERFIS_CAMERA.items():
+        if nome != "padrao" and nome in chave:
+            return dict(perfil)
+    return dict(PERFIS_CAMERA["padrao"])
+
+
+def redimensionar_para_analise(frame, lado: int):
+    """Mantém a proporção. Esticar para 640x480 achatava o carro e a detecção perdia ele."""
+    altura, largura = frame.shape[:2]
+    maior = max(altura, largura)
+    if maior <= lado:
+        return frame
+    escala = lado / maior
+    return cv2.resize(frame, (int(largura * escala), int(altura * escala)))
+
 CLASSE_PESSOA = 0
 
 CLASSES_VEICULOS = {
@@ -835,9 +861,12 @@ class CameraAnalitica:
         detector_arma=None,
         pose_analyzer=None,
         identificador_faces=None,
-        identificador_placas=None
+        identificador_placas=None,
+        modelo="",
     ):
         self.nome = nome
+        self.modelo = modelo or ""
+        self.perfil = perfil_camera(self.modelo)
         self.stream = CameraStream(src).start()
         self.model = YOLO(MODELO_YOLO)
         self.detector_arma = detector_arma or DetectorArma(MODELO_ARMA)
@@ -871,11 +900,15 @@ class CameraAnalitica:
         if frame is None:
             return vazio
 
-        frame = cv2.resize(frame, (LARGURA, ALTURA))
+        frame = redimensionar_para_analise(frame, self.perfil["lado"])
+        altura, largura = frame.shape[:2]
+        conf_pessoa = self.perfil["conf"]
+        conf_veiculo = self.perfil["conf_veiculo"]
 
         results = self.model.track(
             frame,
-            conf=CONF_MINIMA,
+            conf=min(conf_pessoa, conf_veiculo),
+            imgsz=self.perfil["lado"],
             persist=True,
             tracker=TRACKER,
             verbose=False
@@ -897,8 +930,13 @@ class CameraAnalitica:
 
         for box, track_id in zip(boxes, ids):
             cls_id = int(box.cls[0].item())
+            conf = float(box.conf[0].item())
             x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().tolist())
             categoria = self.classificar(cls_id)
+            if categoria == "Veiculo" and conf < conf_veiculo:
+                continue
+            if categoria != "Veiculo" and conf < conf_pessoa:
+                continue
             nome = self.nome_classe(cls_id)
             quantidade_cena[categoria] += 1
 
@@ -943,7 +981,7 @@ class CameraAnalitica:
             )
 
         eventos_comp, ativos_comp = self.comportamento.analisar(
-            frame, pessoas_cena, armas, LARGURA, ALTURA
+            frame, pessoas_cena, armas, largura, altura
         )
 
         eventos_faces, anot_faces = ([], [])
@@ -974,7 +1012,7 @@ class CameraAnalitica:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2
             )
 
-        cv2.rectangle(frame, (0, 0), (LARGURA, 95), (0, 0, 0), -1)
+        cv2.rectangle(frame, (0, 0), (largura, 95), (0, 0, 0), -1)
 
         texto1 = (
             f"{self.nome} | P: {quantidade_cena['Pessoa']} | "
@@ -1006,7 +1044,7 @@ class CameraAnalitica:
             cv2.putText(
                 frame,
                 f"{ev['risco']} | {ev['classe']} ID {ev['id']}",
-                (8, ALTURA - 12),
+                (8, altura - 12),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
                 cor,
@@ -1192,6 +1230,10 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
     for ident, cfg in por_id.items():
         if ident in estado:
             atual = estado[ident]
+            if cfg.get("modelo") != atual.get("modelo"):
+                atual["modelo"] = cfg.get("modelo") or ""
+                atual["analitica"].modelo = atual["modelo"]
+                atual["analitica"].perfil = perfil_camera(atual["modelo"])
             if cfg["nome"] != atual["nome"]:
                 try:
                     cv2.destroyWindow(titulo_janela(atual["janela"]))
@@ -1203,7 +1245,12 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
                 atual["janela"] = cfg["nome"]
             continue
 
-        print(f"Câmera iniciada: {cfg['nome']} ({destino_publico(cfg['url'])})")
+        perfil = perfil_camera(cfg.get("modelo") or "")
+        print(
+            f"Câmera iniciada: {cfg['nome']} ({destino_publico(cfg['url'])}) "
+            f"perfil {cfg.get('modelo') or 'padrao'} | imagem {perfil['lado']}px | "
+            f"carro a partir de {perfil['conf_veiculo']}"
+        )
         try:
             analitica = CameraAnalitica(
                 cfg["nome"],
@@ -1212,6 +1259,7 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
                 PoseAnalyzer(MODELO_POSE),
                 id_faces,
                 id_placas,
+                modelo=cfg.get("modelo") or "",
             )
         except Exception as exc:
             print(f"Falha ao abrir {cfg['nome']}: {exc}")
@@ -1220,6 +1268,7 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas):
             "analitica": analitica,
             "url": cfg["url"],
             "nome": cfg["nome"],
+            "modelo": cfg.get("modelo") or "",
             "janela": cfg["nome"],
             "audio": EscutaAudio(cfg["nome"], cfg["url"]).start(),
         }
