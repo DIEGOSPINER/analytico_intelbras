@@ -50,6 +50,18 @@ python -m agente vigiar
 
 Os relatórios em markdown ficam em `relatorios/`. O JSON do Power BI é um só, `relatorios/historico_relatorios.json`: cada dia entra como mais um registro na série, sem arquivo novo por data. As impressões também seguem em `historico_insights.csv` e os alertas em `historico_alertas_ia.csv`. A memória do que já foi observado na rua fica em `memoria_rua.json`.
 
+## Acesso de fora de casa
+
+A análise fica no computador que enxerga as câmeras. Um servidor na nuvem não alcança os endereços `192.168.x.x`. O navegador, no celular ou em outro lugar, entra por um túnel até essa máquina.
+
+1. No `.env`, grave `WEB_SENHA`. Ela só autoriza o primeiro usuário. Reinicie `python main.py`, abra `http://127.0.0.1:8787/criar` e informe e-mail, CPF ou CNPJ e a senha da instalação. Nos próximos acessos, entre com esse e-mail. Cada usuário vê somente a conta do próprio CPF. Na mesma rede, use `http://` seguido do IP deste computador e `:8787/`.
+2. Instale o túnel: `winget install --id Cloudflare.cloudflared`.
+3. Na mesma pasta do analítico, com ele aberto: `cloudflared tunnel --url http://127.0.0.1:8787`. O comando mostra um endereço `https://....trycloudflare.com`. Esse é o acesso de fora. A senha continua valendo. O endereço muda cada vez que o comando sobe.
+4. Para um endereço fixo, use um domínio na Cloudflare, crie um túnel nomeado apontando para `http://127.0.0.1:8787` e deixe `cloudflared tunnel run` junto com o analítico.
+5. Se o acesso for só dos seus aparelhos, a Tailscale também serve: `winget install --id Tailscale.Tailscale`, entre na mesma conta no celular e rode `tailscale serve 8787`. O celular abre o endereço HTTPS que a Tailscale mostrar.
+
+Não encaminhe no roteador a porta `554` nem a `8787`. A câmera permanece na rede da casa. O computador que roda o `main.py` precisa ficar ligado.
+
 ## Conta do cliente
 
 O arquivo `clientes.json` (copie `clientes.example.json`) agrupa, por CPF ou CNPJ, os dados pessoais, as câmeras, as pessoas e os veículos de interesse e os e-mails e telefones de apoio. Cada conta só consulta e recebe os próprios alertas.

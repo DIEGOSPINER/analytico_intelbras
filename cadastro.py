@@ -165,7 +165,7 @@ def _substituir(cliente: dict):
     raise ValueError("Cliente não encontrado nesta instalação.")
 
 
-def atualizar_dados_pessoais(documento_atual: str, nome: str, rg: str, documento: str, email: str = ""):
+def atualizar_dados_pessoais(documento_atual: str, nome: str, rg: str, documento: str, email: str | None = None):
     cliente = cliente_por_documento(documento_atual) if documento_atual else cliente_ativo()
     if cliente is None:
         cliente = _cliente_novo(len(listar_clientes()) + 1)
@@ -182,8 +182,8 @@ def atualizar_dados_pessoais(documento_atual: str, nome: str, rg: str, documento
     cliente["rg"] = (rg or "").strip()
     cliente["documento"] = digitos
     cliente["tipo_documento"] = "cnpj" if len(digitos) == 14 else "cpf"
-    if email:
-        cliente["email"] = email.strip()
+    if email is not None:
+        cliente["email"] = str(email).strip()
     _substituir(cliente)
     return cliente
 
@@ -276,6 +276,258 @@ def cadastrar_contato(documento: str, contato: dict):
     return registro
 
 
+def _email_valido(valor: str) -> bool:
+    texto = str(valor or "").strip().lower()
+    if " " in texto or texto.count("@") != 1:
+        return False
+    nome, _, dominio = texto.partition("@")
+    return bool(nome and "." in dominio and not dominio.startswith(".") and not dominio.endswith("."))
+
+
+def _telefone_partes(codigo_pais, ddd, numero) -> dict:
+    pais = _digitos(codigo_pais)
+    codigo_ddd = _digitos(ddd)
+    local = _digitos(numero)
+    if not 1 <= len(pais) <= 4:
+        raise ValueError("Informe o código do país, como 55.")
+    if not 2 <= len(codigo_ddd) <= 4:
+        raise ValueError("Informe o DDD.")
+    if not 8 <= len(local) <= 12:
+        raise ValueError("Informe o número do telefone.")
+    return {
+        "codigo_pais": pais,
+        "ddd": codigo_ddd,
+        "numero": local,
+        "telefone": pais + codigo_ddd + local,
+    }
+
+
+def vincular_documento_local(documento: str, nome: str = "", email: str = "") -> dict:
+    """Amarra o primeiro acesso à conta que já está nesta máquina."""
+    digitos = _digitos(documento)
+    if not documento_valido(digitos):
+        raise ValueError("Informe um CPF ou CNPJ válido.")
+    existente = cliente_por_documento(digitos)
+    if existente:
+        if email and not str(existente.get("email") or "").strip():
+            return atualizar_dados_pessoais(
+                digitos,
+                existente.get("nome") or nome,
+                existente.get("rg") or "",
+                digitos,
+                email,
+            )
+        return existente
+    clientes = listar_clientes()
+    sem_documento = [item for item in clientes if not _digitos(item.get("documento"))]
+    if len(clientes) == 1 and sem_documento:
+        atual = sem_documento[0]
+        return atualizar_dados_pessoais(
+            "",
+            atual.get("nome") or nome,
+            atual.get("rg") or "",
+            digitos,
+            email or atual.get("email") or "",
+        )
+    if not clientes:
+        return atualizar_dados_pessoais("", nome, "", digitos, email)
+    raise ValueError("Este CPF não corresponde à conta desta instalação.")
+
+
+def salvar_cliente(documento_atual: str, nome: str, rg: str, documento: str, email: str) -> dict:
+    if email and not _email_valido(email):
+        raise ValueError("Informe um e-mail válido.")
+    cliente = atualizar_dados_pessoais(documento_atual, nome, rg, documento, email)
+    if _digitos(documento_atual) and _digitos(documento_atual) != cliente["documento"]:
+        from acesso import mover_documento
+
+        mover_documento(documento_atual, cliente["documento"])
+    return cliente
+
+
+def _camera_por_id(cliente: dict, ident: str) -> dict | None:
+    for camera in cliente.get("cameras") or []:
+        if str(camera.get("id")) == str(ident):
+            return camera
+    return None
+
+
+def camera_publica(camera: dict) -> dict:
+    avisos = []
+    for aviso in camera.get("avisos") or []:
+        if not isinstance(aviso, dict):
+            continue
+        avisos.append({
+            "codigo_pais": aviso.get("codigo_pais") or "",
+            "ddd": aviso.get("ddd") or "",
+            "numero": aviso.get("numero") or "",
+            "telefone": aviso.get("telefone") or "",
+            "email": aviso.get("email") or "",
+            "recebe_alerta": aviso.get("recebe_alerta", True) is not False,
+            "recebe_relatorio": aviso.get("recebe_relatorio", True) is not False,
+        })
+    return {
+        "id": str(camera.get("id") or ""),
+        "nome": str(camera.get("nome") or ""),
+        "marca": str(camera.get("marca") or ""),
+        "modelo": str(camera.get("modelo") or ""),
+        "ativa": camera.get("ativa") is not False,
+        "host": str(camera.get("host") or ""),
+        "porta": camera.get("porta") if camera.get("porta") not in (None, "") else "",
+        "usuario": str(camera.get("usuario") or ""),
+        "canal": camera.get("canal") if camera.get("canal") not in (None, "") else "",
+        "subtype": camera.get("subtype") if camera.get("subtype") not in (None, "") else "",
+        "rua": str(camera.get("rua") or ""),
+        "bairro": str(camera.get("bairro") or ""),
+        "cidade": str(camera.get("cidade") or ""),
+        "latitude": camera.get("latitude") if camera.get("latitude") not in (None, "") else "",
+        "longitude": camera.get("longitude") if camera.get("longitude") not in (None, "") else "",
+        "tem_acesso": bool(str(camera.get("url") or camera.get("host") or "").strip()),
+        "avisos": avisos,
+    }
+
+
+def cameras_publicas(documento: str) -> list[dict]:
+    cliente = _exigir(documento)
+    return [camera_publica(item) for item in cliente.get("cameras") or [] if isinstance(item, dict)]
+
+
+def _espelhar_cameras(cliente: dict):
+    ativo = cliente_ativo()
+    if ativo is None or ativo.get("id") != cliente.get("id"):
+        return
+    from cameras import ARQUIVO_CAMERAS
+
+    Path(ARQUIVO_CAMERAS).write_text(
+        json.dumps({"cameras": list(cliente.get("cameras") or [])}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _inteiro(valor, padrao: int, nome: str) -> int:
+    if valor in (None, ""):
+        return padrao
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"Informe {nome} com um número inteiro.") from None
+
+
+def _coordenada_campo(valor, nome: str):
+    from cameras import _coordenada
+
+    if str(valor or "").strip() == "":
+        return None
+    numero = _coordenada(valor)
+    if numero is None:
+        raise ValueError(f"Informe {nome} entre -180 e 180.")
+    return numero
+
+
+def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
+    from cameras import montar_url_rtsp
+
+    cliente = _exigir(documento)
+    if not isinstance(campos, dict):
+        raise ValueError("Informe os dados da câmera.")
+    cameras = [item for item in cliente.get("cameras") or [] if isinstance(item, dict)]
+    ident = str(campos.get("id") or id_anterior or f"cam-{len(cameras) + 1}").strip()
+    if not ident:
+        raise ValueError("Informe o identificador da câmera.")
+    anterior = _camera_por_id(cliente, id_anterior or ident)
+    if any(str(item.get("id")) == ident for item in cameras) and (anterior is None or str(anterior.get("id")) != ident):
+        raise ValueError("Já existe uma câmera com este identificador.")
+    nome = str(campos.get("nome") or "").strip()
+    modelo = str(campos.get("modelo") or (anterior or {}).get("modelo") or "").strip()
+    marca = str(campos.get("marca") or (anterior or {}).get("marca") or "Intelbras").strip() or "Intelbras"
+    if not nome or not modelo:
+        raise ValueError("Informe o nome e o modelo da câmera.")
+    registro = dict(anterior or {})
+    registro.update({
+        "id": ident,
+        "nome": nome,
+        "marca": marca,
+        "modelo": modelo,
+        "ativa": campos.get("ativa", True) is not False,
+        "rua": str(campos.get("rua") or "").strip(),
+        "bairro": str(campos.get("bairro") or "").strip(),
+        "cidade": str(campos.get("cidade") or "").strip(),
+        "latitude": _coordenada_campo(campos.get("latitude"), "a latitude"),
+        "longitude": _coordenada_campo(campos.get("longitude"), "a longitude"),
+    })
+    host = str(campos.get("host") or "").strip()
+    if host:
+        registro["host"] = host
+        registro["porta"] = _inteiro(campos.get("porta"), 554, "a porta")
+        registro["canal"] = _inteiro(campos.get("canal"), 1, "o canal")
+        registro["subtype"] = _inteiro(campos.get("subtype"), 0, "o subtype")
+        registro["usuario"] = str(campos.get("usuario") or registro.get("usuario") or "").strip()
+        senha = str(campos.get("senha") or "")
+        if senha:
+            registro["senha"] = senha
+        if not str(registro.get("senha") or ""):
+            raise ValueError("Informe a senha da câmera para gravar o novo host.")
+        registro["url"] = montar_url_rtsp(registro)
+    elif not str(registro.get("url") or registro.get("host") or "").strip():
+        raise ValueError("Informe o host da câmera.")
+    else:
+        if str(campos.get("usuario") or "").strip():
+            registro["usuario"] = str(campos.get("usuario")).strip()
+        if str(campos.get("porta") or "").strip():
+            registro["porta"] = _inteiro(campos.get("porta"), 554, "a porta")
+        if str(campos.get("canal") or "").strip():
+            registro["canal"] = _inteiro(campos.get("canal"), 1, "o canal")
+        if str(campos.get("subtype") or "").strip():
+            registro["subtype"] = _inteiro(campos.get("subtype"), 0, "o subtype")
+    registro["avisos"] = list((anterior or {}).get("avisos") or [])
+    cliente["cameras"] = [item for item in cameras if str(item.get("id")) != str((anterior or {}).get("id") or ident)]
+    cliente["cameras"].append(registro)
+    _substituir(cliente)
+    _espelhar_cameras(cliente)
+    return camera_publica(registro)
+
+
+def cadastrar_aviso(documento: str, camera_id: str, aviso: dict) -> dict:
+    cliente = _exigir(documento)
+    camera = _camera_por_id(cliente, camera_id)
+    if camera is None:
+        raise ValueError("Escolha uma câmera desta conta.")
+    if not isinstance(aviso, dict):
+        raise ValueError("Informe o telefone e o e-mail.")
+    email = str(aviso.get("email") or "").strip().lower()
+    if not _email_valido(email):
+        raise ValueError("Informe o e-mail que recebe os alertas desta câmera.")
+    partes = _telefone_partes(aviso.get("codigo_pais"), aviso.get("ddd"), aviso.get("numero"))
+    registro = {
+        **partes,
+        "email": email,
+        "recebe_alerta": aviso.get("recebe_alerta", True) is not False,
+        "recebe_relatorio": aviso.get("recebe_relatorio", True) is not False,
+    }
+    avisos = [item for item in camera.get("avisos") or [] if isinstance(item, dict)]
+    if any(str(item.get("email") or "").lower() == email and item.get("telefone") == registro["telefone"] for item in avisos):
+        raise ValueError("Este telefone e este e-mail já estão nesta câmera.")
+    avisos.append(registro)
+    camera["avisos"] = avisos
+    _substituir(cliente)
+    _espelhar_cameras(cliente)
+    return registro
+
+
+def remover_aviso(documento: str, camera_id: str, indice: int):
+    cliente = _exigir(documento)
+    camera = _camera_por_id(cliente, camera_id)
+    if camera is None:
+        raise ValueError("Câmera não encontrada nesta conta.")
+    avisos = [item for item in camera.get("avisos") or [] if isinstance(item, dict)]
+    if indice < 0 or indice >= len(avisos):
+        raise ValueError("Aviso não encontrado.")
+    del avisos[indice]
+    camera["avisos"] = avisos
+    _substituir(cliente)
+    _espelhar_cameras(cliente)
+
+
 def _exigir(documento: str) -> dict:
     cliente = cliente_por_documento(documento) if documento else cliente_ativo()
     if cliente is None:
@@ -342,8 +594,38 @@ def interesse_ativo() -> dict:
     }
 
 
-def destinatarios(cliente: dict | None = None) -> list[str]:
-    cliente = cliente if cliente is not None else cliente_ativo()
+def _emails_unicos(emails) -> list[str]:
+    vistos = []
+    for email in emails:
+        texto = str(email or "").strip()
+        if texto and texto not in vistos:
+            vistos.append(texto)
+    return vistos
+
+
+def _emails_avisos(cliente: dict, camera_ref: str = "", somente_alerta: bool = False) -> list[str]:
+    ref = str(camera_ref or "").strip().lower()
+    emails = []
+    for camera in cliente.get("cameras") or []:
+        if not isinstance(camera, dict):
+            continue
+        nome = str(camera.get("nome") or "").strip().lower()
+        ident = str(camera.get("id") or "").strip().lower()
+        if ref and ref not in (nome, ident):
+            continue
+        for aviso in camera.get("avisos") or []:
+            if not isinstance(aviso, dict):
+                continue
+            if somente_alerta and aviso.get("recebe_alerta", True) is False:
+                continue
+            if not somente_alerta and aviso.get("recebe_relatorio", True) is False:
+                continue
+            if str(aviso.get("email") or "").strip():
+                emails.append(str(aviso["email"]).strip())
+    return emails
+
+
+def _emails_da_conta(cliente: dict | None) -> list[str]:
     emails = []
     if cliente:
         if str(cliente.get("email") or "").strip():
@@ -355,11 +637,34 @@ def destinatarios(cliente: dict | None = None) -> list[str]:
         destino = os.getenv("EMAIL_DESTINO", "").strip()
         if destino:
             emails.append(destino)
-    vistos = []
-    for email in emails:
-        if email not in vistos:
-            vistos.append(email)
-    return vistos
+    return _emails_unicos(emails)
+
+
+def destinatarios(cliente: dict | None = None) -> list[str]:
+    cliente = cliente if cliente is not None else cliente_ativo()
+    emails = _emails_da_conta(cliente)
+    if cliente:
+        emails.extend(_emails_avisos(cliente))
+    return _emails_unicos(emails)
+
+
+def emails_do_alerta(camera_ref: str) -> list[str]:
+    """E-mails da câmera citada no alerta. Sem aviso próprio, usa o e-mail da conta."""
+    cliente = cliente_ativo()
+    if cliente is None or not str(camera_ref or "").strip():
+        return destinatarios(cliente)
+    proprios = _emails_unicos(_emails_avisos(cliente, camera_ref, somente_alerta=True))
+    if proprios:
+        return proprios
+    return _emails_da_conta(cliente)
+
+
+def pode_ver_analise(documento: str) -> bool:
+    cliente = cliente_ativo()
+    digitos = _digitos(documento)
+    if cliente is None or not digitos:
+        return False
+    return _digitos(cliente.get("documento")) == digitos
 
 
 def consultar(documento: str) -> dict:

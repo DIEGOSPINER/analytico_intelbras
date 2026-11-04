@@ -14,6 +14,7 @@ __pycache__/
 cameras.json
 interesse.json
 clientes.json
+usuarios.json
 ocorrencias_informadas.json
 fenomenos.json
 memoria_rua.json

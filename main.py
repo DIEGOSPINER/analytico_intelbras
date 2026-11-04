@@ -1675,6 +1675,61 @@ def _registrar_saida(cam, eventos, cena, comp, ativos):
         )
 
 
+def _enderecos_portal(host, porta):
+    if host not in ("0.0.0.0", "::", ""):
+        return [f"http://{host}:{porta}/"]
+    vistos = [f"http://127.0.0.1:{porta}/"]
+    try:
+        import socket
+
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip.startswith("127."):
+                continue
+            url = f"http://{ip}:{porta}/"
+            if url not in vistos:
+                vistos.append(url)
+    except OSError:
+        pass
+    return vistos
+
+
+def _abrir_portal(acervo):
+    senha = os.getenv("WEB_SENHA", "").strip()
+    if not senha:
+        print("Acesso remoto desligado. Defina WEB_SENHA no .env para abrir pelo navegador.")
+        return None
+    from remoto import Portal
+
+    host = os.getenv("WEB_HOST", "0.0.0.0").strip() or "0.0.0.0"
+    porta = int(os.getenv("WEB_PORT", "8787") or "8787")
+    portal = Portal(senha, host, porta)
+    portal.ligar_acervo(acervo)
+    portal.iniciar()
+    for url in _enderecos_portal(host, porta):
+        print(f"Acesso no navegador: {url}")
+    print("De fora de casa, use o túnel. Não abra a porta da câmera no roteador.")
+    print("No navegador, entre com o e-mail do usuário. O primeiro acesso cria a conta.")
+    return portal
+
+
+def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
+    from remoto import slug_camera
+
+    pacote = acervo.pacote(cameras_online, matches)
+    for chave in ("1", "2", "3", "4"):
+        portal.publicar(f"painel-{chave}", desenhar_monitor(chave, pacote))
+    catalogo = []
+    for item in estado.values():
+        quadro = item["analitica"].stream.preview
+        if quadro is None:
+            continue
+        slug = slug_camera(item["nome"])
+        portal.publicar(f"camera-{slug}", quadro.copy())
+        catalogo.append((slug, item["nome"], item.get("rua") or ""))
+    portal.definir_cameras(catalogo)
+
+
 def main():
     inicializar_csv()
     inicializar_csv_ocorrencias()
@@ -1728,6 +1783,7 @@ def main():
 
     acervo = Acervo()
     acervo.iniciar()
+    portal = _abrir_portal(acervo)
     paineis = {"1": False, "2": False, "3": False, "4": False}
     video_cameras = {}
     janelas_painel = set()
@@ -1735,6 +1791,7 @@ def main():
     sumiu_painel = {}
     sumiu_camera = {}
     proxima_tela = 0.0
+    proxima_remota = 0.0
     versao_mapa_vista = 0
 
     try:
@@ -1866,8 +1923,11 @@ def main():
                     janelas_video.discard(titulo)
 
             cameras_online = [{"nome": item["nome"]} for item in estado.values()]
-            acervo.quer_leitura = bool(paineis.get("3") or paineis.get("4"))
-            acervo.quer_mapas = bool(paineis.get("4"))
+            acervo.quer_leitura = bool(paineis.get("3") or paineis.get("4") or portal)
+            acervo.quer_mapas = bool(paineis.get("4") or portal)
+            if portal is not None and time.time() >= proxima_remota:
+                _publicar_remoto(portal, acervo, cameras_online, matches_vivos, estado)
+                proxima_remota = time.time() + 5
             if (paineis.get("3") or paineis.get("4")) and acervo.mapa_versao != versao_mapa_vista:
                 proxima_tela = min(proxima_tela, time.time())
             if any(paineis.values()) and time.time() >= proxima_tela:
@@ -1975,6 +2035,8 @@ def main():
 
     finally:
         print("Encerrando analítico...")
+        if portal is not None:
+            portal.parar()
         acervo.parar()
         if vigia is not None:
             vigia.parar()

@@ -16,7 +16,9 @@ def _limpo(nome: str) -> str:
 
 
 def email_configurado() -> bool:
-    return bool(_limpo("EMAIL_DESTINO") and _limpo("SMTP_USUARIO") and _limpo("SMTP_SENHA"))
+    from cadastro import destinatarios
+
+    return bool(destinatarios() and _limpo("SMTP_USUARIO") and _limpo("SMTP_SENHA"))
 
 
 def whatsapp_configurado() -> bool:

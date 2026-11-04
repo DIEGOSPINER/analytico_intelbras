@@ -334,19 +334,25 @@ class Vigia:
             novos_alertas.append(alerta)
 
     def _avisar(self, alertas: list[dict]):
-        linhas = ["Alerta do analítico"]
+        from cadastro import emails_do_alerta
+
+        grupos = {}
         for alerta in alertas:
-            linhas.append(
-                f"{alerta.get('nivel', '')}: {alerta.get('nome', '')} ({alerta.get('id', '')}) | "
-                f"{alerta.get('camera', '')} {alerta.get('data', '')} {alerta.get('hora', '')}"
-            )
-            if alerta.get("descricao"):
-                linhas.append(alerta["descricao"])
-        texto = "\n".join(linhas)
-        if any(alerta.get("origem") == "Cidadao" for alerta in alertas):
-            assunto = "Ocorrência emergente recebida"
-        else:
-            assunto = f"Alerta analítico: {alertas[0].get('nome') or alertas[0].get('tipo')}"
-        enviar_email(assunto, texto)
-        if whatsapp_configurado():
-            enviar_whatsapp(texto)
+            grupos.setdefault(str(alerta.get("camera") or ""), []).append(alerta)
+        for camera, grupo in grupos.items():
+            linhas = ["Alerta do analítico"]
+            for alerta in grupo:
+                linhas.append(
+                    f"{alerta.get('nivel', '')}: {alerta.get('nome', '')} ({alerta.get('id', '')}) | "
+                    f"{alerta.get('camera', '')} {alerta.get('data', '')} {alerta.get('hora', '')}"
+                )
+                if alerta.get("descricao"):
+                    linhas.append(alerta["descricao"])
+            texto = "\n".join(linhas)
+            if any(alerta.get("origem") == "Cidadao" for alerta in grupo):
+                assunto = "Ocorrência emergente recebida"
+            else:
+                assunto = f"Alerta analítico: {grupo[0].get('nome') or grupo[0].get('tipo')}"
+            enviar_email(assunto, texto, destinos=emails_do_alerta(camera))
+            if whatsapp_configurado():
+                enviar_whatsapp(texto)
