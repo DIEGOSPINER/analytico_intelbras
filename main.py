@@ -1713,21 +1713,47 @@ def _abrir_portal(acervo):
     return portal
 
 
-def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
+def _quadro_portal(quadro, largura=960):
+    if quadro is None or getattr(quadro, "size", 0) == 0:
+        return None
+    try:
+        copia = quadro.copy()
+    except Exception:
+        return None
+    altura, atual = copia.shape[:2]
+    if atual > largura and atual > 0:
+        nova = max(1, int(round(altura * largura / atual)))
+        copia = cv2.resize(copia, (largura, nova), interpolation=cv2.INTER_AREA)
+    return copia
+
+
+def _publicar_cameras(portal, estado, parar):
+    """Envia o quadro cheio da câmera várias vezes por segundo, fora do painel."""
     from remoto import slug_camera
 
+    while not parar.is_set():
+        catalogo = []
+        for item in list(estado.values()):
+            slug = slug_camera(item["nome"])
+            catalogo.append((slug, item["nome"], item.get("rua") or ""))
+            stream = item["analitica"].stream
+            quadro = _quadro_portal(getattr(stream, "frame", None))
+            if quadro is None:
+                continue
+            portal.publicar(f"camera-{slug}", quadro)
+        portal.definir_cameras(catalogo)
+        if parar.wait(0.08):
+            break
+
+
+def _publicar_remoto(portal, acervo, cameras_online, matches):
     pacote = acervo.pacote(cameras_online, matches)
     for chave in ("1", "2", "3", "4"):
         portal.publicar(f"painel-{chave}", desenhar_monitor(chave, pacote))
-    catalogo = []
-    for item in estado.values():
-        quadro = item["analitica"].stream.preview
-        if quadro is None:
-            continue
-        slug = slug_camera(item["nome"])
-        portal.publicar(f"camera-{slug}", quadro.copy())
-        catalogo.append((slug, item["nome"], item.get("rua") or ""))
-    portal.definir_cameras(catalogo)
+    portal.definir_resumo({
+        "itens": int(pacote.get("total") or 0),
+        "cameras": len(pacote.get("cameras") or []),
+    })
 
 
 def main():
@@ -1784,6 +1810,15 @@ def main():
     acervo = Acervo()
     acervo.iniciar()
     portal = _abrir_portal(acervo)
+    parar_video = threading.Event()
+    if portal is not None:
+        portal.ligar_faces(id_faces)
+        threading.Thread(
+            target=_publicar_cameras,
+            args=(portal, estado, parar_video),
+            name="video-portal",
+            daemon=True,
+        ).start()
     paineis = {"1": False, "2": False, "3": False, "4": False}
     video_cameras = {}
     janelas_painel = set()
@@ -1926,8 +1961,8 @@ def main():
             acervo.quer_leitura = bool(paineis.get("3") or paineis.get("4") or portal)
             acervo.quer_mapas = bool(paineis.get("4") or portal)
             if portal is not None and time.time() >= proxima_remota:
-                _publicar_remoto(portal, acervo, cameras_online, matches_vivos, estado)
-                proxima_remota = time.time() + 5
+                _publicar_remoto(portal, acervo, cameras_online, matches_vivos)
+                proxima_remota = time.time() + 1
             if (paineis.get("3") or paineis.get("4")) and acervo.mapa_versao != versao_mapa_vista:
                 proxima_tela = min(proxima_tela, time.time())
             if any(paineis.values()) and time.time() >= proxima_tela:
@@ -2035,6 +2070,7 @@ def main():
 
     finally:
         print("Encerrando analítico...")
+        parar_video.set()
         if portal is not None:
             portal.parar()
         acervo.parar()

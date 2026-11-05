@@ -18,6 +18,7 @@ import csv
 import os
 import re
 import shutil
+import threading
 import time
 import urllib.request
 from datetime import datetime
@@ -150,6 +151,29 @@ def inicializar_csv_placas():
         print("Histórico de placas existente. Novos registros serão anexados.")
 
 
+_CACHE_FACES = {"quando": 0.0, "linhas": []}
+
+
+def contar_passagens_faces(limite: int = 14) -> list[tuple[str, int]]:
+    """Quantas vezes cada Face_ID passou, do mais frequente ao menos."""
+    agora = time.time()
+    if agora - _CACHE_FACES["quando"] < 1 and _CACHE_FACES["linhas"]:
+        return _CACHE_FACES["linhas"][:limite]
+    contagem = {}
+    if os.path.exists(ARQUIVO_FACES):
+        with open(ARQUIVO_FACES, encoding="utf-8-sig", newline="") as arquivo:
+            leitor = csv.reader(arquivo, delimiter=";")
+            next(leitor, None)
+            for linha in leitor:
+                if len(linha) > 3 and linha[3].strip():
+                    ident = linha[3].strip().upper()
+                    contagem[ident] = contagem.get(ident, 0) + 1
+    linhas = sorted(contagem.items(), key=lambda item: (-item[1], item[0]))
+    _CACHE_FACES["quando"] = agora
+    _CACHE_FACES["linhas"] = linhas
+    return linhas[:limite]
+
+
 def salvar_passagem_face(registro: dict):
     agora = _agora()
     linha = [
@@ -216,6 +240,7 @@ class IdentificadorFaces:
         self.track_score = {}
         self.track_ultima_amostra = {}
         self.track_visto = {}
+        self._trava = threading.Lock()
         self._seq = 0
         self._dim = 128
 
@@ -948,7 +973,41 @@ class IdentificadorFaces:
         self.track_score[chave] = float(score)
         return face_id, score, novo
 
+    def inscrever_foto(self, imagem):
+        """Inclui a foto na galeria e passa a reconhecer o reaparecimento."""
+        with self._trava:
+            if imagem is None or getattr(imagem, "size", 0) == 0:
+                raise ValueError("Envie uma foto com o rosto da pessoa.")
+            if not self.disponivel:
+                raise ValueError("O reconhecedor de faces não está pronto.")
+            altura, largura = imagem.shape[:2]
+            faces = self._detectar_faces_no_recorte(imagem, (0, 0, largura, altura))
+            if not faces:
+                raise ValueError("Nenhum rosto encontrado. Use uma foto de frente, com o rosto visível.")
+            face = max(faces, key=lambda item: int(item.get("lado_px") or 0))
+            x1, y1, x2, y2 = face["bbox"]
+            crop = imagem[y1:y2, x1:x2]
+            if not self._crop_util(crop):
+                raise ValueError("A foto do rosto está sem nitidez.")
+            vetor, alinhado = self._extrair(imagem, crop, face.get("keypoints"))
+            if vetor is None:
+                raise ValueError("Não foi possível ler as características deste rosto.")
+            encontrado, score = self._buscar(vetor, alinhado)
+            if encontrado is not None and score >= self.limiar_match:
+                self._adicionar_amostra(encontrado, vetor, alinhado)
+                pasta = DIR_FACES / encontrado
+                pasta.mkdir(parents=True, exist_ok=True)
+                ref = pasta / "referencia.jpg"
+                cv2.imwrite(str(ref), crop)
+                self.cadastro.setdefault(encontrado, {})["foto_referencia"] = str(ref).replace("\\", "/")
+                return encontrado, False
+            return self._cadastrar(crop, vetor, alinhado), True
+
     def processar(self, camera, frame, pessoas):
+        with self._trava:
+            return self._processar_bloqueado(camera, frame, pessoas)
+
+    def _processar_bloqueado(self, camera, frame, pessoas):
         """
         pessoas: dict track_id -> {bbox, centro}
         Retorna lista de eventos de passagem e anotações visuais.

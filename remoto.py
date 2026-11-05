@@ -8,8 +8,11 @@ página leve: o quadro já publicado troca no lugar, e recarregar volta na hora.
 from __future__ import annotations
 
 import hmac
+import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import cv2
@@ -25,30 +28,86 @@ PAINEIS = (
     ("4", "painel-4", "Mapas"),
 )
 ESTILO = """
-body { margin:0; background:#0c0c0c; color:#ebebeb; font-family:Segoe UI,sans-serif; }
-nav { display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px; background:#101018; position:sticky; top:0; z-index:2; }
-nav a { color:#ebebeb; text-decoration:none; border:1px solid #30305c; padding:8px 12px; background:#161616; }
-nav a.ativo { background:#148ce8; border-color:#148ce8; }
-body.parede { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
-body.parede .tela { flex:1; min-height:0; background:#000; }
-body.parede img { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
-main { padding:16px 20px 48px; max-width:960px; }
-h1 { font-size:22px; font-weight:500; }
-label { display:block; margin:12px 0; }
-input, select { width:100%; box-sizing:border-box; margin-top:4px; padding:10px; background:#161616; color:#ebebeb; border:1px solid #30305c; }
-button { background:#148ce8; color:#fff; border:0; padding:10px 16px; cursor:pointer; }
-.aviso { color:#ffb000; }
-.ok { color:#7dffa0; }
-.grade { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-.atalho { display:flex; align-items:center; justify-content:center; min-height:140px; font-size:20px; background:#121212; border:1px solid #30305c; color:#ebebeb; text-decoration:none; }
-table { width:100%; border-collapse:collapse; margin:12px 0 24px; }
-td, th { text-align:left; padding:8px; border-bottom:1px solid #30305c; vertical-align:top; }
-.check { width:auto; margin-right:8px; }
-.comandos { margin:8px 12px; }
-.comandos button { background:#161616; color:#ebebeb; border:1px solid #30305c; margin-right:8px; }
-.login { max-width:380px; margin:10vh auto; padding:24px; }
-a.texto { color:#5ac4ff; }
-@media (max-width:900px) { .grade { grid-template-columns:1fr; } }
+:root {
+  --fundo: #070b16;
+  --vidro: rgba(18, 24, 42, 0.72);
+  --vidro-2: rgba(28, 36, 58, 0.55);
+  --linha: rgba(255, 255, 255, 0.08);
+  --texto: #f4f7fb;
+  --mudo: #93a0b8;
+  --azul: #4c8dff;
+  --ciano: #3ee0ff;
+  --verde: #3ddc97;
+  --ambar: #ffb020;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; color: var(--texto); font-family: Segoe UI, sans-serif; font-size: 16px;
+  background: radial-gradient(1200px 500px at 80% -10%, rgba(76, 141, 255, 0.18), transparent 55%), var(--fundo); }
+.app { display: flex; min-height: 100vh; }
+aside { width: 248px; flex: none; padding: 22px 16px; background: rgba(10, 14, 28, 0.82);
+  border-right: 1px solid var(--linha); backdrop-filter: blur(16px); }
+.marca { display: flex; gap: 12px; align-items: center; margin-bottom: 28px; }
+.logo { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; font-weight: 700;
+  background: linear-gradient(160deg, #4c8dff, #3ee0ff); color: #041018; }
+.marca strong { display: block; font-size: 16px; letter-spacing: 0.08em; }
+.marca small { color: var(--mudo); font-size: 13px; }
+.grupo { margin: 18px 8px 8px; color: var(--mudo); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; }
+nav a { display: flex; align-items: center; gap: 10px; color: var(--mudo); text-decoration: none;
+  border-radius: 12px; padding: 11px 12px; margin-bottom: 4px; font-size: 15px; }
+nav a svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; flex: none; }
+nav a.ativo, nav a:hover { color: var(--texto); background: rgba(76, 141, 255, 0.16); }
+.palco { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.palco.parede { height: 100vh; }
+.topo { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 22px 0; }
+.topo h1 { margin: 0; font-size: 28px; font-weight: 600; }
+.topo p { margin: 4px 0 0; color: var(--mudo); font-size: 15px; }
+main { padding: 18px 22px 40px; }
+.cartoes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+.cartao, .painel, .video, figure { background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); backdrop-filter: blur(10px); }
+.cartao { padding: 16px 18px; }
+.cartao span, figcaption { color: var(--mudo); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.cartao span svg, figcaption svg, button svg { width: 18px; height: 18px; stroke: var(--ciano); fill: none; stroke-width: 1.8; flex: none; }
+button svg { stroke: currentColor; width: 16px; height: 16px; }
+.cartao strong { display: block; margin-top: 8px; font-size: 32px; font-weight: 650; letter-spacing: -0.03em;
+  transition: color 0.3s; }
+.cartao strong.sobe { color: var(--verde); }
+.grade { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.atalho { display: flex; align-items: center; gap: 12px; min-height: 92px; padding: 18px; font-size: 18px;
+  color: var(--texto); text-decoration: none; }
+.atalho svg { width: 22px; height: 22px; stroke: var(--ciano); fill: none; stroke-width: 1.8; }
+.tela { flex: 1; min-height: 0; margin: 12px 22px 18px; overflow: hidden; }
+.tela img, .video img { width: 100%; height: 100%; object-fit: contain; display: block; background: transparent; }
+.parede .miolo { display: flex; flex-direction: column; height: 100%; }
+.comandos { display: flex; gap: 8px; padding: 0 22px; }
+.comandos button, button { display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(180deg, #5b97ff, #3d74f0); color: white; border: 0;
+  border-radius: 12px; padding: 11px 16px; font-size: 15px; cursor: pointer; }
+label { display: block; margin: 12px 0; color: var(--mudo); font-size: 14px; }
+input, select { width: 100%; margin-top: 6px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--linha);
+  background: rgba(8, 12, 24, 0.65); color: var(--texto); font-size: 16px; }
+.aviso { color: var(--ambar); } .ok { color: var(--verde); }
+table { width: 100%; border-collapse: collapse; margin: 8px 0 20px; }
+td, th { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--linha); font-size: 15px; }
+.check { width: auto; margin-right: 8px; }
+.login { max-width: 420px; margin: 12vh auto; padding: 28px; }
+a.texto { color: var(--ciano); }
+.ranking { padding: 16px 18px 20px; }
+.barra { height: 10px; border-radius: 99px; background: rgba(255,255,255,0.08); overflow: hidden; margin-top: 6px; }
+.barra i { display: block; height: 100%; width: 0; border-radius: 99px;
+  background: linear-gradient(90deg, #3ee0ff, #4c8dff); transition: width 0.7s ease; }
+.linha-face { display: flex; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 15px; }
+.coluna { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.72fr); gap: 14px; align-items: start; }
+.coluna .tela { min-height: 68vh; }
+.video { display: flex; flex-direction: column; min-height: 320px; overflow: hidden; }
+.video img { flex: 1; min-height: 260px; background: #05080f; }
+.rostos { display: flex; gap: 12px; flex-wrap: wrap; }
+.rostos figure { width: 140px; margin: 0; overflow: hidden; }
+.rostos img { width: 100%; height: 110px; object-fit: cover; }
+@media (max-width: 1100px) {
+  aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
+  .cartoes, .coluna, .grade { grid-template-columns: 1fr; }
+}
 """
 
 
@@ -64,12 +123,18 @@ class Portal:
         self.porta = int(porta)
         self._trava = threading.Lock()
         self._imagens = {}
+        self._seq = {}
+        self._resumo = {}
+        self._faces = None
         self._cameras = []
         self._acervo = None
         self._httpd = None
 
     def ligar_acervo(self, acervo):
         self._acervo = acervo
+
+    def ligar_faces(self, identificador):
+        self._faces = identificador
 
     def publicar(self, chave: str, imagem):
         if imagem is None or getattr(imagem, "size", 0) == 0:
@@ -79,6 +144,19 @@ class Portal:
             return
         with self._trava:
             self._imagens[chave] = bruto.tobytes()
+            self._seq[chave] = self._seq.get(chave, 0) + 1
+
+    def quadro(self, chave: str):
+        with self._trava:
+            return self._imagens.get(chave), self._seq.get(chave, 0)
+
+    def definir_resumo(self, dados: dict):
+        with self._trava:
+            self._resumo = dict(dados)
+
+    def resumo(self) -> dict:
+        with self._trava:
+            return dict(self._resumo)
 
     def definir_cameras(self, cameras):
         with self._trava:
@@ -169,29 +247,54 @@ def _telefone_visivel(aviso: dict) -> str:
     return str(aviso.get("telefone") or "")
 
 
+def _svg(miolo: str) -> str:
+    return f"<svg viewBox='0 0 24 24'>{miolo}</svg>"
+
+
+_ICONES = {
+    "inicio": "<path d='M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z'/>",
+    "contagem": "<path d='M4 19V10M10 19V5M16 19v-7M22 19H2'/>",
+    "pessoa": "<circle cx='12' cy='8' r='3'/><path d='M5 19c1.5-3 3.8-4.5 7-4.5S17.5 16 19 19'/>",
+    "alerta": "<path d='M12 3 3 19h18z'/><path d='M12 9v5M12 17h.01'/>",
+    "mapa": "<path d='m9 18-6 3V6l6-3 6 3 6-3v15l-6 3-6-3z'/><path d='M9 3v15M15 6v15'/>",
+    "camera": "<path d='M4 7h4l2-2h4l2 2h4v12H4z'/><circle cx='12' cy='13' r='3'/>",
+    "cliente": "<rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8M8 12h8M8 16h5'/>",
+    "aviso": "<path d='M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9'/><path d='M10 20a2 2 0 0 0 4 0'/>",
+    "conta": "<circle cx='12' cy='12' r='8'/><circle cx='12' cy='10' r='2.5'/><path d='M8 16.5c.8-1.5 2.2-2.2 4-2.2s3.2.7 4 2.2'/>",
+    "sair": "<path d='M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2'/><path d='M15 12H3m0 0 3-3m-3 3 3 3'/>",
+    "mais": "<path d='M12 5v14M5 12h14'/>",
+}
+
+
 def _menu(ativo: str) -> str:
     itens = [
-        ("/", "Início"),
-        ("/painel/1", "Contagens"),
-        ("/painel/2", "Comportamento"),
-        ("/painel/3", "Alertas de RF e LPR"),
-        ("/painel/4", "Mapas"),
-        ("/painel/cameras", "Ao vivo"),
-        ("/cadastro/cliente", "Cliente"),
-        ("/cadastro/cameras", "Câmeras"),
-        ("/cadastro/avisos", "Avisos"),
-        ("/conta", "Conta"),
-        ("/sair", "Sair"),
+        ("/", "Início", "inicio"),
+        ("/painel/1", "Contagens", "contagem"),
+        ("/painel/2", "Comportamento", "pessoa"),
+        ("/painel/3", "Alertas de RF e LPR", "alerta"),
+        ("/painel/4", "Mapas", "mapa"),
+        ("/painel/cameras", "Ao vivo", "camera"),
+        ("/cadastro/cliente", "Cliente", "cliente"),
+        ("/cadastro/cameras", "Câmeras", "camera"),
+        ("/cadastro/pessoas", "Pessoas", "pessoa"),
+        ("/cadastro/avisos", "Avisos", "aviso"),
+        ("/conta", "Conta", "conta"),
+        ("/sair", "Sair", "sair"),
     ]
-    partes = []
-    for href, titulo in itens:
+    partes = ["<p class='grupo'>Navegação</p><nav>"]
+    for href, titulo, icone in itens:
+        if href == "/cadastro/cliente":
+            partes.append("<p class='grupo'>Conta</p>")
         classe = " class='ativo'" if href == ativo else ""
-        partes.append(f"<a href='{href}'{classe}>{titulo}</a>")
-    return "<nav>" + "".join(partes) + "</nav>"
+        partes.append(
+            f"<a href='{href}'{classe}>{_svg(_ICONES[icone])}<span>{titulo}</span></a>"
+        )
+    partes.append("</nav>")
+    return "".join(partes)
 
 
 def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False) -> str:
-    classe = " class='parede'" if parede else ""
+    classe = " parede" if parede else ""
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -200,11 +303,180 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False) -> str:
 <title>{_html_seguro(titulo)}</title>
 <style>{ESTILO}</style>
 </head>
-<body{classe}>
+<body>
+<div class="app">
+<aside>
+<div class="marca"><span class="logo">C</span><div><strong>C4ISTAR</strong><small>Monitor</small></div></div>
 {_menu(ativo)}
-{miolo}
+</aside>
+<section class="palco{classe}">{miolo}</section>
+</div>
 </body>
 </html>"""
+
+
+def _inicio(sessao: dict) -> str:
+    botoes = []
+    for numero, _chave, titulo in PAINEIS:
+        icone = {"1": "contagem", "2": "pessoa", "3": "alerta", "4": "mapa"}[numero]
+        botoes.append(
+            f"<a class='atalho cartao' href='/painel/{numero}'>{_svg(_ICONES[icone])}{titulo}</a>"
+        )
+    botoes.append(f"<a class='atalho cartao' href='/painel/cameras'>{_svg(_ICONES['camera'])}Ao vivo</a>")
+    miolo = f"""<header class="topo"><div>
+<h1>Dashboard</h1>
+<p>{_html_seguro(sessao.get('email') or '')} · {_html_seguro(_documento_visivel(sessao.get('documento') or ''))}</p>
+</div></header>
+<main>
+<section class="cartoes">
+<article class="cartao"><span>{_svg(_ICONES['contagem'])}Itens hoje</span><strong data-num="itens">0</strong></article>
+<article class="cartao"><span>{_svg(_ICONES['pessoa'])}Códigos de face</span><strong data-num="faces">0</strong></article>
+<article class="cartao"><span>{_svg(_ICONES['alerta'])}Quem mais passa</span><strong data-num="topo">0</strong></article>
+<article class="cartao"><span>{_svg(_ICONES['camera'])}Câmeras</span><strong data-num="cameras">0</strong></article>
+</section>
+<section class="grade">{''.join(botoes)}</section>
+</main>
+<script>
+async function pulsar() {{
+  const resposta = await fetch('/dados.json');
+  if (!resposta.ok) return;
+  const dados = await resposta.json();
+  document.querySelectorAll('[data-num]').forEach((el) => {{
+    const fim = Number(dados[el.dataset.num] || 0);
+    const inicio = Number(el.dataset.valor || 0);
+    if (inicio === fim) return;
+    el.classList.toggle('sobe', fim > inicio);
+    const t0 = performance.now();
+    const passo = (agora) => {{
+      const p = Math.min(1, (agora - t0) / 700);
+      el.textContent = Math.round(inicio + (fim - inicio) * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) requestAnimationFrame(passo);
+      else el.dataset.valor = String(fim);
+    }};
+    requestAnimationFrame(passo);
+  }});
+}}
+pulsar();
+setInterval(pulsar, 1000);
+</script>"""
+    return _moldura("C4ISTAR MONITOR", miolo, "/")
+
+
+def _ranking_html() -> str:
+    return """<aside class="ranking cartao" id="ranking">
+<h2>Quem mais passa</h2>
+<p>Passagens de cada código de face identificado.</p>
+<div id="barras"></div>
+</aside>
+<script>
+let ultimoRanking = "";
+function escapar(texto) {
+  return String(texto).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+async function ranking() {
+  const resposta = await fetch('/dados.json');
+  if (!resposta.ok) return;
+  const dados = await resposta.json();
+  const lista = dados.passagens || [];
+  const marca = JSON.stringify(lista);
+  if (marca === ultimoRanking) return;
+  ultimoRanking = marca;
+  const pico = Math.max(1, ...lista.map((item) => item.total));
+  const caixa = document.getElementById('barras');
+  caixa.innerHTML = lista.map((item) => {
+    const nome = item.nome ? escapar(item.nome) + ' · ' : '';
+    const largura = Math.round(100 * item.total / pico);
+    return `<div class="linha-face"><span>${nome}${escapar(item.id)}</span><strong>${item.total}</strong></div>
+      <div class="barra"><i data-w="${largura}%"></i></div>`;
+  }).join('') || '<p>Ainda não há passagem de face neste histórico.</p>';
+  requestAnimationFrame(() => caixa.querySelectorAll('i').forEach((el) => { el.style.width = el.dataset.w; }));
+}
+ranking();
+setInterval(ranking, 1000);
+</script>"""
+
+
+def _painel(numero: str, titulo: str, chave: str, mapas: bool) -> str:
+    comandos = ""
+    if mapas:
+        comandos = f"""<div class="comandos">
+<button type="button" data-periodo="dia">{_svg(_ICONES["mapa"])}Dia</button>
+<button type="button" data-periodo="semana">{_svg(_ICONES["mapa"])}Semana</button>
+<button type="button" data-periodo="mes">{_svg(_ICONES["mapa"])}Mês</button>
+<button type="button" data-desenho="pontos">{_svg(_ICONES["contagem"])}Pontos</button>
+<button type="button" data-desenho="calor">{_svg(_ICONES["alerta"])}Calor</button>
+</div>"""
+    extra = f"<div class='coluna'><div class='tela cartao'><img id='quadro' alt='{_html_seguro(titulo)}' src='/img/{chave}.jpg'></div>{_ranking_html()}</div>" if numero == "3" else f"<div class='tela cartao'><img id='quadro' alt='{_html_seguro(titulo)}' src='/img/{chave}.jpg'></div>"
+    miolo = f"""<header class="topo"><div><h1>{_html_seguro(titulo)}</h1><p>O quadro troca no lugar. Recarregar volta nesta tela.</p></div></header>
+{comandos}
+<div class="miolo">{extra}</div>
+<script>
+const quadro = document.getElementById("quadro");
+setInterval(() => {{ quadro.src = "/img/{chave}.jpg?t=" + Date.now(); }}, 1000);
+document.querySelectorAll("button[data-periodo],button[data-desenho]").forEach((botao) => {{
+  botao.addEventListener("click", () => {{
+    const corpo = new URLSearchParams();
+    if (botao.dataset.periodo) corpo.set("periodo", botao.dataset.periodo);
+    if (botao.dataset.desenho) corpo.set("desenho", botao.dataset.desenho);
+    fetch("/comando", {{ method: "POST", body: corpo, headers: {{ "Content-Type": "application/x-www-form-urlencoded" }} }});
+  }});
+}});
+</script>"""
+    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", parede=numero != "3")
+
+
+def _ao_vivo(cameras) -> str:
+    blocos = []
+    for slug, nome, rua in cameras:
+        legenda = _html_seguro(f"{nome} {rua}".strip())
+        blocos.append(
+            f"<figure class='video'><figcaption>{_svg(_ICONES['camera'])}{legenda}</figcaption>"
+            f"<img alt='{legenda}' src='/video/camera-{_html_seguro(slug)}'></figure>"
+        )
+    grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
+    miolo = f"""<header class="topo"><div><h1>Ao vivo</h1><p>O vídeo segue o quadro da câmera, sem esperar o painel.</p></div></header>
+<main><section class="grade">{grade}</section></main>
+<script>
+if (!document.querySelector(".video")) setTimeout(() => location.reload(), 2000);
+</script>"""
+    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras")
+
+
+def _sem_analise() -> str:
+    miolo = """<header class="topo"><div><h1>Painéis</h1>
+<p>As câmeras em análise nesta máquina pertencem a outro CPF. O seu cadastro continua disponível.</p></div></header>"""
+    return _moldura("C4ISTAR MONITOR", miolo, "/")
+
+
+def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool = False) -> str:
+    from cadastro import BASES_LEGAIS
+
+    opcoes = ["<option value=''>Base legal</option>"]
+    for chave, rotulo in BASES_LEGAIS.items():
+        opcoes.append(f"<option value='{_html_seguro(chave)}'>{_html_seguro(rotulo)}</option>")
+    rostos = []
+    for pessoa in pessoas:
+        face = _html_seguro(pessoa.get("face_id") or "")
+        rostos.append(
+            "<figure><img alt='' src='/rosto/"
+            f"{face}.jpg'><figcaption>{_html_seguro(pessoa.get('nome') or face)}</figcaption></figure>"
+        )
+    grade = f"<div class='rostos'>{''.join(rostos)}</div>" if rostos else "<p>Nenhuma pessoa de interesse nesta conta.</p>"
+    miolo = f"""<header class="topo"><div><h1>Pessoas de interesse</h1>
+<p>A foto entra na galeria. O reaparecimento deste rosto passa a ser acompanhado.</p></div></header>
+<main>
+{grade}
+{_aviso_html(aviso, ok)}
+<form method="post" action="/cadastro/pessoas" enctype="multipart/form-data">
+{_csrf(sessao)}
+{_campo("Nome", "nome", obrigatorio=True)}
+<label>Base legal<select name="base_legal" required>{''.join(opcoes)}</select></label>
+{_campo("Referência", "referencia", obrigatorio=True)}
+<label>Foto do rosto<input type="file" name="foto" accept="image/*" required></label>
+<button type="submit">{_svg(_ICONES["mais"])}Incluir e monitorar</button>
+</form>
+</main>"""
+    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas")
 
 
 def _aviso_html(texto: str, ok: bool = False) -> str:
@@ -252,14 +524,14 @@ def _pagina_senha(aviso: str = "") -> str:
 <style>{ESTILO}</style>
 </head>
 <body>
-<main class="login">
+<main class="login cartao">
 <h1>C4ISTAR MONITOR</h1>
 <p>Entre com o e-mail e a senha do seu usuário.</p>
 {_aviso_html(aviso)}
 <form method="post" action="/entrar">
 {_campo("E-mail", "email", tipo="email", obrigatorio=True)}
 {_campo("Senha", "senha", tipo="password", obrigatorio=True)}
-<button type="submit">Entrar</button>
+<button type="submit">{_svg(_ICONES["mais"])}Entrar</button>
 </form>
 <p><a class="texto" href="/criar">Criar usuário</a></p>
 </main>
@@ -279,7 +551,7 @@ def _pagina_criar(aviso: str = "") -> str:
 <style>{ESTILO}</style>
 </head>
 <body>
-<main class="login">
+<main class="login cartao">
 <h1>Criar usuário</h1>
 <p>O primeiro usuário fica ligado ao CPF ou CNPJ da conta desta instalação. A senha da instalação é a que já está no sistema.</p>
 {_aviso_html(aviso)}
@@ -290,82 +562,12 @@ def _pagina_criar(aviso: str = "") -> str:
 {_campo("Senha", "senha", tipo="password", obrigatorio=True)}
 {_campo("Confirmar senha", "confirmacao", tipo="password", obrigatorio=True)}
 {_campo("Senha da instalação", "chave", tipo="password", obrigatorio=True)}
-<button type="submit">Criar e entrar</button>
+<button type="submit">{_svg(_ICONES["mais"])}Criar e entrar</button>
 </form>
 <p><a class="texto" href="/entrar">Já tenho usuário</a></p>
 </main>
 </body>
 </html>"""
-
-
-def _inicio(sessao: dict) -> str:
-    botoes = []
-    for numero, _chave, titulo in PAINEIS:
-        botoes.append(f"<a class='atalho' href='/painel/{numero}'>{titulo}</a>")
-    botoes.append("<a class='atalho' href='/painel/cameras'>Ao vivo</a>")
-    miolo = f"""<main>
-<h1>C4ISTAR MONITOR</h1>
-<p>{_html_seguro(sessao.get("email") or "")} · CPF/CNPJ {_html_seguro(_documento_visivel(sessao.get("documento") or ""))}</p>
-<p>Escolha a tela. Ela permanece no navegador e o quadro troca sozinho, sem recarregar a página.</p>
-<section class="grade">{"".join(botoes)}</section>
-</main>"""
-    return _moldura("C4ISTAR MONITOR", miolo, "/")
-
-
-def _painel(numero: str, titulo: str, chave: str, mapas: bool) -> str:
-    comandos = ""
-    if mapas:
-        comandos = """<div class="comandos">
-<button type="button" data-periodo="dia">Dia</button>
-<button type="button" data-periodo="semana">Semana</button>
-<button type="button" data-periodo="mes">Mês</button>
-<button type="button" data-desenho="pontos">Pontos</button>
-<button type="button" data-desenho="calor">Calor</button>
-</div>"""
-    miolo = f"""{comandos}
-<div class="tela"><img id="quadro" alt="{_html_seguro(titulo)}" src="/img/{chave}.jpg"></div>
-<script>
-const quadro = document.getElementById("quadro");
-setInterval(() => {{ quadro.src = "/img/{chave}.jpg?t=" + Date.now(); }}, 5000);
-document.querySelectorAll("button[data-periodo],button[data-desenho]").forEach((botao) => {{
-  botao.addEventListener("click", () => {{
-    const corpo = new URLSearchParams();
-    if (botao.dataset.periodo) corpo.set("periodo", botao.dataset.periodo);
-    if (botao.dataset.desenho) corpo.set("desenho", botao.dataset.desenho);
-    fetch("/comando", {{ method: "POST", body: corpo, headers: {{ "Content-Type": "application/x-www-form-urlencoded" }} }});
-  }});
-}});
-</script>"""
-    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", parede=True)
-
-
-def _ao_vivo(cameras) -> str:
-    blocos = []
-    for slug, nome, rua in cameras:
-        legenda = _html_seguro(f"{nome} {rua}".strip())
-        blocos.append(
-            f"<figure><figcaption>{legenda}</figcaption>"
-            f"<img alt='{legenda}' src='/img/camera-{_html_seguro(slug)}.jpg'></figure>"
-        )
-    grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
-    miolo = f"""<main><h1>Ao vivo</h1><section class="grade">{grade}</section></main>
-<script>
-setInterval(() => {{
-  document.querySelectorAll("img[src*='/img/camera-']").forEach((img) => {{
-    const base = img.getAttribute("src").split("?")[0];
-    img.src = base + "?t=" + Date.now();
-  }});
-}}, 5000);
-</script>"""
-    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras")
-
-
-def _sem_analise() -> str:
-    miolo = """<main>
-<h1>Painéis</h1>
-<p>As câmeras em análise nesta máquina pertencem a outro CPF. O seu cadastro continua disponível.</p>
-</main>"""
-    return _moldura("C4ISTAR MONITOR", miolo, "/")
 
 
 def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False) -> str:
@@ -379,7 +581,7 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
 {_campo("RG", "rg", cliente.get("rg") or "")}
 {_campo("CPF ou CNPJ", "documento", _documento_visivel(cliente.get("documento") or sessao.get("documento") or ""), obrigatorio=True)}
 {_campo("E-mail da conta", "email", cliente.get("email") or "", tipo="email")}
-<button type="submit">Salvar cliente</button>
+<button type="submit">{_svg(_ICONES["mais"])}Salvar cliente</button>
 </form>
 </main>"""
     return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente")
@@ -433,7 +635,7 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 {_campo("Cidade", "cidade", atual.get("cidade") or "")}
 {_campo("Latitude", "latitude", atual.get("latitude") if atual.get("latitude") != "" else "")}
 {_campo("Longitude", "longitude", atual.get("longitude") if atual.get("longitude") != "" else "")}
-<button type="submit">Salvar câmera</button>
+<button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>
 </form>
 </main>"""
     return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras")
@@ -458,7 +660,7 @@ def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = 
                 f"{_csrf(sessao)}"
                 f"<input type='hidden' name='camera_id' value='{_html_seguro(camera.get('id'))}'>"
                 f"<input type='hidden' name='indice' value='{indice}'>"
-                "<button type='submit'>Remover</button></form></td>"
+                "<button type='submit'>" + _svg(_ICONES["sair"]) + "Remover</button></form></td>"
                 "</tr>"
             )
         if linhas:
@@ -483,7 +685,7 @@ def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = 
 {_campo("E-mail", "email", tipo="email", obrigatorio=True)}
 {_check("recebe_alerta", "Recebe alertas e notificações", True)}
 {_check("recebe_relatorio", "Recebe o relatório", True)}
-<button type="submit">Salvar aviso</button>
+<button type="submit">{_svg(_ICONES["mais"])}Salvar aviso</button>
 </form>
 </main>"""
     return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos")
@@ -506,7 +708,7 @@ def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 {_campo("Senha atual", "atual", tipo="password", obrigatorio=True)}
 {_campo("Senha nova", "nova", tipo="password", obrigatorio=True)}
 {_campo("Confirmar senha nova", "confirmacao", tipo="password", obrigatorio=True)}
-<button type="submit">Trocar senha</button>
+<button type="submit">{_svg(_ICONES["mais"])}Trocar senha</button>
 </form>
 <h2>Novo usuário desta conta</h2>
 <form method="post" action="/conta/usuario">
@@ -515,10 +717,77 @@ def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 {_campo("E-mail", "email", tipo="email", obrigatorio=True)}
 {_campo("Senha", "senha", tipo="password", obrigatorio=True)}
 {_campo("Confirmar senha", "confirmacao", tipo="password", obrigatorio=True)}
-<button type="submit">Criar usuário</button>
+<button type="submit">{_svg(_ICONES["mais"])}Criar usuário</button>
 </form>
 </main>"""
     return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta")
+
+
+def np_from(foto: bytes):
+    import numpy as np
+
+    return np.frombuffer(foto, dtype=np.uint8)
+
+
+def _multipart(corpo: bytes, fronteira: str):
+    marca = b"--" + fronteira.encode("utf-8", "replace")
+    campos = {}
+    arquivos = {}
+    for parte in corpo.split(marca):
+        if parte.startswith(b"\r\n"):
+            parte = parte[2:]
+        if not parte or parte.startswith(b"--"):
+            continue
+        cabeca, sep, conteudo = parte.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        if conteudo.endswith(b"\r\n"):
+            conteudo = conteudo[:-2]
+        texto = cabeca.decode("utf-8", "replace")
+        if 'name="' not in texto:
+            continue
+        nome = texto.split('name="', 1)[1].split('"', 1)[0]
+        if "filename=" in texto:
+            arquivos[nome] = conteudo
+        else:
+            campos.setdefault(nome, []).append(conteudo.decode("utf-8", "replace"))
+    return campos, arquivos
+
+
+def _pessoas_da_conta(documento: str) -> list[dict]:
+    cliente = cadastro.cliente_por_documento(documento) or {}
+    return [
+        {
+            "face_id": str(pessoa.get("face_id") or "").upper(),
+            "nome": pessoa.get("nome") or "",
+        }
+        for pessoa in cliente.get("pessoas") or []
+        if isinstance(pessoa, dict) and pessoa.get("face_id")
+    ]
+
+
+def _dados_json(portal) -> dict:
+    from identidade import contar_passagens_faces
+
+    linhas = contar_passagens_faces(100000)
+    nomes = {}
+    try:
+        interesse = cadastro.interesse_ativo() or {}
+    except Exception:
+        interesse = {}
+    for pessoa in interesse.get("pessoas") or []:
+        nomes[str(pessoa.get("face_id") or "").upper()] = str(pessoa.get("nome") or "")
+    resumo = portal.resumo()
+    return {
+        "itens": int(resumo.get("itens") or 0),
+        "faces": len(linhas),
+        "topo": linhas[0][1] if linhas else 0,
+        "cameras": int(resumo.get("cameras") or len(portal.cameras())),
+        "passagens": [
+            {"id": ident, "nome": nomes.get(ident, ""), "total": total}
+            for ident, total in linhas[:12]
+        ],
+    }
 
 
 def _tratador(portal: Portal):
@@ -547,6 +816,13 @@ def _tratador(portal: Portal):
 
         def do_POST(self):
             caminho, _consulta = _caminho(self.path)
+            if caminho == "/cadastro/pessoas":
+                sessao = portal.abrir_sessao(self.headers.get("Cookie"))
+                if sessao is None:
+                    self._html(_pagina_senha(), 200)
+                    return
+                self._salvar_pessoa(sessao)
+                return
             campos = self._ler_formulario()
             if campos is None:
                 return
@@ -631,6 +907,24 @@ def _tratador(portal: Portal):
                 atual = next((item for item in cameras if item.get("id") == ident), None)
                 self._html(_form_camera(sessao, cameras, atual, aviso, ok), 200)
                 return
+            if caminho == "/cadastro/pessoas":
+                self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), aviso, ok), 200)
+                return
+            if caminho == "/dados.json":
+                if not ver:
+                    self.send_error(404)
+                    return
+                self._json(_dados_json(portal))
+                return
+            if caminho.startswith("/video/"):
+                if not ver:
+                    self.send_error(404)
+                    return
+                self._fluxo(caminho[len("/video/"):])
+                return
+            if caminho.startswith("/rosto/") and caminho.endswith(".jpg"):
+                self._rosto(documento, caminho[len("/rosto/"):-4])
+                return
             if caminho == "/cadastro/avisos":
                 self._html(_form_avisos(sessao, _cameras_ou_vazio(documento), aviso, ok), 200)
                 return
@@ -638,6 +932,93 @@ def _tratador(portal: Portal):
                 self._html(_form_conta(sessao, aviso, ok), 200)
                 return
             self.send_error(404)
+
+        def _salvar_pessoa(self, sessao: dict):
+            documento = sessao.get("documento") or ""
+            try:
+                campos, arquivos = self._ler_multipart()
+            except ValueError as exc:
+                self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
+                return
+            if not _csrf_confere(sessao, campos):
+                self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), "Atualize a página e tente de novo."), 403)
+                return
+            foto = arquivos.get("foto") or b""
+            imagem = cv2.imdecode(np_from(foto), cv2.IMREAD_COLOR) if foto else None
+            try:
+                if portal._faces is None:
+                    raise ValueError("O monitoramento de faces ainda não está pronto.")
+                face_id, _nova = portal._faces.inscrever_foto(imagem)
+                cadastro.cadastrar_pessoa(documento, {
+                    "face_id": face_id,
+                    "nome": _um(campos, "nome"),
+                    "base_legal": _um(campos, "base_legal"),
+                    "referencia": _um(campos, "referencia"),
+                    "motivo": _um(campos, "referencia"),
+                })
+            except ValueError as exc:
+                self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
+                return
+            self._redirecionar("/cadastro/pessoas?ok=salvo")
+
+        def _ler_multipart(self):
+            tipo = self.headers.get("Content-Type") or ""
+            if "boundary=" not in tipo:
+                raise ValueError("Envie a foto pelo formulário.")
+            limite = self.headers.get("Content-Length") or "0"
+            try:
+                tamanho = int(limite)
+            except ValueError:
+                tamanho = -1
+            if tamanho < 0 or tamanho > 8 * 1024 * 1024:
+                raise ValueError("A foto precisa ter até 8 MB.")
+            corpo = self.rfile.read(tamanho)
+            fronteira = tipo.split("boundary=", 1)[1].strip().strip('"')
+            return _multipart(corpo, fronteira)
+
+        def _fluxo(self, chave: str):
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=quadro")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            ultimo = -1
+            try:
+                while True:
+                    jpeg, seq = portal.quadro(chave)
+                    if not jpeg or seq == ultimo:
+                        time.sleep(0.04)
+                        continue
+                    ultimo = seq
+                    cabeca = (
+                        b"--quadro\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + str(len(jpeg)).encode("ascii")
+                        + b"\r\n\r\n"
+                    )
+                    self.wfile.write(cabeca + jpeg + b"\r\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                return
+
+        def _rosto(self, documento: str, face_id: str):
+            ident = "".join(caractere for caractere in face_id if caractere.isalnum()).upper()
+            if ident not in {item.get("face_id") for item in _pessoas_da_conta(documento)}:
+                self.send_error(404)
+                return
+            caminho = Path("evidencias") / "faces" / ident / "referencia.jpg"
+            if not caminho.is_file():
+                self.send_error(404)
+                return
+            self._bytes(caminho.read_bytes(), "image/jpeg")
+
+        def _json(self, corpo: dict):
+            dados = json.dumps(corpo).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(dados)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(dados)
 
         def _entrar(self, campos: dict):
             try:

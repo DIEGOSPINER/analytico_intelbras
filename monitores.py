@@ -15,7 +15,7 @@ import numpy as np
 
 from mapa import compor_bolhas, compor_calor, compor_mapa
 
-INTERVALO_PAINEL_SEG = 15
+INTERVALO_PAINEL_SEG = 1
 
 JANELAS_PAINEL = {
     "1": "C4ISTAR MONITOR  CONTAGENS",
@@ -72,7 +72,14 @@ def _limpo(texto) -> str:
     ))
 
 
+def _escala_visivel(escala, espessura=1):
+    if escala < 0.8:
+        return max(0.62, escala * 1.5), max(espessura, 2)
+    return escala, espessura
+
+
 def _texto(imagem, texto, x, y, escala, cor, espessura=1):
+    escala, espessura = _escala_visivel(escala, espessura)
     cv2.putText(
         imagem, _limpo(texto), (int(x), int(y)),
         cv2.FONT_HERSHEY_SIMPLEX, escala, cor, espessura, cv2.LINE_AA,
@@ -80,12 +87,13 @@ def _texto(imagem, texto, x, y, escala, cor, espessura=1):
 
 
 def _quebrar(texto, largura_px, escala=0.42):
+    escala, espessura = _escala_visivel(escala, 1)
     palavras = _limpo(texto).split()
     linhas = []
     atual = ""
     for palavra in palavras:
         teste = f"{atual} {palavra}".strip()
-        largura, _ = cv2.getTextSize(teste, cv2.FONT_HERSHEY_SIMPLEX, escala, 1)[0]
+        largura, _ = cv2.getTextSize(teste, cv2.FONT_HERSHEY_SIMPLEX, escala, espessura)[0]
         if atual and largura > largura_px:
             linhas.append(atual)
             atual = palavra
@@ -199,7 +207,7 @@ def _cabecalho(imagem, titulo, pacote):
     if not pacote.get("pronto"):
         _texto(imagem, "LENDO HISTORICO", LARGURA - 340, 52, 0.42, AMBAR, 1)
     else:
-        _texto(imagem, "atualiza a cada 15s", LARGURA - 340, 52, 0.4, DIM, 1)
+        _texto(imagem, "ao vivo", LARGURA - 340, 52, 0.4, DIM, 1)
 
 
 def _rodape(imagem):
@@ -967,7 +975,7 @@ class Acervo:
                     self.ids.add((dia, camera, classe, ident))
 
     def _atualizar_interesse(self):
-        if time.time() - self._interesse_em < 15 and self._interesse_em:
+        if time.time() - self._interesse_em < 2 and self._interesse_em:
             return
         try:
             from cadastro import interesse_ativo
