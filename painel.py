@@ -249,6 +249,7 @@ def resumir_comportamento(unicos_por_classe, acoes_ativas):
         nivel = NIVEL_RISCO.get(classe, 1)
         linhas.append({
             "sigla": sigla,
+            "classe": classe,
             "nome": nome,
             "total": total,
             "agora": agora.get(classe, 0),

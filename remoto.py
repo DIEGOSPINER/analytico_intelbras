@@ -104,6 +104,27 @@ a.texto { color: var(--ciano); }
 .rostos { display: flex; gap: 12px; flex-wrap: wrap; }
 .rostos figure { width: 140px; margin: 0; overflow: hidden; }
 .rostos img { width: 100%; height: 110px; object-fit: cover; }
+.led { position: fixed; top: 18px; right: 22px; z-index: 30; width: 16px; height: 16px; border-radius: 50%; }
+.led.branco { background: #f4f7fb; box-shadow: 0 0 14px #fff; animation: pisca 1.4s infinite; }
+.led.amarelo { background: #ffb020; box-shadow: 0 0 14px #ffb020; animation: pisca 0.9s infinite; }
+.led.vermelho { background: #ff3b3b; box-shadow: 0 0 16px #ff3b3b; animation: pisca 0.45s infinite; }
+.led.preto { background: #05070c; box-shadow: 0 0 0 3px #ff3b3b, 0 0 16px #ff3b3b; animation: pisca 0.28s infinite; }
+@keyframes pisca { 50% { opacity: 0.28; } }
+.grafico { width: 100%; height: 220px; }
+.linha-face img, .mini { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+.placar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.placar div { background: rgba(8, 12, 24, 0.45); border-radius: 12px; padding: 8px 10px; }
+.placar strong { font-size: 28px; letter-spacing: -0.03em; }
+.odo { width: 92px; height: 92px; border-radius: 50%; display: grid; place-items: center; margin: 8px auto; }
+.odo span { width: 68px; height: 68px; border-radius: 50%; background: #101624; display: grid; place-items: center; font-size: 18px; }
+.odo.verde { background: conic-gradient(#3ddc97 var(--giro), rgba(255,255,255,.08) 0); }
+.odo.amarelo { background: conic-gradient(#ffb020 var(--giro), rgba(255,255,255,.08) 0); }
+.odo.vermelho { background: conic-gradient(#ff3b3b var(--giro), rgba(255,255,255,.08) 0); }
+.sobe { animation: sobe .7s ease; }
+@keyframes sobe { from { transform: translateY(28px); opacity: 0; } to { transform: none; opacity: 1; } }
+.luz-alerta { width: 14px; height: 14px; border-radius: 50%; background: #ff3b3b; box-shadow: 0 0 12px #ff3b3b; animation: pisca .4s infinite; display: inline-block; }
+#mapa { width: 100%; height: 520px; border-radius: 18px; background: #101624; }
+.faixa { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
   .cartoes, .coluna, .grade { grid-template-columns: 1fr; }
@@ -255,6 +276,8 @@ _ICONES = {
     "inicio": "<path d='M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z'/>",
     "contagem": "<path d='M4 19V10M10 19V5M16 19v-7M22 19H2'/>",
     "pessoa": "<circle cx='12' cy='8' r='3'/><path d='M5 19c1.5-3 3.8-4.5 7-4.5S17.5 16 19 19'/>",
+    "animal": "<path d='M5 16c.2-3.2 2.4-6 5-6 .8 0 1.4-.6 2.2-1.6.7.3 1.6 1 2.2 1.6 1.4.2 3.6 1.6 3.6 4.2V18H5z'/><path d='M8 9.2 6.5 6M11 9.2 12 6'/><circle cx='9' cy='13' r='.7'/><circle cx='13' cy='13' r='.7'/>",
+    "veiculo": "<path d='M4 15h16v3H4z'/><path d='M6 15 8.2 9h7.6L18 15'/><circle cx='7.5' cy='18.2' r='1.4'/><circle cx='16.5' cy='18.2' r='1.4'/>",
     "alerta": "<path d='M12 3 3 19h18z'/><path d='M12 9v5M12 17h.01'/>",
     "mapa": "<path d='m9 18-6 3V6l6-3 6 3 6-3v15l-6 3-6-3z'/><path d='M9 3v15M15 6v15'/>",
     "camera": "<path d='M4 7h4l2-2h4l2 2h4v12H4z'/><circle cx='12' cy='13' r='3'/>",
@@ -273,6 +296,7 @@ def _menu(ativo: str) -> str:
         ("/painel/2", "Comportamento", "pessoa"),
         ("/painel/3", "Alertas de RF e LPR", "alerta"),
         ("/painel/4", "Mapas", "mapa"),
+        ("/painel/risco", "Detector de risco", "alerta"),
         ("/painel/cameras", "Ao vivo", "camera"),
         ("/cadastro/cliente", "Cliente", "cliente"),
         ("/cadastro/cameras", "Câmeras", "camera"),
@@ -311,54 +335,24 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False) -> str:
 </aside>
 <section class="palco{classe}">{miolo}</section>
 </div>
+<div id="led" class="led branco" title="Risco"></div>
+<script src="/painel.js"></script>
 </body>
 </html>"""
 
 
+def _cabeca(titulo: str, texto: str) -> str:
+    return (
+        f"<header class='topo'><div><h1>{_html_seguro(titulo)}</h1>"
+        f"<p>{texto}</p></div></header>"
+    )
+
+
 def _inicio(sessao: dict) -> str:
-    botoes = []
-    for numero, _chave, titulo in PAINEIS:
-        icone = {"1": "contagem", "2": "pessoa", "3": "alerta", "4": "mapa"}[numero]
-        botoes.append(
-            f"<a class='atalho cartao' href='/painel/{numero}'>{_svg(_ICONES[icone])}{titulo}</a>"
-        )
-    botoes.append(f"<a class='atalho cartao' href='/painel/cameras'>{_svg(_ICONES['camera'])}Ao vivo</a>")
-    miolo = f"""<header class="topo"><div>
-<h1>Dashboard</h1>
-<p>{_html_seguro(sessao.get('email') or '')} · {_html_seguro(_documento_visivel(sessao.get('documento') or ''))}</p>
-</div></header>
-<main>
-<section class="cartoes">
-<article class="cartao"><span>{_svg(_ICONES['contagem'])}Itens hoje</span><strong data-num="itens">0</strong></article>
-<article class="cartao"><span>{_svg(_ICONES['pessoa'])}Códigos de face</span><strong data-num="faces">0</strong></article>
-<article class="cartao"><span>{_svg(_ICONES['alerta'])}Quem mais passa</span><strong data-num="topo">0</strong></article>
-<article class="cartao"><span>{_svg(_ICONES['camera'])}Câmeras</span><strong data-num="cameras">0</strong></article>
-</section>
-<section class="grade">{''.join(botoes)}</section>
-</main>
-<script>
-async function pulsar() {{
-  const resposta = await fetch('/dados.json');
-  if (!resposta.ok) return;
-  const dados = await resposta.json();
-  document.querySelectorAll('[data-num]').forEach((el) => {{
-    const fim = Number(dados[el.dataset.num] || 0);
-    const inicio = Number(el.dataset.valor || 0);
-    if (inicio === fim) return;
-    el.classList.toggle('sobe', fim > inicio);
-    const t0 = performance.now();
-    const passo = (agora) => {{
-      const p = Math.min(1, (agora - t0) / 700);
-      el.textContent = Math.round(inicio + (fim - inicio) * (1 - Math.pow(1 - p, 3)));
-      if (p < 1) requestAnimationFrame(passo);
-      else el.dataset.valor = String(fim);
-    }};
-    requestAnimationFrame(passo);
-  }});
-}}
-pulsar();
-setInterval(pulsar, 1000);
-</script>"""
+    miolo = _cabeca(
+        "Dashboard",
+        f"{_html_seguro(sessao.get('email') or '')} · {_html_seguro(_documento_visivel(sessao.get('documento') or ''))}",
+    ) + "<main id='tela' data-tela='inicio'></main>"
     return _moldura("C4ISTAR MONITOR", miolo, "/")
 
 
@@ -397,6 +391,7 @@ setInterval(ranking, 1000);
 
 
 def _painel(numero: str, titulo: str, chave: str, mapas: bool) -> str:
+    telas = {"1": "contagens", "2": "comportamento", "3": "alertas", "4": "mapas"}
     comandos = ""
     if mapas:
         comandos = f"""<div class="comandos">
@@ -405,24 +400,15 @@ def _painel(numero: str, titulo: str, chave: str, mapas: bool) -> str:
 <button type="button" data-periodo="mes">{_svg(_ICONES["mapa"])}Mês</button>
 <button type="button" data-desenho="pontos">{_svg(_ICONES["contagem"])}Pontos</button>
 <button type="button" data-desenho="calor">{_svg(_ICONES["alerta"])}Calor</button>
+<button type="button" data-desenho="mancha">{_svg(_ICONES["mapa"])}Mancha</button>
 </div>"""
-    extra = f"<div class='coluna'><div class='tela cartao'><img id='quadro' alt='{_html_seguro(titulo)}' src='/img/{chave}.jpg'></div>{_ranking_html()}</div>" if numero == "3" else f"<div class='tela cartao'><img id='quadro' alt='{_html_seguro(titulo)}' src='/img/{chave}.jpg'></div>"
-    miolo = f"""<header class="topo"><div><h1>{_html_seguro(titulo)}</h1><p>O quadro troca no lugar. Recarregar volta nesta tela.</p></div></header>
-{comandos}
-<div class="miolo">{extra}</div>
-<script>
-const quadro = document.getElementById("quadro");
-setInterval(() => {{ quadro.src = "/img/{chave}.jpg?t=" + Date.now(); }}, 1000);
-document.querySelectorAll("button[data-periodo],button[data-desenho]").forEach((botao) => {{
-  botao.addEventListener("click", () => {{
-    const corpo = new URLSearchParams();
-    if (botao.dataset.periodo) corpo.set("periodo", botao.dataset.periodo);
-    if (botao.dataset.desenho) corpo.set("desenho", botao.dataset.desenho);
-    fetch("/comando", {{ method: "POST", body: corpo, headers: {{ "Content-Type": "application/x-www-form-urlencoded" }} }});
-  }});
-}});
-</script>"""
-    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", parede=numero != "3")
+    miolo = _cabeca(titulo, "Os quadros seguem o mesmo padrão da tela de início.") + comandos + f"<main id='tela' data-tela='{telas[numero]}'></main>"
+    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}")
+
+
+def _risco() -> str:
+    miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
+    return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco")
 
 
 def _ao_vivo(cameras) -> str:
@@ -430,15 +416,13 @@ def _ao_vivo(cameras) -> str:
     for slug, nome, rua in cameras:
         legenda = _html_seguro(f"{nome} {rua}".strip())
         blocos.append(
-            f"<figure class='video'><figcaption>{_svg(_ICONES['camera'])}{legenda}</figcaption>"
-            f"<img alt='{legenda}' src='/video/camera-{_html_seguro(slug)}'></figure>"
+            f"<figure class='video' data-camera='{_html_seguro(nome)}'>"
+            f"<figcaption>{_svg(_ICONES['camera'])}{legenda}</figcaption>"
+            f"<img alt='{legenda}' src='/video/camera-{_html_seguro(slug)}'>"
+            f"<div class='placar-camera'></div></figure>"
         )
     grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
-    miolo = f"""<header class="topo"><div><h1>Ao vivo</h1><p>O vídeo segue o quadro da câmera, sem esperar o painel.</p></div></header>
-<main><section class="grade">{grade}</section></main>
-<script>
-if (!document.querySelector(".video")) setTimeout(() => location.reload(), 2000);
-</script>"""
+    miolo = _cabeca("Ao vivo", "O placar mostra a cena agora e o acumulado de cada câmera.") + f"<main data-tela='vivo'><section class='grade'>{grade}</section></main>"
     return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras")
 
 
@@ -449,32 +433,61 @@ def _sem_analise() -> str:
 
 
 def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool = False) -> str:
-    from cadastro import BASES_LEGAIS
+    from cadastro import BASES_LEGAIS, MOTIVOS_PESSOA
 
-    opcoes = ["<option value=''>Base legal</option>"]
+    classes = ["<option value=''>Tipo da pessoa</option>"]
     for chave, rotulo in BASES_LEGAIS.items():
-        opcoes.append(f"<option value='{_html_seguro(chave)}'>{_html_seguro(rotulo)}</option>")
+        if chave in ("mandado_judicial", "acompanhamento_familiar"):
+            continue
+        classes.append(f"<option value='{_html_seguro(chave)}'>{_html_seguro(rotulo)}</option>")
+    motivos = ["<option value=''>Motivo</option>"]
+    for grupo, itens in MOTIVOS_PESSOA.items():
+        for chave, rotulo in itens.items():
+            motivos.append(
+                f"<option value='{_html_seguro(chave)}' data-classe='{_html_seguro(grupo)}'>{_html_seguro(rotulo)}</option>"
+            )
+    corrigir = ["<option value=''>Nova pessoa, código novo</option>"]
     rostos = []
     for pessoa in pessoas:
         face = _html_seguro(pessoa.get("face_id") or "")
+        corrigir.append(f"<option value='{face}'>Corrigir {_html_seguro(pessoa.get('nome') or face)} ({face})</option>")
         rostos.append(
             "<figure><img alt='' src='/rosto/"
-            f"{face}.jpg'><figcaption>{_html_seguro(pessoa.get('nome') or face)}</figcaption></figure>"
+            f"{face}.jpg'><figcaption>{_html_seguro(pessoa.get('nome') or face)} · {face}</figcaption></figure>"
         )
     grade = f"<div class='rostos'>{''.join(rostos)}</div>" if rostos else "<p>Nenhuma pessoa de interesse nesta conta.</p>"
     miolo = f"""<header class="topo"><div><h1>Pessoas de interesse</h1>
-<p>A foto entra na galeria. O reaparecimento deste rosto passa a ser acompanhado.</p></div></header>
+<p>Cada foto nova recebe o próprio código. Corrigir um código troca só a foto daquela pessoa.</p></div></header>
 <main>
 {grade}
 {_aviso_html(aviso, ok)}
 <form method="post" action="/cadastro/pessoas" enctype="multipart/form-data">
 {_csrf(sessao)}
 {_campo("Nome", "nome", obrigatorio=True)}
-<label>Base legal<select name="base_legal" required>{''.join(opcoes)}</select></label>
-{_campo("Referência", "referencia", obrigatorio=True)}
+<label>Tipo<select name="base_legal" id="classe" required>{''.join(classes)}</select></label>
+<label>Motivo<select name="motivo" id="motivo">{''.join(motivos)}</select></label>
+{_campo("Referência", "referencia")}
+<label>Código existente<select name="face_id">{''.join(corrigir)}</select></label>
 <label>Foto do rosto<input type="file" name="foto" accept="image/*" required></label>
 <button type="submit">{_svg(_ICONES["mais"])}Incluir e monitorar</button>
 </form>
+<script>
+const classe = document.getElementById("classe");
+const motivo = document.getElementById("motivo");
+function filtrarMotivo() {{
+  const atual = classe.value;
+  let visivel = 0;
+  motivo.querySelectorAll("option").forEach((opcao, indice) => {{
+    const mostra = indice === 0 || opcao.dataset.classe === atual;
+    opcao.hidden = !mostra;
+    if (mostra) visivel += 1;
+  }});
+  motivo.required = visivel > 1;
+  if (motivo.selectedOptions[0] && motivo.selectedOptions[0].hidden) motivo.value = "";
+}}
+classe.addEventListener("change", filtrarMotivo);
+filtrarMotivo();
+</script>
 </main>"""
     return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas")
 
@@ -771,23 +784,40 @@ def _dados_json(portal) -> dict:
 
     linhas = contar_passagens_faces(100000)
     nomes = {}
+    classes = {}
     try:
         interesse = cadastro.interesse_ativo() or {}
     except Exception:
         interesse = {}
     for pessoa in interesse.get("pessoas") or []:
-        nomes[str(pessoa.get("face_id") or "").upper()] = str(pessoa.get("nome") or "")
-    resumo = portal.resumo()
-    return {
+        ident = str(pessoa.get("face_id") or "").upper()
+        if not ident:
+            continue
+        nomes[ident] = str(pessoa.get("nome") or "")
+        classes[ident] = cadastro.classe_pessoa(pessoa)
+    contagem = {ident: total for ident, total in linhas}
+    resumo = dict(portal.resumo())
+    match = resumo.get("match")
+    if isinstance(match, dict):
+        match = dict(match)
+        match["passagens"] = int(contagem.get(str(match.get("id") or "").upper(), 0))
+        resumo["match"] = match
+    resumo.update({
         "itens": int(resumo.get("itens") or 0),
         "faces": len(linhas),
         "topo": linhas[0][1] if linhas else 0,
         "cameras": int(resumo.get("cameras") or len(portal.cameras())),
         "passagens": [
-            {"id": ident, "nome": nomes.get(ident, ""), "total": total}
+            {
+                "id": ident,
+                "nome": nomes.get(ident, ""),
+                "total": total,
+                "classe": classes.get(ident, ""),
+            }
             for ident, total in linhas[:12]
         ],
-    }
+    })
+    return resumo
 
 
 def _tratador(portal: Portal):
@@ -869,6 +899,9 @@ def _tratador(portal: Portal):
         def _pagina_autenticada(self, caminho: str, consulta: dict, sessao: dict):
             documento = sessao.get("documento") or ""
             ver = cadastro.pode_ver_analise(documento)
+            if caminho == "/painel.js":
+                self._bytes(Path("painel_web.js").read_bytes(), "text/javascript; charset=utf-8")
+                return
             if caminho == "/":
                 self._html(_inicio(sessao), 200)
                 return
@@ -879,6 +912,9 @@ def _tratador(portal: Portal):
                 numero = caminho.removeprefix("/painel/")
                 if numero == "cameras":
                     self._html(_ao_vivo(portal.cameras()), 200)
+                    return
+                if numero == "risco":
+                    self._html(_risco(), 200)
                     return
                 for item, chave, titulo in PAINEIS:
                     if item == numero:
@@ -948,13 +984,18 @@ def _tratador(portal: Portal):
             try:
                 if portal._faces is None:
                     raise ValueError("O monitoramento de faces ainda não está pronto.")
-                face_id, _nova = portal._faces.inscrever_foto(imagem)
+                face_id = _um(campos, "face_id").upper()
+                if face_id:
+                    portal._faces.substituir_foto(face_id, imagem)
+                else:
+                    face_id, _nova = portal._faces.inscrever_foto(imagem)
                 cadastro.cadastrar_pessoa(documento, {
                     "face_id": face_id,
                     "nome": _um(campos, "nome"),
+                    "classe": _um(campos, "base_legal"),
                     "base_legal": _um(campos, "base_legal"),
                     "referencia": _um(campos, "referencia"),
-                    "motivo": _um(campos, "referencia"),
+                    "motivo": _um(campos, "motivo"),
                 })
             except ValueError as exc:
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
@@ -1002,7 +1043,8 @@ def _tratador(portal: Portal):
 
         def _rosto(self, documento: str, face_id: str):
             ident = "".join(caractere for caractere in face_id if caractere.isalnum()).upper()
-            if ident not in {item.get("face_id") for item in _pessoas_da_conta(documento)}:
+            conhecidos = {item.get("face_id") for item in _pessoas_da_conta(documento)}
+            if ident not in conhecidos and not cadastro.pode_ver_analise(documento):
                 self.send_error(404)
                 return
             caminho = Path("evidencias") / "faces" / ident / "referencia.jpg"

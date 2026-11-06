@@ -5,8 +5,8 @@ pessoas e veículos de interesse, contatos de apoio e relatórios.
 O WhatsApp e o aplicativo futuro chamam estas funções depois que a
 pessoa se identifica pelo documento. Um cliente não recebe dados de outro.
 
-Pessoa de interesse só entra com uma destas bases, em respeito à LGPD:
-mandado judicial, medida protetiva ou acompanhamento de filhos e parentes.
+Pessoa de interesse entra com uma classe: morador, prestador, visitante,
+desaparecida, comportamento de risco, mandado, ex-detento ou medida protetiva.
 """
 
 from __future__ import annotations
@@ -18,10 +18,38 @@ from pathlib import Path
 
 ARQUIVO_CLIENTES = Path("clientes.json")
 BASES_LEGAIS = {
-    "mandado_judicial": "Mandado judicial",
+    "morador": "Morador",
+    "prestador_servico": "Prestador de serviço",
+    "visitante": "Visitante",
+    "pessoa_desaparecida": "Pessoa desaparecida",
+    "comportamento_suspeito": "Comportamento suspeito ou de risco",
+    "mandado": "Pessoa com mandado",
+    "ex_detento": "Pessoa ex-detento",
     "medida_protetiva": "Medida protetiva",
+    "mandado_judicial": "Mandado judicial",
     "acompanhamento_familiar": "Acompanhamento de filhos ou parentes",
 }
+MOTIVOS_PESSOA = {
+    "comportamento_suspeito": {
+        "cleptomania": "Cleptomania",
+        "agressivo": "Agressivo",
+        "surto_psicotico": "Surto psicótico",
+        "ameaca": "Cometeu ameaça",
+    },
+    "medida_protetiva": {
+        "violencia_mulher": "Violência contra a mulher",
+        "violencia_geral": "Violência geral",
+    },
+}
+CLASSES_RISCO = {"comportamento_suspeito", "mandado", "ex_detento", "mandado_judicial"}
+
+
+def classe_pessoa(pessoa: dict) -> str:
+    return str((pessoa or {}).get("classe") or (pessoa or {}).get("base_legal") or "").strip()
+
+
+def pessoa_de_risco(pessoa: dict) -> bool:
+    return classe_pessoa(pessoa) in CLASSES_RISCO
 
 
 def _digitos(valor) -> str:
@@ -213,16 +241,14 @@ def cadastrar_camera(documento: str, camera: dict):
 def validar_pessoa(pessoa: dict):
     if not isinstance(pessoa, dict):
         raise ValueError("O cadastro da pessoa está incompleto.")
-    base = str(pessoa.get("base_legal") or "").strip()
-    if base not in BASES_LEGAIS:
-        raise ValueError(
-            "A pessoa de interesse precisa de base legal: "
-            "mandado judicial, medida protetiva ou acompanhamento de filhos e parentes."
-        )
-    if not str(pessoa.get("referencia") or "").strip():
-        raise ValueError(
-            "Informe a referência: número do mandado, da medida protetiva ou o parentesco."
-        )
+    classe = classe_pessoa(pessoa)
+    if classe not in BASES_LEGAIS:
+        raise ValueError("Escolha o tipo da pessoa de interesse.")
+    motivo = str(pessoa.get("motivo") or "").strip()
+    if classe in MOTIVOS_PESSOA and motivo not in MOTIVOS_PESSOA[classe]:
+        raise ValueError("Escolha o motivo desta pessoa.")
+    if classe in ("mandado", "mandado_judicial", "medida_protetiva") and not str(pessoa.get("referencia") or "").strip():
+        raise ValueError("Informe o número do mandado ou da medida protetiva.")
     if not str(pessoa.get("nome") or "").strip():
         raise ValueError("Informe o nome da pessoa.")
     if not str(pessoa.get("face_id") or "").strip():
@@ -235,7 +261,9 @@ def cadastrar_pessoa(documento: str, pessoa: dict):
     face_id = str(pessoa.get("face_id") or "").strip().upper()
     registro = dict(pessoa)
     registro["face_id"] = face_id
-    registro["base_legal"] = str(pessoa.get("base_legal")).strip()
+    registro["classe"] = classe_pessoa(pessoa)
+    registro["base_legal"] = registro["classe"]
+    registro["motivo"] = str(pessoa.get("motivo") or "").strip()
     pessoas = [item for item in cliente["pessoas"] if str(item.get("face_id") or "").upper() != face_id]
     pessoas.append(registro)
     cliente["pessoas"] = pessoas

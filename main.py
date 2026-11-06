@@ -1234,8 +1234,12 @@ class CameraAnalitica:
                 "fps": self._fps,
                 "pessoas_cena": quantidade_cena["Pessoa"],
                 "veiculos_cena": quantidade_cena["Veiculo"],
+                "objetos_cena": quantidade_cena.get("Objeto", 0),
+                "animais_cena": quantidade_cena.get("Animal", 0),
                 "passagens_pessoa": len(self.unicos_por_categoria["Pessoa"]),
                 "passagens_veiculo": len(self.unicos_por_categoria["Veiculo"]),
+                "passagens_objeto": len(self.unicos_por_categoria["Objeto"]),
+                "passagens_animal": len(self.unicos_por_categoria["Animal"]),
                 "faces": len(eventos_faces),
                 "placas": len(eventos_placas),
                 "comportamentos": resumir_comportamento(
@@ -1746,13 +1750,220 @@ def _publicar_cameras(portal, estado, parar):
             break
 
 
-def _publicar_remoto(portal, acervo, cameras_online, matches):
+_FLUXO = {}
+_SERIE = deque(maxlen=90)
+_NARRACAO = {"chave": "", "texto": "", "pedido": ""}
+_ORDEM_LED = {"branco": 0, "amarelo": 1, "vermelho": 2, "preto": 3}
+
+
+def _risco_camera(visao, audio_suspeito, tem_interesse):
+    acoes = {
+        item.get("classe") or item.get("nome"): int(item.get("agora") or 0)
+        for item in visao.get("comportamentos") or []
+    }
+    deitado = acoes.get("Deitado", 0) > 0
+    interacao = acoes.get("Interacao_Proxima", 0) > 0 or acoes.get("Possivel_Briga", 0) > 0
+    queda = acoes.get("Possivel_Queda", 0) > 0
+    briga = acoes.get("Possivel_Briga", 0) > 0
+    if deitado and interacao and audio_suspeito:
+        return "preto"
+    if tem_interesse or queda or briga:
+        return "vermelho"
+    if deitado or interacao or audio_suspeito:
+        return "amarelo"
+    return "branco"
+
+
+def _fluxo_pessoa(nome, passagens):
+    agora = time.time()
+    fila = _FLUXO.setdefault(nome, deque())
+    delta = 0 if not fila else max(0, int(passagens) - int(fila[-1][1]))
+    fila.append((agora, int(passagens), delta))
+    while fila and agora - fila[0][0] > 3600:
+        fila.popleft()
+    return {
+        "segundo": sum(item[2] for item in fila if agora - item[0] <= 1),
+        "minuto": sum(item[2] for item in fila if agora - item[0] <= 60),
+        "hora": sum(item[2] for item in fila),
+    }
+
+
+def _lado_pessoa(comportamento):
+    for hist in comportamento.historico.values():
+        if len(hist) < 2:
+            continue
+        dx = hist[-1][1][0] - hist[0][1][0]
+        if dx >= 12:
+            return "para a direita da imagem"
+        if dx <= -12:
+            return "para a esquerda da imagem"
+    return "sem deslocamento claro"
+
+
+def _narrar_local(nome_camera, match, comportamento):
+    if not match or match.get("tipo") != "FACE":
+        return ""
+    acoes = list(comportamento.acoes_ativas.values())
+    acao = str(acoes[0] if acoes else "em observação").replace("_", " ").lower()
+    quem = match.get("nome") or match.get("id") or "A pessoa"
+    return (
+        f"{quem} está {acao} na {nome_camera} e segue {_lado_pessoa(comportamento)}. "
+        f"Similaridade {float(match.get('taxa') or 0):.2f}."
+    )
+
+
+def _narrar_ia(chave, base):
+    if not base:
+        return ""
+    if _NARRACAO["chave"] == chave and _NARRACAO["texto"]:
+        return _NARRACAO["texto"]
+    if _NARRACAO["pedido"] == chave:
+        return _NARRACAO["texto"]
+    _NARRACAO["pedido"] = chave
+
+    def trabalho():
+        try:
+            from agente.modelo import SessaoGPT
+            sessao = SessaoGPT()
+            if not sessao.disponivel:
+                return
+            texto = sessao.perguntar(
+                "Narre em uma frase curta, em português, o movimento da pessoa e para onde ela segue. Use apenas os fatos informados.",
+                base,
+                json_mode=False,
+            )
+            _NARRACAO["chave"] = chave
+            _NARRACAO["texto"] = str(texto).strip()[:400]
+        except Exception:
+            return
+        finally:
+            if _NARRACAO.get("pedido") == chave:
+                _NARRACAO["pedido"] = ""
+
+    threading.Thread(target=trabalho, name="narracao-risco", daemon=True).start()
+    return _NARRACAO["texto"] if _NARRACAO["chave"] == chave else ""
+
+
+def _match_json(match, classe, risco, narracao, narracao_ia):
+    if not match:
+        return None
+    return {
+        "tipo": match.get("tipo") or "",
+        "id": match.get("id") or "",
+        "nome": match.get("nome") or "",
+        "taxa": float(match.get("taxa") or 0),
+        "camera": match.get("camera") or "",
+        "classe": classe,
+        "risco": bool(risco),
+        "narracao": narracao,
+        "narracao_ia": narracao_ia,
+    }
+
+
+def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
+    from remoto import slug_camera
+    import cadastro
+
     pacote = acervo.pacote(cameras_online, matches)
     for chave in ("1", "2", "3", "4"):
         portal.publicar(f"painel-{chave}", desenhar_monitor(chave, pacote))
+    pessoas = {}
+    try:
+        interesse = cadastro.interesse_ativo() or {}
+    except Exception:
+        interesse = {}
+    for pessoa in interesse.get("pessoas") or []:
+        if pessoa.get("face_id"):
+            pessoas[str(pessoa.get("face_id")).upper()] = pessoa
+    cameras = []
+    led = "branco"
+    match_vivo = None
+    narracao = ""
+    narracao_ia = ""
+    soma = {"Pessoa": 0, "Veiculo": 0, "Animal": 0}
+    for item in estado.values():
+        analitica = item["analitica"]
+        with analitica._trava:
+            visao = dict(analitica._visao)
+            visao["comportamentos"] = list(analitica._visao.get("comportamentos") or [])
+            match = visao.get("match")
+        audio = item.get("audio")
+        audio_on = bool(audio and time.time() <= float(getattr(audio, "suspeito_ate", 0) or 0))
+        risco = _risco_camera(visao, audio_on, bool(match))
+        if _ORDEM_LED[risco] > _ORDEM_LED[led]:
+            led = risco
+        slug = slug_camera(item["nome"])
+        if risco == "preto":
+            quadro = _quadro_portal(getattr(analitica.stream, "frame", None))
+            if quadro is not None:
+                portal.publicar(f"cena-{slug}", quadro)
+        if match and getattr(match.get("referencia"), "size", 0):
+            portal.publicar("match-ref", match["referencia"])
+        if match and getattr(match.get("atual"), "size", 0):
+            portal.publicar("match-agora", match["atual"])
+        if match and (match_vivo is None or float(match.get("ate") or 0) >= float(match_vivo.get("ate") or 0)):
+            match_vivo = dict(match)
+            match_vivo["camera"] = item["nome"]
+            narracao = _narrar_local(item["nome"], match, analitica.comportamento)
+        agora = {
+            "Pessoa": int(visao.get("pessoas_cena") or 0),
+            "Veiculo": int(visao.get("veiculos_cena") or 0),
+            "Objeto": int(visao.get("objetos_cena") or 0),
+            "Animal": int(visao.get("animais_cena") or 0),
+        }
+        acumulado = {
+            "Pessoa": int(visao.get("passagens_pessoa") or 0),
+            "Veiculo": int(visao.get("passagens_veiculo") or 0),
+            "Objeto": int(visao.get("passagens_objeto") or 0),
+            "Animal": int(visao.get("passagens_animal") or 0),
+        }
+        soma["Pessoa"] += agora["Pessoa"]
+        soma["Veiculo"] += agora["Veiculo"]
+        soma["Animal"] += agora["Animal"]
+        cameras.append({
+            "nome": item["nome"],
+            "rua": item.get("rua") or "",
+            "slug": slug,
+            "agora": agora,
+            "acumulado": acumulado,
+            "comportamentos": [
+                {
+                    "nome": comp.get("nome") or "",
+                    "total": int(comp.get("total") or 0),
+                    "agora": int(comp.get("agora") or 0),
+                }
+                for comp in (visao.get("comportamentos") or [])[:4]
+            ],
+            "fluxo": _fluxo_pessoa(item["nome"], acumulado["Pessoa"]),
+            "risco": risco,
+            "cena": f"/img/cena-{slug}.jpg" if risco == "preto" else "",
+        })
+    _SERIE.append({"t": int(time.time()), **soma})
+    classe = ""
+    risco_match = False
+    if match_vivo and match_vivo.get("tipo") == "FACE":
+        pessoa = pessoas.get(str(match_vivo.get("id") or "").upper()) or {}
+        classe = cadastro.classe_pessoa(pessoa)
+        risco_match = cadastro.pessoa_de_risco(pessoa)
+        if narracao:
+            narracao_ia = _narrar_ia(f"{match_vivo.get('id')}:{int(time.time()) // 60}", narracao)
+    elif match_vivo and match_vivo.get("tipo") == "PLACA":
+        risco_match = True
     portal.definir_resumo({
         "itens": int(pacote.get("total") or 0),
         "cameras": len(pacote.get("cameras") or []),
+        "periodos": pacote.get("periodos") or {},
+        "horas": pacote.get("horas") or {},
+        "serie_dias": pacote.get("serie_dias") or [],
+        "classes": pacote.get("classes_web") or [],
+        "riscos": pacote.get("riscos") or {},
+        "pontos": pacote.get("pontos") or [],
+        "led": led,
+        "cameras_vivo": cameras,
+        "serie": list(_SERIE),
+        "match": _match_json(match_vivo, classe, risco_match, narracao, narracao_ia),
+        "narracao": narracao,
+        "narracao_ia": narracao_ia,
     })
 
 
@@ -1961,7 +2172,7 @@ def main():
             acervo.quer_leitura = bool(paineis.get("3") or paineis.get("4") or portal)
             acervo.quer_mapas = bool(paineis.get("4") or portal)
             if portal is not None and time.time() >= proxima_remota:
-                _publicar_remoto(portal, acervo, cameras_online, matches_vivos)
+                _publicar_remoto(portal, acervo, cameras_online, matches_vivos, estado)
                 proxima_remota = time.time() + 1
             if (paineis.get("3") or paineis.get("4")) and acervo.mapa_versao != versao_mapa_vista:
                 proxima_tela = min(proxima_tela, time.time())

@@ -774,17 +774,84 @@ def _aviso_ocorrencia(item, origem):
     }
 
 
-def _ponto_ocorrencia(item, tipo):
-    lat = _numero(item.get("latitude"))
-    lon = _numero(item.get("longitude"))
-    if lat is None or lon is None:
+def _pegar_numero(origem, chaves):
+    if not isinstance(origem, dict):
         return None
+    for chave in chaves:
+        if origem.get(chave) not in (None, ""):
+            numero = _numero(origem.get(chave))
+            if numero is not None:
+                return numero
+    return None
+
+
+def _coordenada_item(item):
+    lat = _pegar_numero(item, ("latitude", "lat", "cr3d0_latitude", "Latitude"))
+    lon = _pegar_numero(item, ("longitude", "lon", "lng", "long", "cr3d0_longitude", "Longitude"))
+    extra = item.get("extraido") if isinstance(item.get("extraido"), dict) else {}
+    if lat is None:
+        lat = _pegar_numero(extra, ("latitude", "lat"))
+    if lon is None:
+        lon = _pegar_numero(extra, ("longitude", "lon", "lng", "long"))
+    texto = str(item.get("coordenadas") or item.get("localizacao") or "")
+    if (lat is None or lon is None) and "," in texto:
+        partes = texto.split(",")
+        if len(partes) >= 2:
+            lat = lat if lat is not None else _numero(partes[0])
+            lon = lon if lon is not None else _numero(partes[1])
+    if lat is not None and lon is not None and abs(lat) > 90 and abs(lon) <= 90:
+        lat, lon = lon, lat
+    elif (
+        lat is not None and lon is not None
+        and abs(lat) > abs(lon) and abs(lat) > 20
+    ):
+        lat, lon = lon, lat
+    return lat, lon
+
+
+def _coordenada_camera(item):
+    texto = " ".join(
+        str(item.get(chave) or "")
+        for chave in ("endereco", "lugar", "descricao", "natureza", "titulo")
+    ).lower()
+    if not texto.strip():
+        return None
+    try:
+        from cadastro import locais_cameras
+        locais = locais_cameras()
+    except Exception:
+        return None
+    for local in locais:
+        nome = str(local.get("nome") or "").strip().lower()
+        if not nome or nome not in texto:
+            continue
+        if local.get("latitude") is None or local.get("longitude") is None:
+            continue
+        return float(local["latitude"]), float(local["longitude"])
+    return None
+
+
+def _ponto_ocorrencia(item, tipo):
+    lat, lon = _coordenada_item(item)
+    aproximado = False
+    if lat is None or lon is None:
+        camera = _coordenada_camera(item)
+        if camera is None:
+            return None
+        lat, lon = camera
+        aproximado = True
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
     if abs(lat) < 0.0001 and abs(lon) < 0.0001:
         return None
     data = str(item.get("data") or item.get("quando") or "")[:10]
-    return {"lat": lat, "lon": lon, "tipo": str(tipo or "Ocorrencia"), "data": data}
+    return {
+        "lat": lat,
+        "lon": lon,
+        "tipo": str(tipo or "Ocorrencia"),
+        "data": data,
+        "aproximado": aproximado,
+    }
 
 
 def _dia(texto):
@@ -864,6 +931,8 @@ class Acervo:
         self.memorias = []
         self._mtime_memoria = None
         self.interesse_cam = {}
+        self.matches = {}
+        self.total_antigo = {nome: 0 for nome in CATEGORIAS}
         self.insights_relatorio = []
         self.app = []
         self.app_remoto = []
@@ -923,7 +992,12 @@ class Acervo:
             if len(colunas) < 5:
                 continue
             dia = _dia(colunas[0])
-            if dia is None or dia < limite:
+            if dia is None:
+                continue
+            categoria = colunas[3] if colunas[3] in CATEGORIAS else "Objeto"
+            if dia < limite:
+                with self._trava:
+                    self.total_antigo[categoria] = self.total_antigo.get(categoria, 0) + 1
                 continue
             try:
                 hora = int((colunas[1] or "0")[:2])
@@ -932,7 +1006,7 @@ class Acervo:
             registros.append((
                 dia.isoformat(),
                 colunas[2] or "CAMERA",
-                colunas[3] if colunas[3] in CATEGORIAS else "Objeto",
+                categoria,
                 colunas[4] or "objeto",
                 max(0, min(23, hora)),
             ))
@@ -1055,6 +1129,10 @@ class Acervo:
                 if dia and camera:
                     chave = (dia, camera)
                     self.interesse_cam[chave] = self.interesse_cam.get(chave, 0) + 1
+                    tipo = item.get("tipo") or ""
+                    if tipo:
+                        marca = (dia, tipo)
+                        self.matches[marca] = self.matches.get(marca, 0) + 1
 
     def _consumir_alertas(self):
         novos = []
@@ -1374,6 +1452,58 @@ class Acervo:
                 soma = sum(int(horas[nome][hora]) for nome in CATEGORIAS)
                 if soma:
                     horas_ativas.append({"rotulo": f"{hora:02d}:00:00", "total": soma})
+            inicio_mes = hoje[:8] + "01"
+            dias_serie = [(date.today() - timedelta(days=offset)).isoformat() for offset in range(6, -1, -1)]
+
+            def somar_cat(inicio):
+                totais = {nome: int(self.total_antigo.get(nome, 0) if not inicio else 0) for nome in CATEGORIAS}
+                for (dia, _camera, categoria), valor in self.cat.items():
+                    if categoria in totais and (not inicio or dia >= inicio):
+                        totais[categoria] += valor
+                return totais
+
+            def somar_comportamento(inicio):
+                return sum(
+                    valor for (dia, _classe), valor in self.classe.items()
+                    if not inicio or dia >= inicio
+                )
+
+            def somar_match(inicio, tipo):
+                return sum(
+                    valor for (dia, qual), valor in self.matches.items()
+                    if qual == tipo and (not inicio or dia >= inicio)
+                )
+
+            def bloco(inicio):
+                base = somar_cat(inicio)
+                base["Comportamento"] = somar_comportamento(inicio)
+                base["MatchFace"] = somar_match(inicio, "FACE")
+                base["MatchPlaca"] = somar_match(inicio, "PLACA")
+                return base
+
+            periodos = {"dia": bloco(hoje), "mes": bloco(inicio_mes), "total": bloco("")}
+            serie_dias = []
+            for dia in dias_serie:
+                item = {"rotulo": f"{dia[8:10]}/{dia[5:7]}"}
+                for nome in ("Pessoa", "Veiculo", "Animal"):
+                    item[nome] = sum(
+                        valor for (quando, _camera, categoria), valor in self.cat.items()
+                        if quando == dia and categoria == nome
+                    )
+                serie_dias.append(item)
+            classes_lista = [
+                {"nome": nome, "total": total}
+                for nome, total in sorted(classes.items(), key=lambda item: -item[1])[:8]
+            ]
+            pontos_mapa = []
+            for ponto in list(self.pontos_locais) + list(self.pontos_remotos):
+                pontos_mapa.append({
+                    "lat": ponto.get("lat"),
+                    "lon": ponto.get("lon"),
+                    "tipo": ponto.get("tipo") or "Ocorrencia",
+                    "data": ponto.get("data") or "",
+                    "aproximado": bool(ponto.get("aproximado")),
+                })
         vivo = None
         for match in matches or []:
             if match and (vivo is None or float(match.get("ate") or 0) >= float(vivo.get("ate") or 0)):
@@ -1421,6 +1551,10 @@ class Acervo:
             "dias": dias_lista,
             "horas_ativas": horas_ativas[-4:],
             "horas": horas,
+            "periodos": periodos,
+            "serie_dias": serie_dias,
+            "classes_web": classes_lista,
+            "pontos": pontos_mapa,
             "mapa": mapa,
             "legenda_mapa": legenda_mapa,
             "mapa_painel": mapa_painel,

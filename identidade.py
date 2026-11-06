@@ -487,9 +487,31 @@ class IdentificadorFaces:
             melhor_score >= self.limiar_match
             and (melhor_score - segundo) >= MARGEM_MATCH
         )
+        if aceito and melhor_id in self._ids_protegidos():
+            if melhor_score < self.limiar_certeza or (melhor_score - segundo) < 0.08:
+                return None, melhor_score
         if aceito:
             return melhor_id, melhor_score
         return None, melhor_score
+
+    def _ids_protegidos(self) -> set[str]:
+        """Pessoas já cadastradas não absorvem um rosto parecido."""
+        agora = time.time()
+        if agora - getattr(self, "_protegidos_em", 0) < 2:
+            return getattr(self, "_protegidos", set())
+        try:
+            from cadastro import interesse_ativo
+            interesse = interesse_ativo() or {}
+        except Exception:
+            interesse = {}
+        ids = {
+            str(pessoa.get("face_id") or "").upper()
+            for pessoa in interesse.get("pessoas") or []
+            if pessoa.get("face_id")
+        }
+        self._protegidos = ids
+        self._protegidos_em = agora
+        return ids
 
     def _anexar_vetor(self, pack, vetor, alinhado):
         linha = vetor.reshape(1, -1).astype(np.float32)
@@ -517,6 +539,8 @@ class IdentificadorFaces:
             self._salvar_caracteristicas(face_id)
             return
         score = self._score_contra_id(face_id, vetor, alinhado)
+        if face_id in self._ids_protegidos() and score < 0.75:
+            return
         if score >= 0.92:
             return
         if len(pack["vetores"]) < MAX_AMOSTRAS:
@@ -992,16 +1016,36 @@ class IdentificadorFaces:
             vetor, alinhado = self._extrair(imagem, crop, face.get("keypoints"))
             if vetor is None:
                 raise ValueError("Não foi possível ler as características deste rosto.")
-            encontrado, score = self._buscar(vetor, alinhado)
-            if encontrado is not None and score >= self.limiar_match:
-                self._adicionar_amostra(encontrado, vetor, alinhado)
-                pasta = DIR_FACES / encontrado
-                pasta.mkdir(parents=True, exist_ok=True)
-                ref = pasta / "referencia.jpg"
-                cv2.imwrite(str(ref), crop)
-                self.cadastro.setdefault(encontrado, {})["foto_referencia"] = str(ref).replace("\\", "/")
-                return encontrado, False
             return self._cadastrar(crop, vetor, alinhado), True
+
+    def substituir_foto(self, face_id, imagem):
+        """Troca a referência de um código existente e esquece amostras de outro rosto."""
+        with self._trava:
+            ident = str(face_id or "").strip().upper()
+            if ident not in self.galeria:
+                raise ValueError("Este código de face não está na galeria.")
+            if imagem is None or getattr(imagem, "size", 0) == 0:
+                raise ValueError("Envie uma foto com o rosto da pessoa.")
+            altura, largura = imagem.shape[:2]
+            faces = self._detectar_faces_no_recorte(imagem, (0, 0, largura, altura))
+            if not faces:
+                raise ValueError("Nenhum rosto encontrado. Use uma foto de frente, com o rosto visível.")
+            face = max(faces, key=lambda item: int(item.get("lado_px") or 0))
+            x1, y1, x2, y2 = face["bbox"]
+            crop = imagem[y1:y2, x1:x2]
+            vetor, alinhado = self._extrair(imagem, crop, face.get("keypoints"))
+            if vetor is None:
+                raise ValueError("Não foi possível ler as características deste rosto.")
+            pack = self._pacote_vazio()
+            self._anexar_vetor(pack, vetor, alinhado)
+            self.galeria[ident] = pack
+            self._salvar_caracteristicas(ident)
+            pasta = DIR_FACES / ident
+            pasta.mkdir(parents=True, exist_ok=True)
+            ref = pasta / "referencia.jpg"
+            cv2.imwrite(str(ref), crop)
+            self.cadastro.setdefault(ident, {})["foto_referencia"] = str(ref).replace("\\", "/")
+            return ident
 
     def processar(self, camera, frame, pessoas):
         with self._trava:

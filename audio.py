@@ -160,6 +160,10 @@ class EscutaAudio:
         self._thread = None
         self._ultimo_disparo = 0.0
         self._ultima_fala = 0.0
+        self.suspeito_ate = 0.0
+        self.suspeito_tipo = ""
+        self.suspeito_ate = 0.0
+        self.suspeito_tipo = ""
 
     def start(self):
         if os.getenv("AUDIO_ATIVO", "1").strip().lower() in ("0", "false", "nao", "não"):
@@ -227,6 +231,8 @@ class EscutaAudio:
         agora = time.time()
         if tipo == "disparo" and agora - self._ultimo_disparo >= 90:
             self._ultimo_disparo = agora
+            self.suspeito_ate = agora + 45
+            self.suspeito_tipo = "disparo"
             self.eventos.put({
                 "classe": "Possivel_Disparo",
                 "risco": "Atencao",
@@ -252,6 +258,8 @@ class EscutaAudio:
         if not texto or not _fala_de_briga(texto):
             return
         trecho = " ".join(texto.split())[:240]
+        self.suspeito_ate = time.time() + 45
+        self.suspeito_tipo = "voz"
         self.eventos.put({
             "classe": "Possivel_Briga",
             "risco": "Prioritario",
