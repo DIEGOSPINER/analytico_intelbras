@@ -1756,6 +1756,33 @@ _NARRACAO = {"chave": "", "texto": "", "pedido": ""}
 _ORDEM_LED = {"branco": 0, "amarelo": 1, "vermelho": 2, "preto": 3}
 
 
+_FRASES = {
+    "Deitado": "uma pessoa deitada",
+    "Possivel_Queda": "uma queda identificada",
+    "Possivel_Briga": "uma possível briga",
+    "Interacao_Proxima": "uma interação próxima",
+    "Possivel_Arma_Fogo": "uma arma identificada",
+    "Aglomeracao": "uma aglomeração",
+}
+
+
+def _frase_camera(nome, visao, audio_suspeito, audio_tipo):
+    partes = []
+    for item in visao.get("comportamentos") or []:
+        if int(item.get("agora") or 0) <= 0:
+            continue
+        texto = _FRASES.get(item.get("classe") or "")
+        if texto and texto not in partes:
+            partes.append(texto)
+    if audio_suspeito and audio_tipo == "disparo":
+        partes.append("um disparo")
+    elif audio_suspeito:
+        partes.append("uma fala com sinal de briga")
+    if not partes:
+        return f"{nome} sem comportamento de risco agora."
+    return "Existe " + ", ".join(partes) + f" na {nome}. Atenção!"
+
+
 def _risco_camera(visao, audio_suspeito, tem_interesse):
     acoes = {
         item.get("classe") or item.get("nome"): int(item.get("agora") or 0)
@@ -1880,7 +1907,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
     match_vivo = None
     narracao = ""
     narracao_ia = ""
-    soma = {"Pessoa": 0, "Veiculo": 0, "Animal": 0}
+    soma = {"Pessoa": 0, "Veiculo": 0, "Objeto": 0, "Animal": 0}
     for item in estado.values():
         analitica = item["analitica"]
         with analitica._trava:
@@ -1889,6 +1916,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
             match = visao.get("match")
         audio = item.get("audio")
         audio_on = bool(audio and time.time() <= float(getattr(audio, "suspeito_ate", 0) or 0))
+        audio_tipo = str(getattr(audio, "suspeito_tipo", "") or "") if audio_on else ""
         risco = _risco_camera(visao, audio_on, bool(match))
         if _ORDEM_LED[risco] > _ORDEM_LED[led]:
             led = risco
@@ -1919,6 +1947,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         }
         soma["Pessoa"] += agora["Pessoa"]
         soma["Veiculo"] += agora["Veiculo"]
+        soma["Objeto"] += agora["Objeto"]
         soma["Animal"] += agora["Animal"]
         cameras.append({
             "nome": item["nome"],
@@ -1929,16 +1958,17 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
             "comportamentos": [
                 {
                     "nome": comp.get("nome") or "",
+                    "classe": comp.get("classe") or "",
                     "total": int(comp.get("total") or 0),
                     "agora": int(comp.get("agora") or 0),
                 }
-                for comp in (visao.get("comportamentos") or [])[:4]
+                for comp in (visao.get("comportamentos") or [])[:6]
             ],
+            "frase": _frase_camera(item["nome"], visao, audio_on, audio_tipo),
             "fluxo": _fluxo_pessoa(item["nome"], acumulado["Pessoa"]),
             "risco": risco,
             "cena": f"/img/cena-{slug}.jpg" if risco == "preto" else "",
         })
-    _SERIE.append({"t": int(time.time()), **soma})
     classe = ""
     risco_match = False
     if match_vivo and match_vivo.get("tipo") == "FACE":
@@ -1949,13 +1979,45 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
             narracao_ia = _narrar_ia(f"{match_vivo.get('id')}:{int(time.time()) // 60}", narracao)
     elif match_vivo and match_vivo.get("tipo") == "PLACA":
         risco_match = True
+    _SERIE.append({"t": int(time.time()), "Risco": 1 if risco_match else 0, **soma})
+    historico = []
+    for indice, item in enumerate((pacote.get("interesse") or [])[:4]):
+        if getattr(item.get("referencia"), "size", 0):
+            portal.publicar(f"alerta-{indice}-ref", item["referencia"])
+        if getattr(item.get("atual"), "size", 0):
+            portal.publicar(f"alerta-{indice}-agora", item["atual"])
+        historico.append({
+            "quando": str(item.get("quando") or ""),
+            "tipo": str(item.get("tipo") or ""),
+            "id": str(item.get("id") or ""),
+            "nome": str(item.get("nome") or ""),
+            "camera": str(item.get("camera") or ""),
+            "taxa": float(item.get("taxa") or 0),
+            "rotulo": str(item.get("rotulo") or ""),
+            "ref": f"/img/alerta-{indice}-ref.jpg",
+            "agora": f"/img/alerta-{indice}-agora.jpg",
+        })
+    from monitores import _linha_relatorio
+
+    def _limpos(itens, chaves):
+        saida = []
+        for item in itens or []:
+            if not isinstance(item, dict):
+                continue
+            saida.append({chave: str(item.get(chave) or "") for chave in chaves})
+        return saida
+
     portal.definir_resumo({
         "itens": int(pacote.get("total") or 0),
         "cameras": len(pacote.get("cameras") or []),
         "periodos": pacote.get("periodos") or {},
         "horas": pacote.get("horas") or {},
         "serie_dias": pacote.get("serie_dias") or [],
+        "dias_empilhados": pacote.get("dias_empilhados") or [],
+        "horas_prioridade": pacote.get("horas_prioridade") or {},
         "classes": pacote.get("classes_web") or [],
+        "tipos": pacote.get("tipos") or [],
+        "geo": pacote.get("geo") or [],
         "riscos": pacote.get("riscos") or {},
         "pontos": pacote.get("pontos") or [],
         "led": led,
@@ -1964,6 +2026,14 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "match": _match_json(match_vivo, classe, risco_match, narracao, narracao_ia),
         "narracao": narracao,
         "narracao_ia": narracao_ia,
+        "historico": historico,
+        "memorias": _limpos(pacote.get("memorias"), ("quando", "texto")),
+        "informes": _limpos(pacote.get("enviados"), ("quando", "tipo", "descricao")),
+        "app": _limpos(pacote.get("app"), ("quando", "titulo", "lugar", "detalhe")),
+        "resumo": str(pacote.get("resumo") or ""),
+        "assessoramento": str(pacote.get("assessoramento") or ""),
+        "aprendizado": str(pacote.get("aprendizado") or ""),
+        "relatorio": _linha_relatorio(pacote),
     })
 
 

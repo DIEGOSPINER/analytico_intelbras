@@ -110,7 +110,21 @@ a.texto { color: var(--ciano); }
 .led.vermelho { background: #ff3b3b; box-shadow: 0 0 16px #ff3b3b; animation: pisca 0.45s infinite; }
 .led.preto { background: #05070c; box-shadow: 0 0 0 3px #ff3b3b, 0 0 16px #ff3b3b; animation: pisca 0.28s infinite; }
 @keyframes pisca { 50% { opacity: 0.28; } }
-.grafico { width: 100%; height: 220px; }
+.grafico, .mapa { width: 100%; height: 280px; border-radius: 12px; background: #101624; }
+main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
+main[data-tela="inicio"] .cartao span svg { width: 40px; height: 40px; }
+main[data-tela="inicio"] .cartao strong { font-size: 40px; }
+.grade.tres { grid-template-columns: 1fr 1fr 1fr; }
+.empilha { display: grid; grid-template-columns: 148px 1fr 40px; gap: 8px; align-items: center; margin: 10px 0; font-size: 14px; }
+.empilha .trilha { display: flex; height: 22px; border-radius: 7px; overflow: hidden; background: rgba(255,255,255,0.06); }
+.empilha i { display: grid; place-items: center; font-style: normal; font-size: 12px; color: #041018; overflow: hidden; }
+.legenda-linha { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; color: var(--mudo); font-size: 13px; }
+.legenda-linha b { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.tacho { width: min(280px, 100%); margin: 8px auto 0; }
+.tacho svg { width: 100%; height: auto; display: block; }
+.tacho p, .leitura p { line-height: 1.45; }
+.alerta-linha { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-top: 12px; }
+.alerta-linha img { width: 84px; height: 52px; object-fit: cover; border-radius: 8px; }
 .linha-face img, .mini { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
 .placar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .placar div { background: rgba(8, 12, 24, 0.45); border-radius: 12px; padding: 8px 10px; }
@@ -127,7 +141,7 @@ a.texto { color: var(--ciano); }
 .faixa { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
-  .cartoes, .coluna, .grade { grid-template-columns: 1fr; }
+  .cartoes, .coluna, .grade, .grade.tres { grid-template-columns: 1fr; }
 }
 """
 

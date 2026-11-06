@@ -921,6 +921,7 @@ class Acervo:
         self.risco = {}
         self.faixa = {}
         self.tipo = {}
+        self.hora_faixa = {}
         self.ids = set()
         self.resumo = ""
         self.assessoramento = ""
@@ -1031,6 +1032,10 @@ class Acervo:
             dia = _dia(colunas[0])
             if dia is None or dia < limite:
                 continue
+            try:
+                hora = int((colunas[1] or "0")[:2])
+            except ValueError:
+                hora = 0
             registros.append((
                 dia.isoformat(),
                 colunas[2] or "CAMERA",
@@ -1039,12 +1044,14 @@ class Acervo:
                 colunas[5] if len(colunas) > 5 else "",
                 _risco(colunas[14] if len(colunas) > 14 else "", colunas[15] if len(colunas) > 15 else ""),
                 _faixa(colunas[3] or "", colunas[15] if len(colunas) > 15 else ""),
+                max(0, min(23, hora)),
             ))
         with self._trava:
-            for dia, camera, _categoria, classe, ident, risco, faixa in registros:
+            for dia, camera, _categoria, classe, ident, risco, faixa, hora in registros:
                 self.risco[(dia, risco)] = self.risco.get((dia, risco), 0) + 1
                 self.faixa[(dia, faixa, camera)] = self.faixa.get((dia, faixa, camera), 0) + 1
                 self.tipo[(dia, classe, camera)] = self.tipo.get((dia, classe, camera), 0) + 1
+                self.hora_faixa[(dia, faixa, hora)] = self.hora_faixa.get((dia, faixa, hora), 0) + 1
                 if ident:
                     self.ids.add((dia, camera, classe, ident))
 
@@ -1483,14 +1490,24 @@ class Acervo:
 
             periodos = {"dia": bloco(hoje), "mes": bloco(inicio_mes), "total": bloco("")}
             serie_dias = []
+            dias_empilhados = []
             for dia in dias_serie:
                 item = {"rotulo": f"{dia[8:10]}/{dia[5:7]}"}
-                for nome in ("Pessoa", "Veiculo", "Animal"):
-                    item[nome] = sum(
-                        valor for (quando, _camera, categoria), valor in self.cat.items()
-                        if quando == dia and categoria == nome
-                    )
+                por_cam = {}
+                for (quando, camera, categoria), valor in self.cat.items():
+                    if quando != dia or categoria not in CATEGORIAS:
+                        continue
+                    item[categoria] = item.get(categoria, 0) + valor
+                    slot = por_cam.setdefault(camera, {nome: 0 for nome in CATEGORIAS})
+                    slot[categoria] += valor
+                for nome in CATEGORIAS:
+                    item.setdefault(nome, 0)
                 serie_dias.append(item)
+                dias_empilhados.append({"rotulo": item["rotulo"], "cameras": por_cam})
+            horas_prioridade = {nome: [0] * 24 for nome in FAIXAS}
+            for (dia, faixa, hora), valor in self.hora_faixa.items():
+                if dia == hoje and faixa in horas_prioridade and 0 <= hora <= 23:
+                    horas_prioridade[faixa][hora] = valor
             classes_lista = [
                 {"nome": nome, "total": total}
                 for nome, total in sorted(classes.items(), key=lambda item: -item[1])[:8]
@@ -1553,6 +1570,8 @@ class Acervo:
             "horas": horas,
             "periodos": periodos,
             "serie_dias": serie_dias,
+            "dias_empilhados": dias_empilhados,
+            "horas_prioridade": horas_prioridade,
             "classes_web": classes_lista,
             "pontos": pontos_mapa,
             "mapa": mapa,
@@ -1570,9 +1589,9 @@ class Acervo:
                 "rotulos": [dia[8:10] + "/" + dia[5:7] for dia in dias],
                 "curvas": curvas,
             },
-            "app": list(reversed(app[-5:])),
+            "app": list(reversed(app[-6:])),
             "interesse": list(reversed(interesse[-4:])),
-            "enviados": list(reversed(enviados[-4:])),
+            "enviados": list(reversed(enviados[-6:])),
             "insights": list(reversed(insights[-4:])),
             "match": vivo,
             "resumo": resumo,
@@ -1585,4 +1604,16 @@ class Acervo:
             "locais": locais,
             "contagem_comportamento": comportamento_cam,
             "contagem_alertas": alertas_cam,
+            "geo": [
+                {
+                    "nome": item["nome"],
+                    "rua": item["rua"],
+                    "lat": (por_rua.get(item["nome"]) or {}).get("latitude"),
+                    "lon": (por_rua.get(item["nome"]) or {}).get("longitude"),
+                    "itens": item["itens"],
+                    "comportamento": int(comportamento_cam.get(item["nome"], 0)),
+                    "alertas": int(alertas_cam.get(item["nome"], 0)),
+                }
+                for item in cameras
+            ],
         }
