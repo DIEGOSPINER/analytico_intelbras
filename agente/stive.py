@@ -12,13 +12,18 @@ _TRAVA = threading.Lock()
 _CHATS = {}
 
 _SISTEMA = (
-    "Você é Stive, agente de segurança do C4ISTAR MONITOR. "
-    "Responda em português, com frases curtas, só com o contexto enviado. "
+    "Você é Stive, agente de segurança do C4ISTAR MONITOR e analista criminal de campo. "
+    "Fale como policial experiente: horário, dia da semana, local, pessoa e padrão importam. "
+    "Responda em português, objetivo, só com o contexto enviado. "
     "O contexto é a base inteira do cliente logado, não apenas o dia de hoje. "
+    "Regra de probabilidade: cada passagem de pessoa de risco no histórico = 1 risco de invasão. "
+    "Entre 20h e 06h aumente a chance (ladrões preferem a madrugada); sexta a domingo também eleva. "
+    "Quando pedirem chance, probabilidade, invasão, cruzamento ou padrão, use o briefing criminal "
+    "e diga números claros (passagens, dias, % estimada). Cruze pessoa × câmera × horário × ocorrências. "
     "Quando o operador relatar uma ocorrência, preencha o objeto ocorrencia. "
     "Devolva sempre um JSON com as chaves fala, visual e ocorrencia. "
     "visual.tipo pode ser numeros, lista, texto, barras, linha ou rosca. "
-    "Para gráfico, análise ou comparação, use barras, linha ou rosca e preencha itens com rotulo e total. "
+    "Para gráfico, análise, chance ou comparação, use barras, linha ou rosca e preencha itens com rotulo e total. "
     "ocorrencia tem natureza, descricao, endereco, data e hora, ou fica vazio."
 )
 
@@ -37,7 +42,19 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
     pergunta = (pergunta or "").strip()
     if not pergunta:
         raise ValueError("Escreva a pergunta para o Stive.")
+    from agente.criminal import analisar, pede_analise_criminal, texto_briefing
+
+    briefing = ""
+    analise = None
+    if pede_analise_criminal(pergunta):
+        try:
+            analise = analisar(documento, pergunta, resumo)
+            briefing = texto_briefing(analise)
+        except Exception:
+            briefing = ""
     contexto = _contexto(resumo)
+    if briefing:
+        contexto = contexto + "\n\n" + briefing
     try:
         from agente.modelo import SessaoGPT, extrair_json
 
@@ -51,12 +68,18 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
             saida = extrair_json(texto)
             if isinstance(saida, dict) and saida.get("fala"):
                 resultado = _normalizar(saida)
+                if analise and (not resultado.get("visual") or not (resultado["visual"].get("itens"))):
+                    from agente.criminal import resposta_chat
+
+                    visual = resposta_chat(documento, pergunta, resumo).get("visual") or {}
+                    if visual.get("itens"):
+                        resultado["visual"] = visual
                 _guardar(documento, pergunta, resultado["fala"])
                 _registrar_ocorrencia(documento, resultado.get("ocorrencia"))
                 return resultado
     except Exception:
         pass
-    resultado = _local(pergunta, resumo)
+    resultado = _local(pergunta, resumo, documento=documento)
     _guardar(documento, pergunta, resultado["fala"])
     _registrar_ocorrencia(documento, resultado.get("ocorrencia"))
     return resultado
@@ -277,6 +300,8 @@ def _contexto(resumo: dict) -> str:
         "Confirmações pendentes: " + ("; ".join(pendencias) or "nenhuma"),
         f"LED geral: {resumo.get('led') or 'branco'}",
         f"Voz da tela: {resumo.get('voz') or ''}"[:500],
+        "Skill: analista criminal / policial experiente — cruza pessoa, horário, dia, câmera e ocorrências.",
+        "Regra: 1 passagem de risco = 1 chance de invasão; 20h–06h e fim de semana elevam o peso.",
     ])
 
 
@@ -332,7 +357,7 @@ def _total_base(resumo: dict, classe: str) -> int:
     return int((((resumo or {}).get("periodos") or {}).get("total") or {}).get(classe) or 0)
 
 
-def _local(pergunta: str, resumo: dict) -> dict:
+def _local(pergunta: str, resumo: dict, documento: str = "") -> dict:
     baixo = pergunta.lower()
     if any(trecho in baixo for trecho in ("registr", "informar ocorr", "houve ", "aconteceu")):
         return _normalizar({
@@ -346,6 +371,13 @@ def _local(pergunta: str, resumo: dict) -> dict:
                 "hora": datetime.now().strftime("%H:%M"),
             },
         })
+    from agente.criminal import pede_analise_criminal, resposta_chat
+
+    if pede_analise_criminal(pergunta):
+        try:
+            return _normalizar(resposta_chat(documento, pergunta, resumo))
+        except Exception:
+            pass
     quer_grafico = any(trecho in baixo for trecho in ("gráf", "graf", "analis", "visual", "compar"))
     if "pessoa" in baixo:
         total = _total_base(resumo, "Pessoa")

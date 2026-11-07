@@ -656,7 +656,7 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 <article class="cartao quadro-stive" id="quadro-stive"><h2>Quadro do Stive</h2><p>O que você pedir na conversa aparece aqui.</p></article>
 </section>
 <section class="stive-chat-area cartao">
-<div class="chat" id="chat-stive"><p class="bolha stive">Pode perguntar quantas pessoas passaram, o que o aplicativo registrou, ou me contar uma ocorrência.</p></div>
+<div class="chat" id="chat-stive"><p class="bolha stive">Posso cruzar pessoa, horário e local como analista criminal. Pergunte a chance de invasão, padrões de madrugada, ou me conte uma ocorrência.</p></div>
 <form id="form-stive">
 {_csrf(sessao)}
 <label>Mensagem<input name="pergunta" autocomplete="off" placeholder="Fale com o Stive"></label>
