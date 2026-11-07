@@ -1363,6 +1363,26 @@ def _tratador(portal: Portal):
                 from folium_mapa import html_folha
                 self._html(html_folha(), 200)
                 return
+            if caminho == "/mapa/rota.json":
+                if not ver:
+                    self.send_error(404)
+                    return
+                from rota_vias import caminho_dirigindo
+                bruto = (consulta.get("pontos") or [""])[0]
+                pontos = []
+                for pedaco in str(bruto or "").split(";"):
+                    pedaco = pedaco.strip()
+                    if not pedaco or "," not in pedaco:
+                        continue
+                    a, b = pedaco.split(",", 1)
+                    try:
+                        lon, lat = float(a), float(b)
+                    except ValueError:
+                        continue
+                    if abs(lat) <= 90 and abs(lon) <= 180:
+                        pontos.append((lat, lon))
+                self._json({"caminho": caminho_dirigindo(pontos)})
+                return
             if caminho.startswith("/mapa/") and caminho.endswith(".png"):
                 pedacos = caminho.strip("/").split("/")
                 if len(pedacos) == 4:

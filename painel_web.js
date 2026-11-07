@@ -555,6 +555,7 @@ function enviarMapa(id, pontos, opcoes) {
     fixo: !!(opcoes && opcoes.fixo),
     pisca: !!(opcoes && opcoes.pisca),
     rotulos: !(opcoes && opcoes.semRotulo),
+    trilhas: (opcoes && opcoes.trilhas) || [],
     pontos: (pontos || []).map((ponto, indice) => {
       const lat = Number(ponto.lat);
       const lon = Number(ponto.lon);
@@ -584,6 +585,87 @@ function enviarMapa(id, pontos, opcoes) {
   if (frame.dataset.pronto === "1") mandar();
   else if (frame.contentDocument && frame.contentDocument.readyState === "complete") pronto();
   else frame.addEventListener("load", pronto, { once: true });
+}
+
+const cacheRotasRf = {};
+const pendenciaMapaRf = {};
+
+function corPessoaRf(id) {
+  return `hsl(${(Array.from(String(id || "")).reduce((soma, car) => soma + car.charCodeAt(0), 0) * 17) % 360} 70% 48%)`;
+}
+
+function popularSelRf(sel, pessoas) {
+  if (!sel) return;
+  const marca = (pessoas || []).map((item) => item.id).join("|");
+  if (sel.dataset.marca === marca) return;
+  const escolhidos = new Set(Array.from(sel.selectedOptions || []).map((opcao) => opcao.value));
+  sel.innerHTML = (pessoas || []).map((pessoa) => `<option value="${escapar(pessoa.id)}"${escolhidos.has(pessoa.id) ? " selected" : ""}>${escapar(pessoa.nome || pessoa.id)}</option>`).join("");
+  sel.dataset.marca = marca;
+}
+
+function rastrosRfFiltrados(dados, sel) {
+  const selecionados = Array.from((sel && sel.selectedOptions) || []).map((opcao) => opcao.value);
+  const filtro = new Set(selecionados);
+  return (dados.rastros_rf || []).filter((item) => !filtro.size || filtro.has(item.id)).map((item) => ({
+    ...item,
+    id: item.id || "",
+    lat: Number(item.lat),
+    lon: Number(item.lon),
+    nome: item.nome || item.id,
+    camera: item.camera || "",
+    quando: item.quando || "",
+    foto: item.foto || `/rosto/${item.id}.jpg`,
+    valor: 1,
+    cor: corPessoaRf(item.id),
+  })).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lon))
+    .sort((a, b) => String(a.quando || "").localeCompare(String(b.quando || "")));
+}
+
+async function pedirRotaVias(pontos) {
+  if (!pontos || pontos.length < 2) return (pontos || []).map((ponto) => [ponto.lat, ponto.lon]);
+  const consulta = pontos.map((ponto) => `${ponto.lon},${ponto.lat}`).join(";");
+  try {
+    const resposta = await fetch(`/mapa/rota.json?pontos=${encodeURIComponent(consulta)}`);
+    const dados = await resposta.json();
+    if (dados.caminho && dados.caminho.length >= 2) return dados.caminho;
+  } catch (_erro) {
+    /* fallback reto */
+  }
+  return pontos.map((ponto) => [ponto.lat, ponto.lon]);
+}
+
+async function trilhasRfDe(rastros) {
+  const porPessoa = {};
+  (rastros || []).forEach((ponto) => {
+    const chave = String(ponto.id || ponto.nome || "pessoa");
+    (porPessoa[chave] = porPessoa[chave] || []).push(ponto);
+  });
+  const trilhas = [];
+  for (const [id, lista] of Object.entries(porPessoa)) {
+    lista.sort((a, b) => String(a.quando || "").localeCompare(String(b.quando || "")));
+    const chave = `${id}|${lista.map((ponto) => `${ponto.quando}@${ponto.lat},${ponto.lon}`).join(">")}`;
+    if (!cacheRotasRf[chave]) cacheRotasRf[chave] = await pedirRotaVias(lista);
+    trilhas.push({ id, cor: lista[0].cor || corPessoaRf(id), caminho: cacheRotasRf[chave] });
+  }
+  return trilhas;
+}
+
+function enviarMapaRf(id, rastros, opcoes) {
+  const token = (pendenciaMapaRf[id] = (pendenciaMapaRf[id] || 0) + 1);
+  enviarMapa(id, rastros, { ...(opcoes || {}), desenho: "rf", semRotulo: true, trilhas: [] });
+  trilhasRfDe(rastros).then((trilhas) => {
+    if (pendenciaMapaRf[id] !== token) return;
+    enviarMapa(id, rastros, { ...(opcoes || {}), desenho: "rf", semRotulo: true, trilhas });
+  });
+}
+
+function atualizarLegendaRf(id, rastros, sel) {
+  const legenda = document.getElementById(id);
+  if (!legenda) return;
+  const filtro = Array.from((sel && sel.selectedOptions) || []).length;
+  legenda.textContent = rastros.length
+    ? `${rastros.length} passagem(ns) · rota pelas vias do passado ao presente${filtro ? ` · ${filtro} pessoa(s)` : " · todas as pessoas de interesse"}`
+    : "Sem passagem georreferenciada das pessoas selecionadas.";
 }
 
 const pulso = { canvas: null, pontos: [], opcoes: null };
@@ -858,26 +940,28 @@ function fotos(ref, agora) {
 }
 
 function alertas(tela, dados) {
-  if (!tela.dataset.pronto) {
+  if (tela.dataset.pronto !== "alertas-rf-v2") {
     tela.innerHTML = `<section class="coluna"><div>
       <article class="cartao" id="comparacao"></article>
       <article class="cartao"><h2>Últimos alertas</h2><div id="historico"></div></article>
-      <section class="grade">
-        <article class="cartao"><h2>Reconhecimento por câmera</h2><iframe class="mapa mapa-folium" id="mapa-face" title="Reconhecimento por câmera" src="/mapa/folha"></iframe></article>
-        <article class="cartao"><h2>Pessoa na área</h2><div id="frase-face" class="leitura"></div></article>
-      </section>
-      <section class="grade">
-        <article class="cartao"><h2>Memórias de rua</h2><div id="memorias"></div></article>
-        <article class="cartao"><h2>Últimos informes</h2><p id="relatorio"></p><div id="informes"></div></article>
-      </section>
-      <section class="grade tres">
-        <article class="cartao"><h2>Resumo</h2><p id="resumo" class="leitura"></p></article>
-        <article class="cartao"><h2>Assessoramento</h2><p id="assessoramento" class="leitura"></p></article>
-        <article class="cartao"><h2>Aprendizado</h2><p id="aprendizado" class="leitura"></p></article>
-      </section>
+      <article class="cartao"><h2>Mapa de rastreamento de pessoa de interesse</h2>
+        <div id="caixa-rf-alertas" class="caixa-rf">
+          <label>Pessoas de interesse<select id="sel-rf-alertas" multiple></select></label>
+          <p>Selecione uma ou várias pessoas para rastrear as câmeras por onde passaram. A seta segue a rota de trânsito pelas vias.</p>
+        </div>
+        <iframe class="mapa mapa-folium" id="mapa-rf-alertas" title="Mapa de rastreamento" src="/mapa/folha"></iframe>
+        <div id="legenda-rf-alertas"></div>
+      </article>
+      <article class="cartao"><h2>Pessoa na área</h2><div id="frase-face" class="leitura"></div></article>
     </div>
     <aside class="cartao"><h2>Quem mais passa</h2><div id="faces"></div></aside></section>`;
-    tela.dataset.pronto = "1";
+    tela.dataset.pronto = "alertas-rf-v2";
+    const selAlertas = document.getElementById("sel-rf-alertas");
+    if (selAlertas) {
+      selAlertas.addEventListener("change", () => {
+        if (ultimoDados) alertas(tela, ultimoDados);
+      });
+    }
   }
   const match = dados.match || null;
   const chaveMatch = match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "";
@@ -909,23 +993,17 @@ function alertas(tela, dados) {
     </div>`).join("") || "<p>Nenhum alerta de rosto ou placa ainda.</p>";
     caixaHist.dataset.chave = chaveHist;
   }
-  const pontos = pontosGeo(dados, "alertas").map((ponto) => ({
-    ...ponto,
-    risco: match && match.camera === ponto.nome ? (dados.led || ponto.risco) : (ponto.risco || "branco"),
-  }));
-  enviarMapa("mapa-face", pontos, { pisca: true });
+  const selRf = document.getElementById("sel-rf-alertas");
+  popularSelRf(selRf, dados.pessoas_interesse || []);
+  const rastros = rastrosRfFiltrados(dados, selRf);
+  enviarMapaRf("mapa-rf-alertas", rastros);
+  atualizarLegendaRf("legenda-rf-alertas", rastros, selRf);
   const texto = match
     ? (match.risco
       ? `Pessoa de risco na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
       : `Presença informativa na área. ${match.narracao_ia || match.narracao || "Morador ou pessoa sem classificação de risco."}`)
     : "Nenhuma pessoa de interesse na área agora.";
   document.getElementById("frase-face").textContent = texto;
-  document.getElementById("memorias").innerHTML = (dados.memorias || []).map((item) => `<p><strong>${escapar(item.quando)}</strong><br>${escapar(item.texto)}</p>`).join("") || "<p>Sem memória registrada.</p>";
-  document.getElementById("relatorio").textContent = dados.relatorio || "";
-  document.getElementById("informes").innerHTML = (dados.informes || []).map((item) => `<p><strong>${escapar(item.quando)}</strong><br>O que: ${escapar(item.descricao || item.tipo)}</p>`).join("") || "<p>Nenhum informe enviado.</p>";
-  document.getElementById("resumo").textContent = dados.resumo || "O relatório do dia ainda não tem resumo. O agente grava este texto no fechamento do dia.";
-  document.getElementById("assessoramento").textContent = dados.assessoramento || "O assessoramento entra no relatório, com a conclusão de risco e a orientação do período.";
-  document.getElementById("aprendizado").textContent = dados.aprendizado || "O aprendizado da rua entra quando o relatório fecha o dia.";
   document.getElementById("faces").innerHTML = barras((dados.passagens || []).map((item) => ({
     id: item.id, nome: item.nome, rotulo: item.id, total: item.total,
   })));
@@ -1002,13 +1080,21 @@ function posicionarAgulha(artigo, valor, topo) {
 
 function risco(tela, dados) {
   const cameras = dados.cameras_vivo || [];
-  const assinatura = cameras.map((camera) => camera.nome).join("|");
+  const assinatura = `risco-v2|${cameras.map((camera) => camera.nome).join("|")}`;
   if (tela.dataset.pronto !== assinatura) {
     tela.innerHTML = `<article class="cartao"><p id="voz" class="voz branco"></p></article>
     <div id="odometros">${cameras.map((camera) => fileiraFluxo(camera)).join("") || "<p>Nenhuma câmera em análise.</p>"}</div>
     <article class="cartao"><h2>Mapa de risco</h2><iframe class="mapa mapa-folium" id="mapa-risco" title="Mapa de risco" src="/mapa/folha"></iframe></article>
     <article class="cartao"><h2>Telemetria</h2><canvas class="grafico" id="esteira"></canvas></article>
-    <article class="cartao"><h2>Últimos informes</h2><div id="informes-risco"></div></article>
+    <section class="grade">
+      <article class="cartao"><h2>Memórias de rua</h2><div id="memorias"></div></article>
+      <article class="cartao"><h2>Últimos informes</h2><p id="relatorio"></p><div id="informes-risco"></div></article>
+    </section>
+    <section class="grade tres">
+      <article class="cartao"><h2>Resumo</h2><p id="resumo" class="leitura"></p></article>
+      <article class="cartao"><h2>Assessoramento</h2><p id="assessoramento" class="leitura"></p></article>
+      <article class="cartao"><h2>Aprendizado</h2><p id="aprendizado" class="leitura"></p></article>
+    </section>
     <article class="cartao" id="subida"></article>`;
     tela.dataset.pronto = assinatura;
   }
@@ -1045,6 +1131,12 @@ function risco(tela, dados) {
     series.push({ nome: "Risco", cor: "#ff3b3b", teto: true, valores: pontos.map((ponto) => (ponto.Risco ? 1 : 0)) });
   }
   linha(document.getElementById("esteira"), series, rotulos.map((rotulo) => String(rotulo).slice(0, 5)), "tempo", { fonte: 16 });
+  const memorias = document.getElementById("memorias");
+  if (memorias) {
+    memorias.innerHTML = (dados.memorias || []).map((item) => `<p><strong>${escapar(item.quando)}</strong><br>${escapar(item.texto)}</p>`).join("") || "<p>Sem memória registrada.</p>";
+  }
+  const relatorio = document.getElementById("relatorio");
+  if (relatorio) relatorio.textContent = dados.relatorio || "";
   const caixaInforme = document.getElementById("informes-risco");
   if (caixaInforme) {
     caixaInforme.innerHTML = (dados.informes || []).map((item) => {
@@ -1058,6 +1150,12 @@ function risco(tela, dados) {
       return `<p class="informe ${cor}"><strong>${escapar(item.quando)}</strong><br>${escapar(texto)}</p>`;
     }).join("") || "<p>Nenhum informe enviado.</p>";
   }
+  const resumo = document.getElementById("resumo");
+  if (resumo) resumo.textContent = dados.resumo || "O relatório do dia ainda não tem resumo. O agente grava este texto no fechamento do dia.";
+  const assessoramento = document.getElementById("assessoramento");
+  if (assessoramento) assessoramento.textContent = dados.assessoramento || "O assessoramento entra no relatório, com a conclusão de risco e a orientação do período.";
+  const aprendizado = document.getElementById("aprendizado");
+  if (aprendizado) aprendizado.textContent = dados.aprendizado || "O aprendizado da rua entra quando o relatório fecha o dia.";
   const subida = document.getElementById("subida");
   const match = dados.match;
   const chaveSubida = match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "";
@@ -1201,12 +1299,7 @@ function mapas(tela, dados) {
     }
   }
   const selRf = document.getElementById("sel-rf");
-  const pessoas = dados.pessoas_interesse || [];
-  if (selRf && selRf.dataset.marca !== pessoas.map((item) => item.id).join("|")) {
-    const escolhidos = new Set(Array.from(selRf.selectedOptions || []).map((opcao) => opcao.value));
-    selRf.innerHTML = pessoas.map((pessoa) => `<option value="${escapar(pessoa.id)}"${escolhidos.has(pessoa.id) ? " selected" : ""}>${escapar(pessoa.nome || pessoa.id)}</option>`).join("");
-    selRf.dataset.marca = pessoas.map((item) => item.id).join("|");
-  }
+  popularSelRf(selRf, dados.pessoas_interesse || []);
   const modoRf = document.getElementById("btn-rf-lpr")?.dataset.rf === "1";
   const base = (dados.app_linhas && dados.app_linhas.length) ? dados.app_linhas : (dados.pontos || []);
   const datas = base.map((item) => numeroDia(item.data)).filter((item) => item != null);
@@ -1219,27 +1312,9 @@ function mapas(tela, dados) {
   linhas.forEach((ponto) => { tipos[ponto.natureza || ponto.tipo || "Ocorrência"] = (tipos[ponto.natureza || ponto.tipo || "Ocorrência"] || 0) + 1; });
   const legenda = document.getElementById("legenda");
   if (modoRf) {
-    const selecionados = Array.from((selRf && selRf.selectedOptions) || []).map((opcao) => opcao.value);
-    const filtro = new Set(selecionados);
-    const rastros = (dados.rastros_rf || []).filter((item) => !filtro.size || filtro.has(item.id)).map((item) => ({
-      ...item,
-      id: item.id || "",
-      lat: Number(item.lat),
-      lon: Number(item.lon),
-      nome: item.nome || item.id,
-      camera: item.camera || "",
-      quando: item.quando || "",
-      foto: item.foto || `/rosto/${item.id}.jpg`,
-      valor: 1,
-      cor: `hsl(${(Array.from(String(item.id || "")).reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 70% 48%)`,
-    })).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lon));
-    rastros.sort((a, b) => String(a.quando || "").localeCompare(String(b.quando || "")));
-    enviarMapa("mapa", rastros, { desenho: "rf", semRotulo: true });
-    if (legenda) {
-      legenda.textContent = rastros.length
-        ? `${rastros.length} passagem(ns) com data/hora · linha do passado ao presente${filtro.size ? ` · ${filtro.size} pessoa(s)` : " · todas as pessoas de interesse"}`
-        : "Sem passagem georreferenciada das pessoas selecionadas.";
-    }
+    const rastros = rastrosRfFiltrados(dados, selRf);
+    enviarMapaRf("mapa", rastros);
+    atualizarLegendaRf("legenda", rastros, selRf);
   } else {
   const lista = linhas.map((ponto) => {
     const lat = Number(ponto.lat);
@@ -1503,7 +1578,7 @@ function vozDeBaixoRisco(dados, voz) {
   const led = dados.led || "branco";
   if (led === "amarelo" || led === "vermelho" || led === "preto") return false;
   const baixo = String(voz || "").toLowerCase();
-  return /observação|observacao|nenhum risco|sem comportamento de risco|área está|area esta/.test(baixo) || !baixo;
+  return /observação|observacao|nenhum risco|sem comportamento de risco|área está|area esta|tranquila|ronda/.test(baixo) || !baixo;
 }
 
 function falarVozStive(dados) {
@@ -1512,9 +1587,9 @@ function falarVozStive(dados) {
   const classe = dados.led === "verde" ? "info" : (dados.led === "branco" ? "" : "risco");
   if (vozDeBaixoRisco(dados, voz)) {
     const agora = Date.now();
-    if (agora - ultimaVozBaixaEm < 5 * 60 * 1000) return;
+    if (agora - ultimaVozBaixaEm < 10 * 60 * 1000) return;
     ultimaVozBaixaEm = agora;
-    enfileirarFalaStive(`voz:baixa:${Math.floor(agora / 300000)}`, "Detector de risco", voz, { classe });
+    enfileirarFalaStive(`voz:baixa:${Math.floor(agora / 600000)}`, "Detector de risco", voz, { classe });
     return;
   }
   enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, { classe });

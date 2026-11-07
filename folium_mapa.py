@@ -5,7 +5,7 @@ from __future__ import annotations
 import folium
 from folium.plugins import HeatMap
 
-_HTML = ""
+_HTML = ""  # reinicia ao recarregar o módulo após mudanças no script
 
 _SCRIPT = """
 <script>
@@ -34,19 +34,38 @@ function setaFolium(a, b, cor) {{
   }});
   L.marker(meio, {{ icon: icone, interactive: false }}).addTo(grupoFolium);
 }}
-function desenharRastroRf(pontos) {{
+function setasRotaFolium(latlngs, cor) {{
+  if (!latlngs || latlngs.length < 2) return;
+  const passo = Math.max(1, Math.floor((latlngs.length - 1) / 8));
+  for (let i = 0; i < latlngs.length - 1; i += passo) {{
+    setaFolium(latlngs[i], latlngs[Math.min(i + 1, latlngs.length - 1)], cor);
+  }}
+  if ((latlngs.length - 2) % passo !== 0) {{
+    setaFolium(latlngs[latlngs.length - 2], latlngs[latlngs.length - 1], cor);
+  }}
+}}
+function desenharRastroRf(pontos, trilhas) {{
   const porPessoa = {{}};
+  const mapaTrilha = {{}};
+  (trilhas || []).forEach((item) => {{
+    const chave = String(item.id || "");
+    const caminho = (item.caminho || []).map((par) => [Number(par[0]), Number(par[1])]).filter((par) => Number.isFinite(par[0]) && Number.isFinite(par[1]));
+    if (chave && caminho.length) mapaTrilha[chave] = {{ caminho, cor: item.cor }};
+  }});
   pontos.forEach((ponto) => {{
     const chave = String(ponto.id || ponto.nome || "pessoa");
     (porPessoa[chave] = porPessoa[chave] || []).push(ponto);
   }});
-  Object.values(porPessoa).forEach((lista) => {{
+  Object.entries(porPessoa).forEach(([chave, lista]) => {{
     lista.sort((a, b) => String(a.quando || "").localeCompare(String(b.quando || "")));
-    const cor = lista[0].cor || "#4c8dff";
-    const latlngs = lista.map((ponto) => [ponto.lat, ponto.lon]);
+    const trilha = mapaTrilha[chave];
+    const cor = (trilha && trilha.cor) || lista[0].cor || "#4c8dff";
+    const latlngs = (trilha && trilha.caminho && trilha.caminho.length >= 2)
+      ? trilha.caminho
+      : lista.map((ponto) => [ponto.lat, ponto.lon]);
     if (latlngs.length >= 2) {{
-      L.polyline(latlngs, {{ color: cor, weight: 4, opacity: 0.88 }}).addTo(grupoFolium);
-      for (let i = 0; i < latlngs.length - 1; i += 1) setaFolium(latlngs[i], latlngs[i + 1], cor);
+      L.polyline(latlngs, {{ color: cor, weight: 5, opacity: 0.9 }}).addTo(grupoFolium);
+      setasRotaFolium(latlngs, cor);
     }}
     lista.forEach((ponto, indice) => {{
       const foto = String(ponto.foto || "").replace(/"/g, "");
@@ -91,7 +110,7 @@ function desenharFolium(mensagem) {{
     }}).addTo(mapaFolium);
   }}
   if (desenho === "rf" || desenho === "fotos") {{
-    desenharRastroRf(pontos);
+    desenharRastroRf(pontos, mensagem.trilhas || []);
   }} else if (desenho === "pontos" || mensagem.fixo) {{
     const maior = Math.max(1, ...pontos.map((ponto) => Number(ponto.valor) || 0));
     pontos.forEach((ponto) => {{
@@ -109,9 +128,18 @@ function desenharFolium(mensagem) {{
       marca.addTo(grupoFolium);
     }});
   }}
-  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "") + "," + (ponto.quando || "")).join("|");
+  const limites = pontos.map((ponto) => [ponto.lat, ponto.lon]);
+  (mensagem.trilhas || []).forEach((item) => {{
+    (item.caminho || []).forEach((par) => {{
+      const lat = Number(par[0]);
+      const lon = Number(par[1]);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) limites.push([lat, lon]);
+    }});
+  }});
+  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "") + "," + (ponto.quando || "")).join("|")
+    + "|" + (mensagem.trilhas || []).map((item) => (item.caminho || []).length).join(",");
   if (!ajustouFolium || mapaFolium._ultimaChave !== chave) {{
-    mapaFolium.fitBounds(pontos.map((ponto) => [ponto.lat, ponto.lon]), {{padding: [28, 28], maxZoom: 17}});
+    mapaFolium.fitBounds(limites, {{padding: [28, 28], maxZoom: 17}});
     mapaFolium._ultimaChave = chave;
     ajustouFolium = true;
   }}
