@@ -36,6 +36,7 @@ function cartao(icone, rotulo, caminho) {
 
 function animar(dados) {
   document.querySelectorAll("[data-num]").forEach((el) => {
+    if (el.dataset.travado) return;
     const fim = Number(ler(dados, el.dataset.num) || 0);
     const inicio = Number(el.dataset.valor || 0);
     if (inicio === fim) return;
@@ -68,7 +69,7 @@ function seriesClasse(origem, lerValor) {
   }));
 }
 
-function linha(canvas, series, rotulos, eixoX) {
+function linha(canvas, series, rotulos, eixoX, opcoes) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const largura = canvas.clientWidth || 640;
@@ -78,15 +79,16 @@ function linha(canvas, series, rotulos, eixoX) {
   canvas.height = altura * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
-  const esquerda = 48;
+  const fonte = (opcoes && opcoes.fonte) || 12;
+  const esquerda = fonte >= 15 ? 72 : 48;
   const topo = 28;
   const direita = 12;
-  const baixo = 42;
+  const baixo = fonte >= 15 ? 56 : 42;
   const w = Math.max(10, largura - esquerda - direita);
   const h = Math.max(10, altura - topo - baixo);
   const base = series.filter((serie) => !serie.teto);
   const pico = Math.max(1, ...base.flatMap((serie) => serie.valores || [0]));
-  ctx.font = "12px Segoe UI";
+  ctx.font = `${fonte}px Segoe UI`;
   ctx.fillStyle = "#93a0b8";
   ctx.fillText("contagens", 4, 16);
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
@@ -155,7 +157,7 @@ function barras(itens) {
   }).join("");
 }
 
-function barrasEmpilhadas(canvas, dias) {
+function barrasEmpilhadas(canvas, dias, opcoes) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const largura = canvas.clientWidth || 640;
@@ -169,9 +171,10 @@ function barrasEmpilhadas(canvas, dias) {
   dias.forEach((dia) => Object.keys(dia.cameras || {}).forEach((nome) => {
     if (!cameras.includes(nome)) cameras.push(nome);
   }));
-  const esquerda = 42;
-  const topo = 16;
-  const baixo = 46;
+  const fonte = (opcoes && opcoes.fonte) || 11;
+  const esquerda = fonte >= 15 ? 64 : 42;
+  const topo = 18;
+  const baixo = fonte >= 15 ? 58 : 46;
   const h = Math.max(10, altura - topo - baixo);
   const grupos = Math.max(dias.length, 1);
   const barrasPorGrupo = CLASSES.length;
@@ -182,7 +185,7 @@ function barrasEmpilhadas(canvas, dias) {
     const total = cameras.reduce((soma, camera) => soma + Number((dia.cameras?.[camera] || {})[classe] || 0), 0);
     pico = Math.max(pico, total);
   }));
-  ctx.font = "11px Segoe UI";
+  ctx.font = `${fonte}px Segoe UI`;
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
   [0, 0.5, 1].forEach((fracao) => {
     const y = topo + h - fracao * h;
@@ -313,9 +316,247 @@ function pontosGeo(dados, campo) {
   }));
 }
 
+let ultimoDados = null;
+
+function isoLocal(data) {
+  const mes = String(data.getMonth() + 1).padStart(2, "0");
+  const dia = String(data.getDate()).padStart(2, "0");
+  return `${data.getFullYear()}-${mes}-${dia}`;
+}
+
+function numeroDia(iso) {
+  const partes = String(iso || "").split("-").map(Number);
+  if (partes.length < 3 || !partes[0]) return null;
+  return Math.floor(Date.UTC(partes[0], partes[1] - 1, partes[2]) / 86400000);
+}
+
+function isoDe(numero) {
+  const data = new Date(numero * 86400000);
+  const mes = String(data.getUTCMonth() + 1).padStart(2, "0");
+  const dia = String(data.getUTCDate()).padStart(2, "0");
+  return `${data.getUTCFullYear()}-${mes}-${dia}`;
+}
+
+function dentro(dia, inicio, fim) {
+  return (!inicio || dia >= inicio) && (!fim || dia <= fim);
+}
+
+function ligarPeriodo(host, minimo, maximo, inicioInicial, fimInicial) {
+  if (!host || host.dataset.ligado) return;
+  host.dataset.ligado = "1";
+  let a = numeroDia(inicioInicial);
+  let b = numeroDia(fimInicial);
+  if (a == null) a = minimo;
+  if (b == null) b = maximo;
+  a = Math.max(minimo, Math.min(a, maximo));
+  b = Math.max(a, Math.min(b, maximo));
+  host.innerHTML = `<div class="periodo-datas"><span></span><span></span></div>
+    <div class="trilho"><i class="fundo"></i><i class="faixa-sel"></i>
+    <button type="button" class="puxador" data-lado="ini"></button>
+    <button type="button" class="puxador" data-lado="fim"></button></div>`;
+  const desenhar = () => {
+    const span = Math.max(1, maximo - minimo);
+    const esquerda = (a - minimo) / span;
+    const largura = (b - a) / span;
+    const faixa = host.querySelector(".faixa-sel");
+    faixa.style.left = `calc(8px + (100% - 16px) * ${esquerda})`;
+    faixa.style.width = `calc((100% - 16px) * ${largura})`;
+    host.querySelector("[data-lado=ini]").style.left = `calc(8px + (100% - 16px) * ${esquerda})`;
+    host.querySelector("[data-lado=fim]").style.left = `calc(8px + (100% - 16px) * ${esquerda + largura})`;
+    const rotulos = host.querySelectorAll(".periodo-datas span");
+    rotulos[0].textContent = isoDe(a).split("-").reverse().join("/");
+    rotulos[1].textContent = isoDe(b).split("-").reverse().join("/");
+    host.dataset.ini = isoDe(a);
+    host.dataset.fim = isoDe(b);
+  };
+  desenhar();
+  let lado = "";
+  host.querySelectorAll(".puxador").forEach((botao) => {
+    botao.addEventListener("pointerdown", (evento) => {
+      lado = botao.dataset.lado;
+      botao.setPointerCapture(evento.pointerId);
+    });
+  });
+  host.addEventListener("pointermove", (evento) => {
+    if (!lado) return;
+    const rect = host.querySelector(".trilho").getBoundingClientRect();
+    const t = Math.min(1, Math.max(0, (evento.clientX - rect.left - 8) / Math.max(1, rect.width - 16)));
+    const dia = Math.round(minimo + t * (maximo - minimo));
+    if (lado === "ini") a = Math.min(dia, b);
+    else b = Math.max(dia, a);
+    host.dataset.mexeu = "1";
+    desenhar();
+    const tela = document.getElementById("tela");
+    if (ultimoDados && tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, ultimoDados);
+  });
+  host.addEventListener("pointerup", () => { lado = ""; });
+  host._definir = (inicio, fim) => {
+    const ni = numeroDia(inicio);
+    const nf = numeroDia(fim);
+    a = Math.max(minimo, Math.min(ni == null ? minimo : ni, maximo));
+    b = Math.max(a, Math.min(nf == null ? maximo : nf, maximo));
+    host.dataset.mexeu = "1";
+    desenhar();
+    const tela = document.getElementById("tela");
+    if (ultimoDados && tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, ultimoDados);
+  };
+}
+
+function botoesGrao(ativo) {
+  return ["hora", "dia", "mes", "ano"].map((grao) => {
+    const nome = { hora: "Hora", dia: "Dia", mes: "Mês", ano: "Ano" }[grao];
+    return `<button type="button" data-grao="${grao}" class="${grao === ativo ? "ativo" : ""}">${nome}</button>`;
+  }).join("");
+}
+
+function agregarContagens(dados, inicio, fim, grao) {
+  const baldes = new Map();
+  (dados.cubo || []).forEach((item) => {
+    if (!dentro(item.d, inicio, fim)) return;
+    let chave = item.d;
+    let rotulo = `${String(item.d || "").slice(8, 10)}/${String(item.d || "").slice(5, 7)}`;
+    if (grao === "hora") {
+      chave = String(item.h).padStart(2, "0");
+      rotulo = `${chave}h`;
+    } else if (grao === "mes") {
+      chave = String(item.d || "").slice(0, 7);
+      rotulo = `${chave.slice(5)}/${chave.slice(2, 4)}`;
+    } else if (grao === "ano") {
+      chave = String(item.d || "").slice(0, 4);
+      rotulo = chave;
+    }
+    if (!baldes.has(chave)) baldes.set(chave, { rotulo, ordem: chave, cameras: {} });
+    const camera = baldes.get(chave).cameras[item.c] || (baldes.get(chave).cameras[item.c] = {});
+    camera[item.k] = (camera[item.k] || 0) + Number(item.n || 0);
+  });
+  if (grao === "hora") {
+    return Array.from({ length: 24 }, (_, hora) => {
+      const chave = String(hora).padStart(2, "0");
+      return baldes.get(chave) || { rotulo: `${chave}h`, cameras: {} };
+    });
+  }
+  return [...baldes.values()].sort((um, outro) => (um.ordem < outro.ordem ? -1 : 1));
+}
+
+function somarClasse(baldes, classe) {
+  return baldes.map((balde) => Object.values(balde.cameras || {}).reduce((soma, camera) => soma + Number(camera[classe] || 0), 0));
+}
+
+function barrasVerticais(canvas, itens) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const largura = canvas.clientWidth || 640;
+  const altura = canvas.clientHeight || 280;
+  const dpr = 2;
+  canvas.width = largura * dpr;
+  canvas.height = altura * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, largura, altura);
+  ctx.font = "15px Segoe UI";
+  if (!itens.length) {
+    ctx.fillStyle = "#93a0b8";
+    ctx.fillText("Sem ocorrência neste período.", 16, 36);
+    return;
+  }
+  const esquerda = 52;
+  const baixo = 64;
+  const topo = 16;
+  const h = Math.max(10, altura - topo - baixo);
+  const pico = Math.max(1, ...itens.map((item) => item.total));
+  const passo = (largura - esquerda - 12) / itens.length;
+  itens.forEach((item, indice) => {
+    const alturaBarra = (item.total / pico) * h;
+    const x = esquerda + indice * passo + 8;
+    const y = topo + h - alturaBarra;
+    ctx.fillStyle = item.cor || "#4c8dff";
+    ctx.fillRect(x, y, Math.max(8, passo - 16), alturaBarra);
+    ctx.fillStyle = "#f4f7fb";
+    ctx.fillText(String(item.total), x, Math.max(14, y - 4));
+    ctx.fillStyle = "#93a0b8";
+    ctx.save();
+    ctx.translate(x, topo + h + 8);
+    ctx.rotate(itens.length > 8 ? -0.7 : 0);
+    ctx.fillText(String(item.rotulo).slice(0, 18), 0, 12);
+    ctx.restore();
+  });
+}
+
+function roscaLivre(canvas, fatias) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const largura = canvas.clientWidth || 320;
+  const altura = canvas.clientHeight || 280;
+  const dpr = 2;
+  canvas.width = largura * dpr;
+  canvas.height = altura * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, largura, altura);
+  const total = fatias.reduce((soma, item) => soma + item.total, 0);
+  const cx = largura * 0.34;
+  const cy = altura * 0.52;
+  const raio = Math.min(largura, altura) * 0.32;
+  let angulo = -Math.PI / 2;
+  fatias.forEach((item) => {
+    const fatia = total ? (item.total / total) * Math.PI * 2 : 0;
+    if (fatia <= 0) return;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.fillStyle = item.cor;
+    ctx.arc(cx, cy, raio, angulo, angulo + fatia);
+    ctx.closePath();
+    ctx.fill();
+    angulo += fatia;
+  });
+  ctx.beginPath();
+  ctx.fillStyle = "#12182a";
+  ctx.arc(cx, cy, raio * 0.58, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#f4f7fb";
+  ctx.font = "22px Segoe UI";
+  ctx.textAlign = "center";
+  ctx.fillText(String(total), cx, cy + 6);
+  ctx.textAlign = "left";
+  ctx.font = "14px Segoe UI";
+  fatias.slice(0, 8).forEach((item, indice) => {
+    const pct = total ? Math.round((1000 * item.total) / total) / 10 : 0;
+    const y = 28 + indice * 22;
+    ctx.fillStyle = item.cor;
+    ctx.fillRect(largura * 0.62, y - 10, 10, 10);
+    ctx.fillStyle = "#f4f7fb";
+    ctx.fillText(`${item.nome} ${pct}%`, largura * 0.62 + 16, y);
+  });
+  if (!total) {
+    ctx.fillStyle = "#93a0b8";
+    ctx.fillText("Sem ocorrência neste período.", 16, 28);
+  }
+}
+
+function enviarMapa(id, pontos, opcoes) {
+  const frame = document.getElementById(id);
+  if (!frame || frame.tagName !== "IFRAME") return;
+  const carga = {
+    tipo: "mapa",
+    desenho: (opcoes && opcoes.desenho) || "pontos",
+    fixo: !!(opcoes && opcoes.fixo),
+    pisca: !!(opcoes && opcoes.pisca),
+    rotulos: !(opcoes && opcoes.semRotulo),
+    pontos: (pontos || []).map((ponto, indice) => ({
+      lat: ponto.lat,
+      lon: ponto.lon,
+      nome: ponto.nome || ponto.tipo || "",
+      valor: Number(ponto.valor || 0),
+      risco: ponto.risco || "",
+      cor: ponto.cor || ((opcoes && opcoes.pisca && ponto.risco) ? (COR_LED[ponto.risco] || corCamera(ponto.nome, indice)) : corCamera(ponto.nome || ponto.tipo, indice)),
+    })),
+  };
+  const mandar = () => {
+    if (frame.contentWindow) frame.contentWindow.postMessage(carga, location.origin);
+  };
+  if (frame.dataset.pronto === "1") mandar();
+  else frame.addEventListener("load", () => { frame.dataset.pronto = "1"; mandar(); }, { once: true });
+}
+
 const pulso = { canvas: null, pontos: [], opcoes: null };
-const cacheTile = {};
-let ocorrenciaRedraw = null;
 
 function pedirTile(z, x, y) {
   const n = 2 ** z;
@@ -469,20 +710,65 @@ function contagens(tela, dados) {
       ${cartao("animal", "Animais hoje", "periodos.dia.Animal")}
       ${cartao("camera", "Objetos hoje", "periodos.dia.Objeto")}
     </section>
-    <article class="cartao"><h2>Mapa das câmeras</h2><canvas class="mapa" id="mapa-contagens"></canvas><div id="legenda-contagens"></div></article>
+    <div id="periodo-contagens"></div>
+    <article class="cartao"><h2>Mapa das câmeras</h2><iframe class="mapa mapa-folium" id="mapa-contagens" title="Mapa das câmeras" src="/mapa/folha"></iframe><div id="legenda-contagens"></div></article>
     <section class="grade">
-      <article class="cartao"><h2>Últimos dias</h2><canvas class="grafico" id="dias"></canvas><div id="legenda-dias"></div></article>
-      <article class="cartao"><h2>Histórico do dia</h2><canvas class="grafico" id="horas"></canvas></article>
+      <article class="cartao"><h2>Últimos dias</h2><div class="graos" data-grafico="dias">${botoesGrao("dia")}</div><canvas class="grafico" id="dias"></canvas><div id="legenda-dias"></div></article>
+      <article class="cartao"><h2>Histórico do dia</h2><div class="graos" data-grafico="horas">${botoesGrao("hora")}</div><canvas class="grafico" id="horas"></canvas></article>
     </section>`;
     tela.dataset.pronto = "1";
+    tela.querySelectorAll(".graos").forEach((grupo) => {
+      grupo.addEventListener("click", (evento) => {
+        const botao = evento.target.closest("button[data-grao]");
+        if (!botao) return;
+        grupo.querySelectorAll("button").forEach((item) => item.classList.remove("ativo"));
+        botao.classList.add("ativo");
+        if (ultimoDados) contagens(tela, ultimoDados);
+      });
+    });
   }
-  const pontos = pontosGeo(dados, "itens");
-  observarMapa(document.getElementById("mapa-contagens"), pontos, null);
+  const hoje = new Date();
+  const fimPadrao = isoLocal(hoje);
+  const inicioPadrao = isoLocal(new Date(hoje.getTime() - 6 * 86400000));
+  const datas = (dados.cubo || []).map((item) => numeroDia(item.d)).filter((item) => item != null);
+  const minimo = datas.length ? Math.min(...datas) : numeroDia(inicioPadrao);
+  const maximo = datas.length ? Math.max(...datas) : numeroDia(fimPadrao);
+  ligarPeriodo(document.getElementById("periodo-contagens"), minimo, maximo, inicioPadrao, fimPadrao);
+  const periodo = document.getElementById("periodo-contagens");
+  const graoDias = document.querySelector("[data-grafico=dias] button.ativo")?.dataset.grao || "dia";
+  const graoHoras = document.querySelector("[data-grafico=horas] button.ativo")?.dataset.grao || "hora";
+  const filtrado = periodo && periodo.dataset.mexeu === "1";
+  const ini = (periodo && periodo.dataset.ini) || inicioPadrao;
+  const fim = (periodo && periodo.dataset.fim) || fimPadrao;
+  const baldeDias = (filtrado || graoDias !== "dia") ? agregarContagens(dados, ini, fim, graoDias) : null;
+  const baldeHoras = (filtrado || graoHoras !== "hora") ? agregarContagens(dados, ini, fim, graoHoras) : null;
+  const pontos = pontosGeo(dados, "itens").map((ponto) => {
+    if (!filtrado) return ponto;
+    const total = (dados.cubo || []).filter((item) => item.c === ponto.nome && dentro(item.d, ini, fim)).reduce((soma, item) => soma + Number(item.n || 0), 0);
+    return { ...ponto, valor: total };
+  });
+  enviarMapa("mapa-contagens", pontos, null);
   document.getElementById("legenda-contagens").innerHTML = legendaCameras(pontos.map((ponto) => ponto.nome));
-  const cameras = barrasEmpilhadas(document.getElementById("dias"), dados.dias_empilhados || []);
+  const diasFonte = baldeDias || dados.dias_empilhados || [];
+  const cameras = barrasEmpilhadas(document.getElementById("dias"), diasFonte, { fonte: 16 });
   document.getElementById("legenda-dias").innerHTML = legendaCameras(cameras || []);
-  const horas = dados.horas || {};
-  linha(document.getElementById("horas"), seriesClasse(horas, (nome) => horas[nome] || []), horasDoDia(), "horas");
+  if (baldeHoras) {
+    linha(document.getElementById("horas"), seriesClasse(baldeHoras, (nome) => somarClasse(baldeHoras, nome)), baldeHoras.map((item) => item.rotulo), graoHoras, { fonte: 16 });
+  } else {
+    const horas = dados.horas || {};
+    linha(document.getElementById("horas"), seriesClasse(horas, (nome) => horas[nome] || []), horasDoDia(), "horas", { fonte: 16 });
+  }
+  ["Pessoa", "Veiculo", "Animal", "Objeto"].forEach((classe) => {
+    const el = document.querySelector(`[data-num="periodos.dia.${classe}"]`);
+    if (!el) return;
+    if (!filtrado) {
+      delete el.dataset.travado;
+      return;
+    }
+    const total = (dados.cubo || []).filter((item) => item.k === classe && dentro(item.d, ini, fim)).reduce((soma, item) => soma + Number(item.n || 0), 0);
+    el.dataset.travado = "1";
+    el.textContent = String(total);
+  });
 }
 
 function comportamento(tela, dados) {
@@ -498,7 +784,7 @@ function comportamento(tela, dados) {
     </section>
     <article class="cartao"><h2>Prioridade ao longo das horas</h2><canvas class="grafico" id="horas-prioridade"></canvas></article>
     <section class="grade">
-      <article class="cartao"><h2>Mapa dos comportamentos</h2><canvas class="mapa" id="mapa-comp"></canvas></article>
+      <article class="cartao"><h2>Mapa dos comportamentos</h2><iframe class="mapa mapa-folium" id="mapa-comp" title="Mapa dos comportamentos" src="/mapa/folha"></iframe></article>
       <article class="cartao"><h2>Leitura do risco</h2><div id="frase-comp" class="leitura"></div></article>
     </section>
     <article class="cartao"><h2>Últimas ocorrências do aplicativo</h2><div id="app"></div></article>`;
@@ -518,9 +804,10 @@ function comportamento(tela, dados) {
     })),
     horasDoDia(),
     "horas",
+    { fonte: 16 },
   );
   const pontos = pontosGeo(dados, "comportamento");
-  observarMapa(document.getElementById("mapa-comp"), pontos, { pisca: true });
+  enviarMapa("mapa-comp", pontos, { pisca: true });
   const frases = (dados.cameras_vivo || [])
     .filter((camera) => camera.risco && camera.risco !== "branco" && camera.frase)
     .map((camera) => camera.frase);
@@ -546,7 +833,7 @@ function alertas(tela, dados) {
       <article class="cartao" id="comparacao"></article>
       <article class="cartao"><h2>Últimos alertas</h2><div id="historico"></div></article>
       <section class="grade">
-        <article class="cartao"><h2>Reconhecimento por câmera</h2><canvas class="mapa" id="mapa-face"></canvas></article>
+        <article class="cartao"><h2>Reconhecimento por câmera</h2><iframe class="mapa mapa-folium" id="mapa-face" title="Reconhecimento por câmera" src="/mapa/folha"></iframe></article>
         <article class="cartao"><h2>Pessoa na área</h2><div id="frase-face" class="leitura"></div></article>
       </section>
       <section class="grade">
@@ -594,7 +881,7 @@ function alertas(tela, dados) {
     ...ponto,
     risco: match && match.camera === ponto.nome ? (dados.led || ponto.risco) : (ponto.risco || "branco"),
   }));
-  observarMapa(document.getElementById("mapa-face"), pontos, { pisca: true });
+  enviarMapa("mapa-face", pontos, { pisca: true });
   const texto = match
     ? `Pessoa de interesse na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
     : "Nenhuma pessoa de interesse na área agora.";
@@ -685,7 +972,7 @@ function risco(tela, dados) {
   if (tela.dataset.pronto !== assinatura) {
     tela.innerHTML = `<article class="cartao"><p id="voz" class="voz branco"></p></article>
     <div id="odometros">${cameras.map((camera) => fileiraFluxo(camera)).join("") || "<p>Nenhuma câmera em análise.</p>"}</div>
-    <article class="cartao"><h2>Mapa de risco</h2><canvas class="mapa" id="mapa-risco"></canvas></article>
+    <article class="cartao"><h2>Mapa de risco</h2><iframe class="mapa mapa-folium" id="mapa-risco" title="Mapa de risco" src="/mapa/folha"></iframe></article>
     <article class="cartao"><h2>Telemetria</h2><canvas class="grafico" id="esteira"></canvas></article>
     <article class="cartao"><h2>Últimos informes</h2><div id="informes-risco"></div></article>
     <article class="cartao" id="subida"></article>`;
@@ -712,7 +999,7 @@ function risco(tela, dados) {
       termo.style.background = cor;
     }
   });
-  observarMapa(document.getElementById("mapa-risco"), pontosGeo(dados, "itens").map((ponto) => ({ ...ponto, valor: 1 })), { pisca: true, fixo: true });
+  enviarMapa("mapa-risco", pontosGeo(dados, "itens").map((ponto) => ({ ...ponto, valor: 1 })), { pisca: true, fixo: true });
   const pontos = dados.serie || [];
   const rotulos = pontos.map((ponto) => new Date((ponto.t || 0) * 1000).toTimeString().slice(0, 8));
   const series = ["Pessoa", "Animal", "Veiculo", "Objeto"].map((nome) => ({
@@ -723,7 +1010,7 @@ function risco(tela, dados) {
   if (pontos.some((ponto) => ponto.Risco)) {
     series.push({ nome: "Risco", cor: "#ff3b3b", teto: true, valores: pontos.map((ponto) => (ponto.Risco ? 1 : 0)) });
   }
-  linha(document.getElementById("esteira"), series, rotulos, "tempo");
+  linha(document.getElementById("esteira"), series, rotulos.map((rotulo) => String(rotulo).slice(0, 5)), "tempo", { fonte: 16 });
   const caixaInforme = document.getElementById("informes-risco");
   if (caixaInforme) {
     caixaInforme.innerHTML = (dados.informes || []).map((item) => {
@@ -791,18 +1078,58 @@ function desenhoAtual() {
   return document.querySelector("button[data-desenho].ativo")?.dataset.desenho || "pontos";
 }
 
+function linhasApp(dados) {
+  const base = (dados.app_linhas && dados.app_linhas.length) ? dados.app_linhas : (dados.pontos || []);
+  const periodo = document.getElementById("periodo-mapas");
+  const ini = periodo && periodo.dataset.ini;
+  const fim = periodo && periodo.dataset.fim;
+  if (!ini || !fim) return base;
+  return base.filter((item) => dentro(item.data, ini, fim));
+}
+
+function contarCampo(linhas, campo) {
+  const totais = {};
+  linhas.forEach((item) => {
+    const chave = String(item[campo] || "").trim() || "Sem informação";
+    totais[chave] = (totais[chave] || 0) + 1;
+  });
+  return Object.entries(totais).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([rotulo, total], indice) => ({
+    rotulo, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
+  }));
+}
+
 function mapas(tela, dados) {
   if (!tela.dataset.pronto) {
-    tela.innerHTML = `<article class="cartao"><canvas id="mapa"></canvas><div id="legenda"></div></article>`;
+    tela.innerHTML = `<div id="periodo-mapas"></div>
+      <article class="cartao"><h2>Mancha criminal</h2><iframe class="mapa-folium" id="mapa" title="Mancha criminal" src="/mapa/folha"></iframe><div id="legenda"></div></article>
+      <article class="cartao"><h2>Ocorrências por dia da semana</h2><canvas class="grafico" id="semana-app"></canvas><div id="legenda-semana"></div></article>
+      <section class="grade">
+        <article class="cartao"><h2>Por hora do dia</h2><canvas class="grafico" id="hora-app"></canvas></article>
+        <article class="cartao"><h2>Por natureza</h2><canvas class="grafico" id="rosca-app"></canvas></article>
+      </section>
+      <section class="grade">
+        <article class="cartao"><h2>Por logradouro</h2><canvas class="grafico" id="rua-app"></canvas></article>
+        <article class="cartao"><h2>Por bairro</h2><canvas class="grafico" id="bairro-app"></canvas></article>
+      </section>
+      <article class="cartao"><h2>Por cidade</h2><canvas class="grafico" id="cidade-app"></canvas></article>`;
     tela.dataset.pronto = "1";
     document.querySelectorAll("button[data-periodo],button[data-desenho]").forEach((botao) => {
       botao.addEventListener("click", () => {
         document.querySelectorAll(`button[data-${botao.dataset.periodo ? "periodo" : "desenho"}]`).forEach((item) => item.classList.remove("ativo"));
         botao.classList.add("ativo");
+        if (botao.dataset.periodo) {
+          const hoje = new Date();
+          const fim = isoLocal(hoje);
+          const dias = botao.dataset.periodo === "dia" ? 0 : botao.dataset.periodo === "semana" ? 6 : 29;
+          const inicio = isoLocal(new Date(hoje.getTime() - dias * 86400000));
+          const host = document.getElementById("periodo-mapas");
+          if (host && host._definir) host._definir(inicio, fim);
+        }
         const corpo = new URLSearchParams();
         if (botao.dataset.periodo) corpo.set("periodo", botao.dataset.periodo);
         if (botao.dataset.desenho) corpo.set("desenho", botao.dataset.desenho);
         fetch("/comando", { method: "POST", body: corpo, headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+        if (ultimoDados) mapas(tela, ultimoDados);
       });
     });
     const mes = document.querySelector('button[data-periodo="mes"]');
@@ -810,57 +1137,63 @@ function mapas(tela, dados) {
     if (mes) mes.classList.add("ativo");
     if (pontos) pontos.classList.add("ativo");
   }
-  const canvas = document.getElementById("mapa");
-  const lista = pontosDo(dados);
-  const ctx = canvas.getContext("2d");
-  canvas.width = (canvas.clientWidth || 800) * 2;
-  canvas.height = 1040;
-  ctx.fillStyle = "#101624";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (!lista.length) {
-    ctx.fillStyle = "#93a0b8";
-    ctx.font = "32px Segoe UI";
-    ctx.fillText("Sem latitude e longitude neste período.", 40, 80);
-    document.getElementById("legenda").textContent = "";
-    return;
-  }
-  ocorrenciaRedraw = () => {
-    const alvo = document.getElementById("tela");
-    if (alvo && alvo.dataset.tela === "mapas") mapas(alvo, dados);
-  };
-  const projetor = projetarRuas(ctx, canvas.width, canvas.height, lista);
-  const modo = desenhoAtual();
+  const base = (dados.app_linhas && dados.app_linhas.length) ? dados.app_linhas : (dados.pontos || []);
+  const datas = base.map((item) => numeroDia(item.data)).filter((item) => item != null);
+  const hojeNum = numeroDia(isoLocal(new Date()));
+  const minimo = datas.length ? Math.min(...datas) : hojeNum - 29;
+  const maximo = datas.length ? Math.max(hojeNum, ...datas) : hojeNum;
+  ligarPeriodo(document.getElementById("periodo-mapas"), minimo, maximo, isoDe(maximo - 29), isoDe(maximo));
+  const linhas = linhasApp(dados);
+  const lista = linhas.filter((ponto) => ponto.lat != null && ponto.lon != null).map((ponto) => ({
+    ...ponto,
+    nome: ponto.natureza || ponto.tipo || "Ocorrência",
+    valor: 1,
+    cor: `hsl(${(Array.from(String(ponto.natureza || ponto.tipo || "")).reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 70% 48%)`,
+  }));
+  enviarMapa("mapa", lista, { desenho: desenhoAtual(), semRotulo: true });
   const tipos = {};
-  lista.forEach((ponto, indice) => {
-    const [x, y] = projetor(indice);
-    const cor = `hsl(${(Array.from(ponto.tipo || "").reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 80% 60%)`;
-    tipos[ponto.tipo] = (tipos[ponto.tipo] || 0) + 1;
-    if (modo === "pontos") {
-      ctx.beginPath();
-      ctx.fillStyle = cor;
-      ctx.arc(x, y, 12, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      const raio = modo === "mancha" ? 90 : 54;
-      const tinta = ctx.createRadialGradient(x, y, 4, x, y, raio);
-      tinta.addColorStop(0, cor);
-      tinta.addColorStop(1, "transparent");
-      ctx.fillStyle = tinta;
-      ctx.beginPath();
-      ctx.arc(x, y, raio, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  linhas.forEach((ponto) => { tipos[ponto.natureza || ponto.tipo || "Ocorrência"] = (tipos[ponto.natureza || ponto.tipo || "Ocorrência"] || 0) + 1; });
+  const legenda = document.getElementById("legenda");
+  if (legenda) {
+    legenda.textContent = Object.entries(tipos).map(([tipo, total]) => `${tipo}: ${total}`).join(" · ")
+      || "Sem ocorrência do aplicativo neste período.";
+  }
+  const semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((rotulo) => ({ rotulo, cameras: {} }));
+  const nomes = [];
+  linhas.forEach((item) => {
+    const numero = numeroDia(item.data);
+    if (numero == null) return;
+    const indice = (new Date(numero * 86400000).getUTCDay() + 6) % 7;
+    const camera = item.camera || "Sem câmera";
+    if (!nomes.includes(camera)) nomes.push(camera);
+    const slot = semana[indice].cameras[camera] || (semana[indice].cameras[camera] = { Pessoa: 0 });
+    slot.Pessoa += 1;
   });
-  document.getElementById("legenda").textContent = Object.entries(tipos).map(([tipo, total]) => `${tipo}: ${total}`).join(" · ")
-    + (lista.some((ponto) => ponto.aproximado) ? " · ponto sem coordenada usa a câmera citada" : "");
+  const antigo = CLASSES.slice();
+  try {
+    CLASSES.splice(0, CLASSES.length, "Pessoa");
+    barrasEmpilhadas(document.getElementById("semana-app"), semana, { fonte: 15 });
+  } finally {
+    CLASSES.splice(0, CLASSES.length, ...antigo);
+  }
+  const caixaSemana = document.getElementById("legenda-semana");
+  if (caixaSemana) caixaSemana.innerHTML = legendaCameras(nomes);
+  barrasVerticais(document.getElementById("hora-app"), Array.from({ length: 24 }, (_, hora) => ({
+    rotulo: `${String(hora).padStart(2, "0")}h`,
+    total: linhas.filter((item) => Number(item.hora) === hora).length,
+    cor: "#4c8dff",
+  })).filter((item, indice, listaHora) => item.total || listaHora.some((outro) => outro.total)));
+  barrasVerticais(document.getElementById("rua-app"), contarCampo(linhas, "rua"));
+  barrasVerticais(document.getElementById("bairro-app"), contarCampo(linhas, "bairro"));
+  barrasVerticais(document.getElementById("cidade-app"), contarCampo(linhas, "cidade"));
+  roscaLivre(document.getElementById("rosca-app"), Object.entries(tipos).map(([nome, total], indice) => ({
+    nome, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
+  })));
 }
 
 const render = { inicio, contagens, comportamento, alertas, mapas, risco, vivo };
 
 function pulsar() {
-  if (pulso.opcoes && pulso.opcoes.pisca && pulso.canvas && document.body.contains(pulso.canvas)) {
-    mapaCameras(pulso.canvas, pulso.pontos, pulso.opcoes);
-  }
   document.querySelectorAll("[data-agulha]").forEach((artigo) => {
     if (artigo._alvo == null) return;
     const atual = artigo._atual == null ? artigo._alvo : artigo._atual;
@@ -880,7 +1213,15 @@ async function ciclo() {
   } catch (erro) {
     return;
   }
+  ultimoDados = dados;
   const led = document.getElementById("led");
+  const selo = document.getElementById("selo-stive");
+  if (selo) {
+    const total = (dados.pendencias || []).length;
+    selo.hidden = !total;
+    selo.textContent = total ? String(total) : "";
+  }
+  if (window.atualizarStive) window.atualizarStive(dados);
   if (led) led.className = "led " + (dados.led || "branco");
   const tela = document.getElementById("tela");
   if (tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, dados);

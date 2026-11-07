@@ -1769,6 +1769,60 @@ _FRASES = {
 }
 
 
+_PENDENCIAS = {}
+
+
+def _ids_respondidos():
+    from agente.stive import ids_respondidos
+
+    return ids_respondidos()
+
+
+def _lembrar_pendencia(camera, tipo, texto, agora):
+    bloco = int(agora // 1800)
+    chave = f"{camera}|{tipo}|{bloco}"
+    if chave in _ids_respondidos():
+        return
+    atual = _PENDENCIAS.get(chave)
+    if atual is None:
+        _PENDENCIAS[chave] = {"texto": texto, "camera": camera, "tipo": tipo, "expira": agora + 1200}
+    else:
+        atual["texto"] = texto
+        atual["expira"] = agora + 1200
+
+
+def _pendencias_vivas(cameras):
+    agora = time.time()
+    for camera in cameras or []:
+        nome = camera.get("nome") or "câmera"
+        for frase in camera.get("permanencias") or []:
+            baixo = frase.lower()
+            if "parado" not in baixo and "parada" not in baixo:
+                continue
+            tipo = "veiculo" if "veículo" in baixo or "veiculo" in baixo else "pessoa"
+            pergunta = (
+                f"Confirma o veículo que permanece parado na {nome}?"
+                if tipo == "veiculo"
+                else f"Confirma a pessoa que permanece parada na {nome}?"
+            )
+            _lembrar_pendencia(nome, tipo, pergunta, agora)
+        if "disparo" in (camera.get("frase") or "").lower():
+            _lembrar_pendencia(nome, "disparo", f"Houve disparo na {nome}? Pode confirmar para a base?", agora)
+    respondidas = _ids_respondidos()
+    vivos = []
+    for chave, item in list(_PENDENCIAS.items()):
+        if chave in respondidas or item["expira"] < agora:
+            _PENDENCIAS.pop(chave, None)
+            continue
+        vivos.append({
+            "id": chave,
+            "texto": item["texto"],
+            "camera": item["camera"],
+            "tipo": item["tipo"],
+        })
+    return vivos[:6]
+
+
 def _montar_voz(cameras, match, narracao, narracao_ia):
     partes = []
     for camera in cameras or []:
@@ -2104,6 +2158,9 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "geo": pacote.get("geo") or [],
         "riscos": pacote.get("riscos") or {},
         "pontos": pacote.get("pontos") or [],
+        "app_linhas": pacote.get("app_linhas") or [],
+        "cubo": pacote.get("cubo") or [],
+        "pendencias": _pendencias_vivas(cameras),
         "led": led,
         "cameras_vivo": cameras,
         "serie": list(_SERIE),

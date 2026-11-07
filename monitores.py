@@ -831,27 +831,99 @@ def _coordenada_camera(item):
     return None
 
 
-def _ponto_ocorrencia(item, tipo):
+def _locais():
+    try:
+        from cadastro import locais_cameras
+        return locais_cameras()
+    except Exception:
+        return []
+
+
+def _camera_proxima(item, lat, lon):
+    locais = _locais()
+    texto = " ".join(
+        str(item.get(chave) or "")
+        for chave in ("endereco", "lugar", "descricao", "natureza", "titulo", "camera")
+    ).lower()
+    for local in locais:
+        nome = str(local.get("nome") or "").strip()
+        if nome and nome.lower() in texto:
+            return local, False
+    if lat is None or lon is None:
+        return {}, False
+    melhor = None
+    melhor_dist = 0.004
+    for local in locais:
+        if local.get("latitude") is None or local.get("longitude") is None:
+            continue
+        dist = abs(float(local["latitude"]) - lat) + abs(float(local["longitude"]) - lon)
+        if dist < melhor_dist:
+            melhor = local
+            melhor_dist = dist
+    if melhor is None:
+        return {}, False
+    return melhor, True
+
+
+def _endereco_partes(item, local):
+    if local.get("rua") or local.get("bairro") or local.get("cidade"):
+        return (
+            str(local.get("rua") or ""),
+            str(local.get("bairro") or ""),
+            str(local.get("cidade") or ""),
+        )
+    partes = [parte.strip() for parte in str(item.get("endereco") or item.get("lugar") or "").split(",") if parte.strip()]
+    rua = partes[0] if partes else ""
+    if len(partes) >= 3:
+        return rua, partes[1], partes[2]
+    if len(partes) == 2:
+        return rua, "", partes[1]
+    return rua, "", ""
+
+
+def _linha_app(item):
     lat, lon = _coordenada_item(item)
     aproximado = False
     if lat is None or lon is None:
         camera = _coordenada_camera(item)
-        if camera is None:
-            return None
-        lat, lon = camera
+        if camera is not None:
+            lat, lon = camera
+            aproximado = True
+    local, perto = _camera_proxima(item, lat, lon)
+    if perto and lat is None:
+        lat = local.get("latitude")
+        lon = local.get("longitude")
         aproximado = True
+    rua, bairro, cidade = _endereco_partes(item, local)
+    try:
+        hora = int(str(item.get("hora") or "")[:2])
+    except ValueError:
+        hora = -1
+    return {
+        "data": str(item.get("data") or item.get("quando") or "")[:10],
+        "hora": hora,
+        "natureza": str(item.get("natureza") or item.get("titulo") or "Ocorrencia")[:40],
+        "camera": str(local.get("nome") or "Sem câmera"),
+        "rua": rua[:80],
+        "bairro": bairro[:80],
+        "cidade": cidade[:80],
+        "lat": lat,
+        "lon": lon,
+        "aproximado": aproximado or perto,
+    }
+
+
+def _ponto_ocorrencia(item, tipo):
+    linha = _linha_app(item)
+    lat, lon = linha.get("lat"), linha.get("lon")
+    if lat is None or lon is None:
+        return None
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
     if abs(lat) < 0.0001 and abs(lon) < 0.0001:
         return None
-    data = str(item.get("data") or item.get("quando") or "")[:10]
-    return {
-        "lat": lat,
-        "lon": lon,
-        "tipo": str(tipo or "Ocorrencia"),
-        "data": data,
-        "aproximado": aproximado,
-    }
+    linha["tipo"] = str(tipo or linha.get("natureza") or "Ocorrencia")
+    return linha
 
 
 def _dia(texto):
@@ -939,6 +1011,9 @@ class Acervo:
         self.app_remoto = []
         self.pontos_locais = []
         self.pontos_remotos = []
+        self.linhas_locais = []
+        self.linhas_remotas = []
+        self.cubo = {}
         self.mapa = None
         self.legenda_mapa = []
         self._mapa_chave = None
@@ -999,6 +1074,18 @@ class Acervo:
             if dia < limite:
                 with self._trava:
                     self.total_antigo[categoria] = self.total_antigo.get(categoria, 0) + 1
+                    if dia >= date.today() - timedelta(days=400):
+                        try:
+                            hora_antiga = int((colunas[1] or "0")[:2])
+                        except ValueError:
+                            hora_antiga = 0
+                        chave_cubo = (
+                            dia.isoformat(),
+                            max(0, min(23, hora_antiga)),
+                            colunas[2] or "CAMERA",
+                            categoria,
+                        )
+                        self.cubo[chave_cubo] = self.cubo.get(chave_cubo, 0) + 1
                 continue
             try:
                 hora = int((colunas[1] or "0")[:2])
@@ -1018,6 +1105,11 @@ class Acervo:
                 self.classe[(dia, classe)] = self.classe.get((dia, classe), 0) + 1
                 chave_hora = (dia, categoria, hora)
                 self.hora[chave_hora] = self.hora.get(chave_hora, 0) + 1
+                chave_cubo = (dia, hora, camera, categoria)
+                self.cubo[chave_cubo] = self.cubo.get(chave_cubo, 0) + 1
+            corte = (date.today() - timedelta(days=400)).isoformat()
+            if len(self.cubo) > 8000:
+                self.cubo = {chave: valor for chave, valor in self.cubo.items() if chave[0] >= corte}
 
     def _consumir_ocorrencias(self):
         linhas = _linhas_novas("historico_ocorrencias.csv", self._ocorrencias)
@@ -1258,9 +1350,11 @@ class Acervo:
             ponto = _ponto_ocorrencia(item, aviso["titulo"])
             if ponto:
                 pontos.append(ponto)
+        linhas = [_linha_app(item) for item in itens][-800:]
         with self._trava:
             self.app = list(reversed(avisos[-4:]))
             self.pontos_locais = pontos
+            self.linhas_locais = linhas
 
     def _agendar_app_remoto(self):
         if not (self.quer_leitura or self.quer_mapas) or self._app_buscando:
@@ -1291,9 +1385,11 @@ class Acervo:
             ponto = _ponto_ocorrencia(item, aviso["titulo"])
             if ponto:
                 pontos.append(ponto)
+        linhas = [_linha_app(item) for item in (linhas or [])][-800:]
         with self._trava:
             self.app_remoto = list(reversed(avisos[-4:]))
             self.pontos_remotos = pontos
+            self.linhas_remotas = linhas
 
     def _filtrar_periodo(self, pontos, periodo):
         hoje = date.today()
@@ -1519,8 +1615,33 @@ class Acervo:
                     "lon": ponto.get("lon"),
                     "tipo": ponto.get("tipo") or "Ocorrencia",
                     "data": ponto.get("data") or "",
+                    "hora": ponto.get("hora") if ponto.get("hora") is not None else -1,
+                    "camera": ponto.get("camera") or "Sem câmera",
+                    "rua": ponto.get("rua") or "",
+                    "bairro": ponto.get("bairro") or "",
+                    "cidade": ponto.get("cidade") or "",
                     "aproximado": bool(ponto.get("aproximado")),
                 })
+            app_linhas = []
+            for linha in list(self.linhas_locais) + list(self.linhas_remotas):
+                app_linhas.append({
+                    "data": linha.get("data") or "",
+                    "hora": linha.get("hora") if linha.get("hora") is not None else -1,
+                    "natureza": linha.get("natureza") or "Ocorrencia",
+                    "camera": linha.get("camera") or "Sem câmera",
+                    "rua": linha.get("rua") or "",
+                    "bairro": linha.get("bairro") or "",
+                    "cidade": linha.get("cidade") or "",
+                    "lat": linha.get("lat"),
+                    "lon": linha.get("lon"),
+                })
+            cubo = [
+                {"d": dia, "h": hora, "c": camera, "k": categoria, "n": int(valor)}
+                for (dia, hora, camera, categoria), valor in self.cubo.items()
+            ]
+            cubo.sort(key=lambda item: item["d"])
+            if len(cubo) > 6000:
+                cubo = cubo[-6000:]
         vivo = None
         for match in matches or []:
             if match and (vivo is None or float(match.get("ate") or 0) >= float(vivo.get("ate") or 0)):
@@ -1574,6 +1695,8 @@ class Acervo:
             "horas_prioridade": horas_prioridade,
             "classes_web": classes_lista,
             "pontos": pontos_mapa,
+            "app_linhas": app_linhas,
+            "cubo": cubo,
             "mapa": mapa,
             "legenda_mapa": legenda_mapa,
             "mapa_painel": mapa_painel,

@@ -112,6 +112,8 @@ a.texto { color: var(--ciano); }
 .led.preto { background: #05070c; box-shadow: 0 0 0 6px #ff3b3b, 0 0 32px #ff3b3b; animation: pisca 0.28s infinite; }
 @keyframes pisca { 50% { opacity: 0.28; } }
 .grafico, .mapa { width: 100%; height: 280px; border-radius: 12px; background: #101624; }
+iframe.mapa, iframe.mapa-folium { display: block; width: 100%; height: 280px; border: 0; border-radius: 12px; background: #d5e2ef; }
+iframe#mapa { height: 520px; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
 main[data-tela="inicio"] .cartao span svg { width: 40px; height: 40px; }
 main[data-tela="inicio"] .cartao strong { font-size: 40px; }
@@ -157,9 +159,31 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .luz-alerta { width: 14px; height: 14px; border-radius: 50%; background: #ff3b3b; box-shadow: 0 0 12px #ff3b3b; animation: pisca .4s infinite; display: inline-block; }
 #mapa { width: 100%; height: 520px; border-radius: 18px; background: #101624; }
 .faixa { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.periodo-datas { display: flex; justify-content: space-between; color: var(--mudo); font-size: 15px; margin-bottom: 6px; }
+.trilho { position: relative; height: 32px; touch-action: none; }
+.trilho .fundo { position: absolute; left: 8px; right: 8px; top: 14px; height: 4px; border-radius: 99px; background: rgba(255,255,255,.12); }
+.trilho .faixa-sel { position: absolute; top: 14px; height: 4px; border-radius: 99px; background: linear-gradient(90deg, #3ee0ff, #4c8dff); }
+.trilho .puxador { position: absolute; top: 4px; width: 22px; height: 22px; margin-left: -11px; padding: 0; border-radius: 50%;
+  background: #f4f7fb; box-shadow: 0 0 0 4px rgba(76,141,255,.35); cursor: ew-resize; }
+.graos { display: flex; gap: 6px; margin: 0 0 8px; }
+.graos button { background: transparent; color: var(--mudo); border: 1px solid var(--linha); padding: 6px 10px; }
+.graos button.ativo { color: white; background: rgba(76,141,255,.28); border-color: #4c8dff; }
+.selo { min-width: 18px; height: 18px; margin-left: auto; border-radius: 99px; background: #ff3b3b; color: white;
+  font-style: normal; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
+.stive { display: grid; grid-template-columns: 240px minmax(0, 1fr) minmax(240px, .8fr); gap: 22px; align-items: start; }
+.avatar-stive { width: 180px; height: 220px; border-radius: 24px; object-fit: cover; background: linear-gradient(160deg, #4c8dff, #3ee0ff);
+  display: grid; place-items: center; color: #041018; font-size: 72px; font-weight: 700; }
+.chat { display: flex; flex-direction: column; gap: 10px; min-height: 360px; max-height: 62vh; overflow: auto; }
+.bolha { max-width: 92%; padding: 12px 14px; border-radius: 16px; line-height: 1.4; }
+.bolha.stive { background: rgba(76,141,255,.16); }
+.bolha.eu { margin-left: auto; background: rgba(255,255,255,.06); }
+.quadro-stive { min-height: 220px; }
+.pendencia { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
+.pendencia button { background: transparent; color: var(--texto); border: 1px solid var(--linha); }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
-  .cartoes, .coluna, .grade, .grade.tres { grid-template-columns: 1fr; }
+  .cartoes, .coluna, .grade, .grade.tres, .stive { grid-template-columns: 1fr; }
+  nav a .selo { display: grid; }
 }
 """
 
@@ -318,6 +342,7 @@ _ICONES = {
     "conta": "<circle cx='12' cy='12' r='8'/><circle cx='12' cy='10' r='2.5'/><path d='M8 16.5c.8-1.5 2.2-2.2 4-2.2s3.2.7 4 2.2'/>",
     "sair": "<path d='M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2'/><path d='M15 12H3m0 0 3-3m-3 3 3 3'/>",
     "mais": "<path d='M12 5v14M5 12h14'/>",
+    "stive": "<circle cx='12' cy='8' r='3'/><path d='M6 19c1-3 3-4.5 6-4.5s5 1.5 6 4.5'/><path d='M18 5c1.5 1.2 2 2.6 2 4'/>",
 }
 
 
@@ -330,6 +355,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
         ("/painel/4", "Mapas", "mapa"),
         ("/painel/risco", "Detector de risco", "alerta"),
         ("/painel/cameras", "Ao vivo", "camera"),
+        ("/painel/stive", "Agente Stive", "stive"),
         ("/gestao", "Gestão de ativos", "cliente"),
         ("/cadastro/cliente", "Cliente", "cliente"),
         ("/cadastro/cameras", "Câmeras", "camera"),
@@ -345,8 +371,9 @@ def _menu(ativo: str, perfil: str = "") -> str:
         if href == "/gestao" or (href == "/cadastro/cliente" and perfil != "administrador"):
             partes.append("<p class='grupo'>Conta</p>")
         classe = " class='ativo'" if href == ativo else ""
+        selo = "<i id='selo-stive' class='selo' hidden></i>" if href == "/painel/stive" else ""
         partes.append(
-            f"<a href='{href}'{classe}>{_svg(_ICONES[icone])}<span>{titulo}</span></a>"
+            f"<a href='{href}'{classe}>{_svg(_ICONES[icone])}<span>{titulo}</span>{selo}</a>"
         )
     partes.append("</nav>")
     return "".join(partes)
@@ -459,6 +486,91 @@ def _ao_vivo(cameras, perfil: str = "") -> str:
     grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
     miolo = _cabeca("Ao vivo", "O placar mostra a cena agora e o acumulado de cada câmera.") + f"<main data-tela='vivo'><section class='grade'>{grade}</section></main>"
     return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras", perfil=perfil)
+
+
+def _stive(sessao: dict) -> str:
+    script = """
+<script>
+const chat = document.getElementById("chat-stive");
+const quadro = document.getElementById("quadro-stive");
+const form = document.getElementById("form-stive");
+function bolha(papel, texto) {
+  const p = document.createElement("p");
+  p.className = "bolha " + papel;
+  p.textContent = texto;
+  chat.appendChild(p);
+  chat.scrollTop = chat.scrollHeight;
+}
+function desenharVisual(visual) {
+  if (!quadro) return;
+  const itens = (visual && visual.itens) || [];
+  const titulo = (visual && visual.titulo) || "Quadro do Stive";
+  quadro.innerHTML = "<h2>" + titulo.replace(/[&<>]/g, "") + "</h2>" + (itens.map((item) =>
+    "<div class='linha-face'><span>" + String(item.rotulo || "") + "</span><strong>" + String(item.total ?? "") + "</strong></div>"
+  ).join("") || "<p>O quadro acompanha o que você pedir na conversa.</p>");
+}
+form.addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const campo = form.querySelector("[name=pergunta]");
+  const texto = campo.value.trim();
+  if (!texto) return;
+  bolha("eu", texto);
+  campo.value = "";
+  const corpo = new URLSearchParams(new FormData(form));
+  corpo.set("pergunta", texto);
+  const resposta = await fetch("/agente/stive", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: corpo });
+  const dados = await resposta.json().catch(() => ({}));
+  bolha("stive", dados.fala || "Não consegui consultar a base agora.");
+  desenharVisual(dados.visual);
+});
+window.atualizarStive = (dados) => {
+  const caixa = document.getElementById("pendencias-stive");
+  if (!caixa) return;
+  const lista = dados.pendencias || [];
+  const chave = lista.map((item) => item.id).join("|");
+  if (caixa.dataset.chave === chave) return;
+  caixa.dataset.chave = chave;
+  caixa.innerHTML = lista.map((item) => `<div class="pendencia"><p>${item.texto}</p>
+    <span><button type="button" data-id="${item.id}" data-resp="sim" data-tipo="${item.tipo}" data-camera="${item.camera}">Sim</button>
+    <button type="button" data-id="${item.id}" data-resp="nao" data-tipo="${item.tipo}" data-camera="${item.camera}">Não</button></span></div>`).join("");
+};
+document.getElementById("pendencias-stive").addEventListener("click", async (evento) => {
+  const botao = evento.target.closest("button");
+  if (!botao) return;
+  const corpo = new URLSearchParams(new FormData(form));
+  corpo.set("id", botao.dataset.id || "");
+  corpo.set("resposta", botao.dataset.resp || "");
+  corpo.set("tipo", botao.dataset.tipo || "");
+  corpo.set("camera", botao.dataset.camera || "");
+  corpo.set("texto", botao.parentElement.parentElement.querySelector("p").textContent);
+  const resposta = await fetch("/agente/stive/confirmar", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: corpo });
+  const dados = await resposta.json().catch(() => ({}));
+  bolha("stive", dados.fala || "Confirmação registrada.");
+  botao.parentElement.parentElement.remove();
+});
+</script>
+"""
+    miolo = f"""<main>
+<div class="stive">
+<article class="cartao">
+<img class="avatar-stive" alt="Stive" src="/agente/stive.png" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'avatar-stive',textContent:'S'}}))">
+<h2>Stive</h2>
+<p>Agente de segurança. Pergunte sobre a base ou informe uma ocorrência.</p>
+<div id="pendencias-stive"></div>
+</article>
+<article class="cartao">
+<div class="chat" id="chat-stive"><p class="bolha stive">Pode perguntar quantas pessoas passaram, o que o aplicativo registrou, ou me contar uma ocorrência.</p></div>
+<form id="form-stive">
+{_csrf(sessao)}
+<label>Mensagem<input name="pergunta" autocomplete="off" placeholder="Fale com o Stive"></label>
+<button type="submit">Enviar</button>
+</form>
+</article>
+<article class="cartao quadro-stive" id="quadro-stive"><h2>Quadro do Stive</h2><p>O que você pedir na conversa aparece aqui.</p></article>
+</div>
+</main>
+{script}"""
+    return _moldura("Agente Stive · C4ISTAR MONITOR", miolo, "/painel/stive", perfil=sessao.get("perfil") or "")
 
 
 def _sem_analise(perfil: str = "") -> str:
@@ -1005,6 +1117,12 @@ def _tratador(portal: Portal):
             if caminho == "/conta/usuario":
                 self._criar_usuario(sessao, campos)
                 return
+            if caminho == "/agente/stive":
+                self._falar_stive(sessao, campos)
+                return
+            if caminho == "/agente/stive/confirmar":
+                self._confirmar_stive(sessao, campos)
+                return
             self.send_error(404)
 
         def _pagina_autenticada(self, caminho: str, consulta: dict, sessao: dict):
@@ -1014,6 +1132,9 @@ def _tratador(portal: Portal):
                 self._html(_form_conta(sessao, "No primeiro acesso, troque a senha enviada por e-mail."), 200)
                 return
             ver = cadastro.pode_ver_analise(documento)
+            if caminho == "/agente/stive.png":
+                self._avatar_stive()
+                return
             if caminho == "/painel.js":
                 self._bytes(Path("painel_web.js").read_bytes(), "text/javascript; charset=utf-8")
                 return
@@ -1030,6 +1151,9 @@ def _tratador(portal: Portal):
                     return
                 if numero == "risco":
                     self._html(_risco(perfil), 200)
+                    return
+                if numero == "stive":
+                    self._html(_stive(sessao), 200)
                     return
                 for item, chave, titulo in PAINEIS:
                     if item == numero:
@@ -1048,6 +1172,13 @@ def _tratador(portal: Portal):
                 self._bytes(dados, "image/jpeg")
                 return
             aviso, ok = _mensagem(consulta)
+            if caminho == "/mapa/folha":
+                if not ver:
+                    self.send_error(404)
+                    return
+                from folium_mapa import html_folha
+                self._html(html_folha(), 200)
+                return
             if caminho.startswith("/mapa/") and caminho.endswith(".png"):
                 pedacos = caminho.strip("/").split("/")
                 if len(pedacos) == 4:
@@ -1335,6 +1466,53 @@ def _tratador(portal: Portal):
                 self._html(_gestao(sessao, portal, str(exc)), 400)
                 return
             self._redirecionar(f"/gestao?ok={acao}")
+
+        def _avatar_stive(self):
+            from agente.stive import caminho_avatar
+
+            caminho = caminho_avatar()
+            if caminho is None:
+                self.send_error(404)
+                return
+            imagem = cv2.imread(str(caminho))
+            if imagem is None or getattr(imagem, "size", 0) == 0:
+                self.send_error(404)
+                return
+            ok, bruto = cv2.imencode(".png", imagem)
+            if not ok:
+                self.send_error(404)
+                return
+            self._bytes(bruto.tobytes(), "image/png")
+
+        def _falar_stive(self, sessao: dict, campos: dict):
+            from agente.stive import responder
+
+            try:
+                saida = responder(sessao.get("documento") or "", _um(campos, "pergunta"), portal.resumo())
+            except ValueError as exc:
+                self._json({"fala": str(exc), "visual": {}})
+                return
+            except Exception:
+                self._json({"fala": "A base respondeu com erro. Tente de novo em instantes.", "visual": {}})
+                return
+            self._json({"fala": saida.get("fala") or "", "visual": saida.get("visual") or {}})
+
+        def _confirmar_stive(self, sessao: dict, campos: dict):
+            from agente.stive import confirmar
+
+            try:
+                fala = confirmar(
+                    sessao.get("documento") or "",
+                    _um(campos, "id"),
+                    _um(campos, "resposta"),
+                    _um(campos, "texto"),
+                    _um(campos, "camera"),
+                    _um(campos, "tipo"),
+                )
+            except ValueError as exc:
+                self._json({"fala": str(exc)})
+                return
+            self._json({"fala": fala})
 
         def _tile(self, zoom: int, x: int, y: int):
             from mapa import _baixar

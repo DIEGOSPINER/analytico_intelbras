@@ -1,0 +1,90 @@
+"""Mapa Folium dos painéis. O navegador recebe a folha pronta e só atualiza os pontos."""
+
+from __future__ import annotations
+
+import folium
+from folium.plugins import HeatMap
+
+_HTML = ""
+
+_SCRIPT = """
+<script>
+const mapaFolium = {nome};
+let grupoFolium = L.layerGroup().addTo(mapaFolium);
+let calorFolium = null;
+let ajustouFolium = false;
+let estadoFolium = null;
+mapaFolium.eachLayer((camada) => {{
+  if (camada._heat) mapaFolium.removeLayer(camada);
+}});
+function desenharFolium(mensagem) {{
+  estadoFolium = mensagem;
+  grupoFolium.clearLayers();
+  if (calorFolium) {{
+    mapaFolium.removeLayer(calorFolium);
+    calorFolium = null;
+  }}
+  const pontos = (mensagem.pontos || []).filter((ponto) => ponto.lat != null && ponto.lon != null);
+  if (!pontos.length) return;
+  const desenho = mensagem.desenho || "pontos";
+  if (desenho === "calor" || desenho === "mancha") {{
+    calorFolium = L.heatLayer(pontos.map((ponto) => [ponto.lat, ponto.lon, desenho === "mancha" ? 0.9 : 0.55]), {{
+      radius: desenho === "mancha" ? 46 : 28,
+      blur: 22,
+      minOpacity: 0.25,
+    }}).addTo(mapaFolium);
+  }}
+  if (desenho === "pontos" || mensagem.fixo) {{
+    const maior = Math.max(1, ...pontos.map((ponto) => Number(ponto.valor) || 0));
+    pontos.forEach((ponto) => {{
+      const raio = mensagem.fixo ? 8 : 7 + Math.sqrt((Number(ponto.valor) || 0) / maior) * 18;
+      const marca = L.circleMarker([ponto.lat, ponto.lon], {{
+        radius: raio,
+        color: ponto.risco === "preto" ? "#ff3b3b" : (ponto.cor || "#4c8dff"),
+        weight: ponto.risco === "preto" ? 3 : 1,
+        fillColor: ponto.cor || "#4c8dff",
+        fillOpacity: 0.88,
+      }});
+      const texto = mensagem.fixo ? (ponto.nome || "") : [ponto.nome || "", ponto.valor || ""].filter(Boolean).join(" · ");
+      if (texto && mensagem.rotulos) marca.bindTooltip(texto, {{permanent: true, direction: "right", opacity: 0.9}});
+      else if (texto) marca.bindTooltip(texto, {{direction: "top"}});
+      marca.addTo(grupoFolium);
+    }});
+  }}
+  if (!ajustouFolium) {{
+    mapaFolium.fitBounds(pontos.map((ponto) => [ponto.lat, ponto.lon]), {{padding: [28, 28], maxZoom: 17}});
+    ajustouFolium = true;
+  }}
+}}
+window.addEventListener("message", (evento) => {{
+  if (evento.origin !== location.origin) return;
+  if (!evento.data || evento.data.tipo !== "mapa") return;
+  desenharFolium(evento.data);
+}});
+setInterval(() => {{
+  if (!estadoFolium || !estadoFolium.pisca) return;
+  const aceso = (Date.now() % 900) < 560;
+  grupoFolium.eachLayer((camada) => {{
+    if (camada.setStyle) camada.setStyle({{fillOpacity: aceso ? 0.9 : 0.22, opacity: aceso ? 1 : 0.35}});
+  }});
+}}, 180);
+</script>
+"""
+
+
+def html_folha() -> str:
+    global _HTML
+    if _HTML:
+        return _HTML
+    mapa = folium.Map(
+        location=[-15.78, -47.93],
+        zoom_start=4,
+        tiles="OpenStreetMap",
+        control_scale=True,
+        zoom_control=True,
+    )
+    HeatMap([[-15.78, -47.93, 0.01]], radius=1, blur=1, min_opacity=0).add_to(mapa)
+    pagina = mapa.get_root().render()
+    script = _SCRIPT.format(nome=mapa.get_name())
+    _HTML = pagina.replace("</html>", script + "\n</html>") if "</html>" in pagina else pagina + script
+    return _HTML
