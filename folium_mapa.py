@@ -5,7 +5,7 @@ from __future__ import annotations
 import folium
 from folium.plugins import HeatMap
 
-_HTML = ""  # reinicia ao recarregar o módulo após mudanças no script
+_HTML = ""  # invalidado a cada mudança do script Folium
 
 _SCRIPT = """
 <script>
@@ -89,19 +89,26 @@ function desenharRastroRf(pontos, trilhas) {{
   }});
 }}
 function desenharFolium(mensagem) {{
+  const pontos = (mensagem.pontos || []).map((ponto) => ({{
+    ...ponto,
+    lat: Number(ponto.lat),
+    lon: Number(ponto.lon),
+  }})).filter((ponto) => Number.isFinite(ponto.lat) && Number.isFinite(ponto.lon) && Math.abs(ponto.lat) <= 90 && Math.abs(ponto.lon) <= 180);
+  const desenho = mensagem.desenho || "pontos";
+  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "") + "," + (ponto.quando || "")).join("|")
+    + "|" + (mensagem.trilhas || []).map((item) => (item.caminho || []).length).join(",");
+  // RF estático: se o conteúdo não mudou, não limpa nem redesenha (evita piscar).
+  if ((desenho === "rf" || desenho === "fotos") && mapaFolium._ultimaChave === chave && grupoFolium.getLayers().length) {{
+    estadoFolium = Object.assign({{}}, mensagem, {{ pisca: false }});
+    return;
+  }}
   estadoFolium = mensagem;
   grupoFolium.clearLayers();
   if (calorFolium) {{
     mapaFolium.removeLayer(calorFolium);
     calorFolium = null;
   }}
-  const pontos = (mensagem.pontos || []).map((ponto) => ({{
-    ...ponto,
-    lat: Number(ponto.lat),
-    lon: Number(ponto.lon),
-  }})).filter((ponto) => Number.isFinite(ponto.lat) && Number.isFinite(ponto.lon) && Math.abs(ponto.lat) <= 90 && Math.abs(ponto.lon) <= 180);
   if (!pontos.length) return;
-  const desenho = mensagem.desenho || "pontos";
   if (desenho === "calor" || desenho === "mancha") {{
     calorFolium = L.heatLayer(pontos.map((ponto) => [ponto.lat, ponto.lon, desenho === "mancha" ? 0.9 : 0.55]), {{
       radius: desenho === "mancha" ? 46 : 28,
@@ -136,12 +143,22 @@ function desenharFolium(mensagem) {{
       if (Number.isFinite(lat) && Number.isFinite(lon)) limites.push([lat, lon]);
     }});
   }});
-  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "") + "," + (ponto.quando || "")).join("|")
-    + "|" + (mensagem.trilhas || []).map((item) => (item.caminho || []).length).join(",");
   if (!ajustouFolium || mapaFolium._ultimaChave !== chave) {{
     mapaFolium.fitBounds(limites, {{padding: [28, 28], maxZoom: 17}});
     mapaFolium._ultimaChave = chave;
     ajustouFolium = true;
+  }}
+  // Animação só quando chegou um novo match RF (uma vez, curto).
+  if ((desenho === "rf" || desenho === "fotos") && mensagem.novoMatch) {{
+    let ticks = 0;
+    const timer = setInterval(() => {{
+      ticks += 1;
+      const aceso = ticks % 2 === 0;
+      grupoFolium.eachLayer((camada) => {{
+        if (camada.setStyle) camada.setStyle({{fillOpacity: aceso ? 0.95 : 0.35, opacity: aceso ? 1 : 0.4}});
+      }});
+      if (ticks >= 6) clearInterval(timer);
+    }}, 180);
   }}
 }}
 window.addEventListener("message", (evento) => {{
@@ -151,7 +168,9 @@ window.addEventListener("message", (evento) => {{
 }});
 window.parent.postMessage({{ tipo: "mapa-pronto" }}, location.origin);
 setInterval(() => {{
+  // Pisca só em mapas de risco/pontos com flag; RF nunca pisca em loop.
   if (!estadoFolium || !estadoFolium.pisca) return;
+  if (estadoFolium.desenho === "rf" || estadoFolium.desenho === "fotos") return;
   const aceso = (Date.now() % 900) < 560;
   grupoFolium.eachLayer((camada) => {{
     if (camada.setStyle) camada.setStyle({{fillOpacity: aceso ? 0.9 : 0.22, opacity: aceso ? 1 : 0.35}});

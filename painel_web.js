@@ -554,6 +554,7 @@ function enviarMapa(id, pontos, opcoes) {
     desenho: (opcoes && opcoes.desenho) || "pontos",
     fixo: !!(opcoes && opcoes.fixo),
     pisca: !!(opcoes && opcoes.pisca),
+    novoMatch: !!(opcoes && opcoes.novoMatch),
     rotulos: !(opcoes && opcoes.semRotulo),
     trilhas: (opcoes && opcoes.trilhas) || [],
     pontos: (pontos || []).map((ponto, indice) => {
@@ -650,12 +651,38 @@ async function trilhasRfDe(rastros) {
   return trilhas;
 }
 
+const ultimaAssinaturaRf = {};
+const ultimaAssinaturaDadosRf = {};
+const cacheTrilhasRfMapa = {};
+
+function assinaturaPontosRf(rastros) {
+  return (rastros || []).map((p) => `${p.id}@${p.quando}@${p.lat},${p.lon}`).join(">");
+}
+
 function enviarMapaRf(id, rastros, opcoes) {
+  const sel = (opcoes && opcoes.sel) || null;
+  const filtro = Array.from((sel && sel.selectedOptions) || []).map((o) => o.value).join(",");
+  const pontosSig = assinaturaPontosRf(rastros);
+  const assinatura = `${filtro}|${pontosSig}`;
+  const dadosSig = (opcoes && opcoes.assinaturaDados) || pontosSig;
+  // Sem mudança de filtro nem de rastros: mantém o mapa estático.
+  if (ultimaAssinaturaRf[id] === assinatura && cacheTrilhasRfMapa[assinatura]) {
+    return;
+  }
+  const houveNovoMatch = !!(ultimaAssinaturaDadosRf[id] && ultimaAssinaturaDadosRf[id] !== dadosSig);
+  ultimaAssinaturaDadosRf[id] = dadosSig;
+  ultimaAssinaturaRf[id] = assinatura;
   const token = (pendenciaMapaRf[id] = (pendenciaMapaRf[id] || 0) + 1);
-  enviarMapa(id, rastros, { ...(opcoes || {}), desenho: "rf", semRotulo: true, trilhas: [] });
+  const base = { ...(opcoes || {}), desenho: "rf", semRotulo: true, pisca: false, novoMatch: houveNovoMatch };
+  if (cacheTrilhasRfMapa[assinatura]) {
+    enviarMapa(id, rastros, { ...base, trilhas: cacheTrilhasRfMapa[assinatura] });
+    return;
+  }
+  // Só redesenha com trilhas prontas (evita piscar com linha vazia → rota).
   trilhasRfDe(rastros).then((trilhas) => {
     if (pendenciaMapaRf[id] !== token) return;
-    enviarMapa(id, rastros, { ...(opcoes || {}), desenho: "rf", semRotulo: true, trilhas });
+    cacheTrilhasRfMapa[assinatura] = trilhas;
+    enviarMapa(id, rastros, { ...base, trilhas });
   });
 }
 
@@ -996,7 +1023,10 @@ function alertas(tela, dados) {
   const selRf = document.getElementById("sel-rf-alertas");
   popularSelRf(selRf, dados.pessoas_interesse || []);
   const rastros = rastrosRfFiltrados(dados, selRf);
-  enviarMapaRf("mapa-rf-alertas", rastros);
+  enviarMapaRf("mapa-rf-alertas", rastros, {
+    sel: selRf,
+    assinaturaDados: assinaturaPontosRf(dados.rastros_rf || []),
+  });
   atualizarLegendaRf("legenda-rf-alertas", rastros, selRf);
   const texto = match
     ? (match.risco
@@ -1313,7 +1343,10 @@ function mapas(tela, dados) {
   const legenda = document.getElementById("legenda");
   if (modoRf) {
     const rastros = rastrosRfFiltrados(dados, selRf);
-    enviarMapaRf("mapa", rastros);
+    enviarMapaRf("mapa", rastros, {
+      sel: selRf,
+      assinaturaDados: assinaturaPontosRf(dados.rastros_rf || []),
+    });
     atualizarLegendaRf("legenda", rastros, selRf);
   } else {
   const lista = linhas.map((ponto) => {

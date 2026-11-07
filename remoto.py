@@ -1153,13 +1153,23 @@ def _pessoas_da_conta(documento: str) -> list[dict]:
 
 
 def _rastros_rf_lpr(nomes: dict) -> list[dict]:
-    caminho = Path("historico_faces.csv")
-    if not caminho.exists() or not nomes:
+    if not nomes:
         return []
     try:
         locais = {str(item.get("nome") or "").strip().lower(): item for item in cadastro.locais_cameras()}
     except Exception:
         locais = {}
+    try:
+        from db.leitura import rastros_faces
+
+        do_banco = rastros_faces(nomes, locais)
+        if do_banco:
+            return do_banco
+    except Exception:
+        pass
+    caminho = Path("historico_faces.csv")
+    if not caminho.exists():
+        return []
     rastros = []
     try:
         with caminho.open(encoding="utf-8-sig", newline="") as arquivo:
@@ -1192,7 +1202,6 @@ def _rastros_rf_lpr(nomes: dict) -> list[dict]:
 def _dados_json(portal) -> dict:
     from identidade import contar_passagens_faces
 
-    linhas = contar_passagens_faces(100000)
     nomes = {}
     classes = {}
     try:
@@ -1205,14 +1214,87 @@ def _dados_json(portal) -> dict:
             continue
         nomes[ident] = str(pessoa.get("nome") or "")
         classes[ident] = cadastro.classe_pessoa(pessoa)
-    linhas = [(ident, total) for ident, total in linhas if ident in nomes]
+
+    historico_matches = None
+    audio_esteira = None
+    contagem_faces = None
+    try:
+        from db.leitura import audio_esteira as _audio_esteira
+        from db.leitura import contagem_faces as _contagem_faces
+        from db.leitura import historico_matches as _historico_matches
+
+        historico_matches = _historico_matches
+        audio_esteira = _audio_esteira
+        contagem_faces = _contagem_faces
+    except Exception:
+        pass
+
+    linhas = []
+    try:
+        if contagem_faces:
+            linhas = contagem_faces(set(nomes))
+        if not linhas:
+            linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
+    except Exception:
+        linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
+
     contagem = {ident: total for ident, total in linhas}
     resumo = dict(portal.resumo())
     match = resumo.get("match")
     if isinstance(match, dict):
         match = dict(match)
         match["passagens"] = int(contagem.get(str(match.get("id") or "").upper(), 0))
+        if match.get("id") and not match.get("nome"):
+            match["nome"] = nomes.get(str(match.get("id") or "").upper(), match.get("nome") or "")
         resumo["match"] = match
+
+    # Histórico da tela de alertas: preferir Postgres
+    try:
+        if historico_matches:
+            hist_db = historico_matches(set(nomes), limite=40)
+        else:
+            hist_db = []
+        for item in hist_db:
+            if item.get("tipo") == "FACE":
+                item["nome"] = nomes.get(item.get("id") or "", item.get("nome") or "")
+        if hist_db:
+            resumo["historico"] = hist_db
+    except Exception:
+        pass
+
+    # Áudio: completar esteira a partir do banco se a memória estiver vazia
+    try:
+        from audio_registro import tokens_nuvem
+
+        audio = dict(resumo.get("audio") or {})
+        if not audio.get("esteira") and audio_esteira:
+            esteira = audio_esteira(limite=80)
+            if esteira:
+                audio["esteira"] = esteira
+                audio["alertas"] = [item for item in esteira if item.get("risco")][:20]
+                audio["risco_aberto"] = len(audio["alertas"])
+                cameras = {}
+                for item in esteira:
+                    cam = item.get("camera") or "Camera"
+                    slot = cameras.setdefault(cam, {"nuvem": {}, "ranking_risco": {}})
+                    for token in tokens_nuvem(item.get("texto") or ""):
+                        slot["nuvem"][token] = slot["nuvem"].get(token, 0) + 1
+                    cats = [c.strip() for c in str(item.get("categoria") or "risco").split(",") if c.strip()]
+                    for palavra in item.get("palavras") or []:
+                        cat = cats[0] if cats else "risco"
+                        chave = f"{cat}:{palavra}"
+                        slot["ranking_risco"][chave] = slot["ranking_risco"].get(chave, 0) + 1
+                audio["cameras"] = {
+                    nome: {
+                        "nuvem": [{"rotulo": k, "total": v} for k, v in sorted(vals["nuvem"].items(), key=lambda p: -p[1])[:24]],
+                        "ranking_risco": [{"rotulo": k, "total": v} for k, v in sorted(vals["ranking_risco"].items(), key=lambda p: -p[1])[:12]],
+                    }
+                    for nome, vals in cameras.items()
+                }
+                resumo["audio"] = audio
+    except Exception:
+        pass
+
     pessoas = [
         {
             "id": ident,
@@ -1240,6 +1322,7 @@ def _dados_json(portal) -> dict:
         ],
         "pessoas_interesse": pessoas,
         "rastros_rf": _rastros_rf_lpr(nomes),
+        "fonte_dados": "postgres" if contagem_faces else (resumo.get("fonte_dados") or "csv"),
     })
     return resumo
 
