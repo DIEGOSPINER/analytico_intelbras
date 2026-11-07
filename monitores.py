@@ -812,7 +812,7 @@ def _coordenada_item(item):
 def _coordenada_camera(item):
     texto = " ".join(
         str(item.get(chave) or "")
-        for chave in ("endereco", "lugar", "descricao", "natureza", "titulo")
+        for chave in ("endereco", "lugar", "descricao", "natureza", "titulo", "camera")
     ).lower()
     if not texto.strip():
         return None
@@ -914,7 +914,11 @@ def _linha_app(item):
             lat, lon = camera
             aproximado = True
     local, perto = _camera_proxima(item, lat, lon)
-    if perto and lat is None:
+    if (lat is None or lon is None) and local.get("latitude") is not None and local.get("longitude") is not None:
+        lat = float(local["latitude"])
+        lon = float(local["longitude"])
+        aproximado = True
+    elif perto and (lat is None or lon is None):
         lat = local.get("latitude")
         lon = local.get("longitude")
         aproximado = True

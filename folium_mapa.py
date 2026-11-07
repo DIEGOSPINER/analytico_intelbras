@@ -24,7 +24,11 @@ function desenharFolium(mensagem) {{
     mapaFolium.removeLayer(calorFolium);
     calorFolium = null;
   }}
-  const pontos = (mensagem.pontos || []).filter((ponto) => ponto.lat != null && ponto.lon != null);
+  const pontos = (mensagem.pontos || []).map((ponto) => ({{
+    ...ponto,
+    lat: Number(ponto.lat),
+    lon: Number(ponto.lon),
+  }})).filter((ponto) => Number.isFinite(ponto.lat) && Number.isFinite(ponto.lon) && Math.abs(ponto.lat) <= 90 && Math.abs(ponto.lon) <= 180);
   if (!pontos.length) return;
   const desenho = mensagem.desenho || "pontos";
   if (desenho === "calor" || desenho === "mancha") {{
@@ -34,7 +38,22 @@ function desenharFolium(mensagem) {{
       minOpacity: 0.25,
     }}).addTo(mapaFolium);
   }}
-  if (desenho === "pontos" || mensagem.fixo) {{
+  if (desenho === "rf" || desenho === "fotos") {{
+    pontos.forEach((ponto) => {{
+      const foto = String(ponto.foto || "").replace(/"/g, "");
+      const nome = String(ponto.nome || ponto.id || "").replace(/</g, "");
+      const icone = L.divIcon({{
+        className: "marcador-rf",
+        html: `<div style="width:44px;height:44px;border-radius:50%;overflow:hidden;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.35);background:#101624"><img alt="" src="${{foto}}" style="width:100%;height:100%;object-fit:cover"></div>`,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
+      }});
+      const marca = L.marker([ponto.lat, ponto.lon], {{ icon: icone }});
+      const texto = [nome, ponto.camera || "", ponto.quando || ""].filter(Boolean).join(" · ");
+      if (texto) marca.bindTooltip(texto, {{ direction: "top" }});
+      marca.addTo(grupoFolium);
+    }});
+  }} else if (desenho === "pontos" || mensagem.fixo) {{
     const maior = Math.max(1, ...pontos.map((ponto) => Number(ponto.valor) || 0));
     pontos.forEach((ponto) => {{
       const raio = mensagem.fixo ? 8 : 7 + Math.sqrt((Number(ponto.valor) || 0) / maior) * 18;
@@ -51,8 +70,10 @@ function desenharFolium(mensagem) {{
       marca.addTo(grupoFolium);
     }});
   }}
-  if (!ajustouFolium) {{
+  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "")).join("|");
+  if (!ajustouFolium || mapaFolium._ultimaChave !== chave) {{
     mapaFolium.fitBounds(pontos.map((ponto) => [ponto.lat, ponto.lon]), {{padding: [28, 28], maxZoom: 17}});
+    mapaFolium._ultimaChave = chave;
     ajustouFolium = true;
   }}
 }}
@@ -61,6 +82,7 @@ window.addEventListener("message", (evento) => {{
   if (!evento.data || evento.data.tipo !== "mapa") return;
   desenharFolium(evento.data);
 }});
+window.parent.postMessage({{ tipo: "mapa-pronto" }}, location.origin);
 setInterval(() => {{
   if (!estadoFolium || !estadoFolium.pisca) return;
   const aceso = (Date.now() % 900) < 560;

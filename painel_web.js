@@ -20,7 +20,7 @@ const NOME_TIPO = {
   Interacao_Proxima: "Interação próxima", Aglomeracao: "Aglomeração", Levantando: "Levantando",
   Possivel_Queda: "Possível queda", Possivel_Briga: "Possível briga", Possivel_Arma_Fogo: "Possível arma",
 };
-const COR_LED = { branco: "#f4f7fb", amarelo: "#ffb020", vermelho: "#ff3b3b", preto: "#05070c" };
+const COR_LED = { branco: "#f4f7fb", verde: "#3ddc97", amarelo: "#ffb020", vermelho: "#ff3b3b", preto: "#05070c" };
 
 function ler(dados, caminho) {
   return String(caminho).split(".").reduce((acc, chave) => (acc == null ? undefined : acc[chave]), dados);
@@ -538,7 +538,7 @@ function roscaLivre(canvas, fatias) {
     ctx.fillStyle = item.cor;
     ctx.fillRect(largura * 0.62, y - 10, 10, 10);
     ctx.fillStyle = "#f4f7fb";
-    ctx.fillText(`${item.nome} ${pct}%`, largura * 0.62 + 16, y);
+    ctx.fillText(`${item.nome || item.rotulo || ""}  ${pct}%  (${item.total})`, largura * 0.62 + 16, y);
   });
   if (!total) {
     ctx.fillStyle = "#93a0b8";
@@ -555,20 +555,35 @@ function enviarMapa(id, pontos, opcoes) {
     fixo: !!(opcoes && opcoes.fixo),
     pisca: !!(opcoes && opcoes.pisca),
     rotulos: !(opcoes && opcoes.semRotulo),
-    pontos: (pontos || []).map((ponto, indice) => ({
-      lat: ponto.lat,
-      lon: ponto.lon,
-      nome: ponto.nome || ponto.tipo || "",
-      valor: Number(ponto.valor || 0),
-      risco: ponto.risco || "",
-      cor: ponto.cor || ((opcoes && opcoes.pisca && ponto.risco) ? (COR_LED[ponto.risco] || corCamera(ponto.nome, indice)) : corCamera(ponto.nome || ponto.tipo, indice)),
-    })),
+    pontos: (pontos || []).map((ponto, indice) => {
+      const lat = Number(ponto.lat);
+      const lon = Number(ponto.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+      if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+      return {
+        lat,
+        lon,
+        id: ponto.id || "",
+        nome: ponto.nome || ponto.tipo || "",
+        camera: ponto.camera || "",
+        quando: ponto.quando || "",
+        foto: ponto.foto || "",
+        valor: Number(ponto.valor || 0),
+        risco: ponto.risco || "",
+        cor: ponto.cor || ((opcoes && opcoes.pisca && ponto.risco) ? (COR_LED[ponto.risco] || corCamera(ponto.nome, indice)) : corCamera(ponto.nome || ponto.tipo, indice)),
+      };
+    }).filter(Boolean),
   };
   const mandar = () => {
     if (frame.contentWindow) frame.contentWindow.postMessage(carga, location.origin);
   };
+  const pronto = () => {
+    frame.dataset.pronto = "1";
+    mandar();
+  };
   if (frame.dataset.pronto === "1") mandar();
-  else frame.addEventListener("load", () => { frame.dataset.pronto = "1"; mandar(); }, { once: true });
+  else if (frame.contentDocument && frame.contentDocument.readyState === "complete") pronto();
+  else frame.addEventListener("load", pronto, { once: true });
 }
 
 const pulso = { canvas: null, pontos: [], opcoes: null };
@@ -868,9 +883,11 @@ function alertas(tela, dados) {
   const chaveMatch = match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "";
   const comparacao = document.getElementById("comparacao");
   if (comparacao.dataset.chave !== chaveMatch) {
-    const avisoRisco = match && match.tipo === "FACE" ? `<p><span class="luz-alerta"></span> Atenção, Pessoa de risco na área!</p>` : "";
+    const avisoRisco = match && match.risco
+      ? `<p><span class="luz-alerta"></span> Atenção, Pessoa de risco na área!</p>`
+      : (match ? `<p><span class="luz-info"></span> Presença informativa na área.</p>` : "");
     if (match) {
-      comparacao.className = `cartao${match.risco ? " sobe" : ""}`;
+      comparacao.className = `cartao sobe${match.risco ? "" : " verde"}`;
       comparacao.innerHTML = `${avisoRisco}<h2>${escapar(match.nome || match.id)} · ${escapar(match.id)}</h2>
         <p>Similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes · ${escapar(match.camera || "")}</p>
         ${fotos(`/img/match-ref.jpg?t=${Date.now()}`, `/img/match-agora.jpg?t=${Date.now()}`)}
@@ -898,7 +915,9 @@ function alertas(tela, dados) {
   }));
   enviarMapa("mapa-face", pontos, { pisca: true });
   const texto = match
-    ? `Pessoa de interesse na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
+    ? (match.risco
+      ? `Pessoa de risco na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
+      : `Presença informativa na área. ${match.narracao_ia || match.narracao || "Morador ou pessoa sem classificação de risco."}`)
     : "Nenhuma pessoa de interesse na área agora.";
   document.getElementById("frase-face").textContent = texto;
   document.getElementById("memorias").innerHTML = (dados.memorias || []).map((item) => `<p><strong>${escapar(item.quando)}</strong><br>${escapar(item.texto)}</p>`).join("") || "<p>Sem memória registrada.</p>";
@@ -1007,7 +1026,7 @@ function risco(tela, dados) {
       });
     });
     const termo = document.querySelector(`[data-termo="${CSS.escape(camera.nome)}"] i`);
-    const altura = { branco: "18%", amarelo: "46%", vermelho: "74%", preto: "100%" }[camera.risco] || "18%";
+    const altura = { branco: "18%", verde: "32%", amarelo: "46%", vermelho: "74%", preto: "100%" }[camera.risco] || "18%";
     const cor = COR_LED[camera.risco] || "#f4f7fb";
     if (termo) {
       termo.style.height = altura;
@@ -1035,23 +1054,30 @@ function risco(tela, dados) {
       if (dados.led === "preto" || /disparo|arma/.test(baixo)) cor = "preto";
       else if (/briga|queda|interesse|risco|alerta/.test(baixo)) cor = "vermelho";
       else if (/deitad|intera|suspeito|áudio|audio/.test(baixo)) cor = "amarelo";
+      else if (dados.led === "verde" || /morador|visitante|prestador/.test(baixo)) cor = "verde";
       return `<p class="informe ${cor}"><strong>${escapar(item.quando)}</strong><br>${escapar(texto)}</p>`;
     }).join("") || "<p>Nenhum informe enviado.</p>";
   }
   const subida = document.getElementById("subida");
   const match = dados.match;
-  const chaveSubida = match && match.risco ? `${match.id}|${match.taxa}|${match.passagens}|${match.narracao_ia || match.narracao || ""}` : "";
+  const chaveSubida = match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "";
   if (subida && subida.dataset.chave !== chaveSubida) {
-    if (match && match.risco) {
-      subida.className = "cartao sobe";
-      subida.innerHTML = `<p><span class="luz-alerta"></span> Pessoa de risco detectada</p>
+    if (match) {
+      subida.className = `cartao sobe${match.risco ? "" : " verde"}`;
+      subida.innerHTML = match.risco
+        ? `<p><span class="luz-alerta"></span> Pessoa de risco detectada</p>
         <h2>${escapar(match.nome || match.id)}</h2>
         <p>Similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes</p>
         <div class="rostos"><figure><img alt="" src="/img/match-agora.jpg?t=${Date.now()}"></figure></div>
-        <p>${escapar(match.narracao_ia || match.narracao || "")}</p>`;
+        <p>${escapar(match.narracao_ia || match.narracao || "")}</p>`
+        : `<p><span class="luz-info"></span> Presença informativa</p>
+        <h2>${escapar(match.nome || match.id)}</h2>
+        <p>Similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes</p>
+        <div class="rostos"><figure><img alt="" src="/img/match-agora.jpg?t=${Date.now()}"></figure></div>
+        <p>${escapar(match.narracao_ia || match.narracao || "Morador ou pessoa sem classificação de risco.")}</p>`;
     } else {
       subida.className = "cartao";
-      subida.innerHTML = "<h2>Match</h2><p>O cartão sobe quando uma pessoa de risco cadastrada reaparece.</p>";
+      subida.innerHTML = "<h2>Match</h2><p>O cartão sobe quando uma pessoa cadastrada reaparece.</p>";
     }
     subida.dataset.chave = chaveSubida;
   }
@@ -1116,6 +1142,11 @@ function contarCampo(linhas, campo) {
 function mapas(tela, dados) {
   if (!tela.dataset.pronto) {
     tela.innerHTML = `<div id="periodo-mapas"></div>
+      <div class="faixa"><button type="button" id="btn-rf-lpr" data-rf="0">RF e LPR</button></div>
+      <div id="caixa-rf" class="caixa-rf oculta">
+        <label>Pessoas de interesse<select id="sel-rf" multiple></select></label>
+        <p>Selecione uma ou várias pessoas para rastrear as câmeras por onde passaram.</p>
+      </div>
       <article class="cartao"><h2>Mancha criminal</h2><iframe class="mapa-folium" id="mapa" title="Mancha criminal" src="/mapa/folha"></iframe><div id="legenda"></div></article>
       <article class="cartao"><h2>Ocorrências por dia da semana</h2><canvas class="grafico" id="semana-app"></canvas><div id="legenda-semana"></div></article>
       <section class="grade">
@@ -1151,7 +1182,32 @@ function mapas(tela, dados) {
     const pontos = document.querySelector('button[data-desenho="pontos"]');
     if (mes) mes.classList.add("ativo");
     if (pontos) pontos.classList.add("ativo");
+    const botaoRf = document.getElementById("btn-rf-lpr");
+    const caixaRf = document.getElementById("caixa-rf");
+    const selRf = document.getElementById("sel-rf");
+    if (botaoRf) {
+      botaoRf.addEventListener("click", () => {
+        const ativo = botaoRf.dataset.rf === "1";
+        botaoRf.dataset.rf = ativo ? "0" : "1";
+        botaoRf.classList.toggle("ativo", !ativo);
+        if (caixaRf) caixaRf.classList.toggle("oculta", ativo);
+        if (ultimoDados) mapas(tela, ultimoDados);
+      });
+    }
+    if (selRf) {
+      selRf.addEventListener("change", () => {
+        if (ultimoDados) mapas(tela, ultimoDados);
+      });
+    }
   }
+  const selRf = document.getElementById("sel-rf");
+  const pessoas = dados.pessoas_interesse || [];
+  if (selRf && selRf.dataset.marca !== pessoas.map((item) => item.id).join("|")) {
+    const escolhidos = new Set(Array.from(selRf.selectedOptions || []).map((opcao) => opcao.value));
+    selRf.innerHTML = pessoas.map((pessoa) => `<option value="${escapar(pessoa.id)}"${escolhidos.has(pessoa.id) ? " selected" : ""}>${escapar(pessoa.nome || pessoa.id)}</option>`).join("");
+    selRf.dataset.marca = pessoas.map((item) => item.id).join("|");
+  }
+  const modoRf = document.getElementById("btn-rf-lpr")?.dataset.rf === "1";
   const base = (dados.app_linhas && dados.app_linhas.length) ? dados.app_linhas : (dados.pontos || []);
   const datas = base.map((item) => numeroDia(item.data)).filter((item) => item != null);
   const hojeNum = numeroDia(isoLocal(new Date()));
@@ -1159,19 +1215,48 @@ function mapas(tela, dados) {
   const maximo = datas.length ? Math.max(hojeNum, ...datas) : hojeNum;
   ligarPeriodo(document.getElementById("periodo-mapas"), minimo, maximo, isoDe(minimo), isoDe(maximo));
   const linhas = linhasApp(dados);
-  const lista = linhas.filter((ponto) => ponto.lat != null && ponto.lon != null).map((ponto) => ({
-    ...ponto,
-    nome: ponto.natureza || ponto.tipo || "Ocorrência",
-    valor: 1,
-    cor: `hsl(${(Array.from(String(ponto.natureza || ponto.tipo || "")).reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 70% 48%)`,
-  }));
-  enviarMapa("mapa", lista, { desenho: desenhoAtual(), semRotulo: true });
   const tipos = {};
   linhas.forEach((ponto) => { tipos[ponto.natureza || ponto.tipo || "Ocorrência"] = (tipos[ponto.natureza || ponto.tipo || "Ocorrência"] || 0) + 1; });
   const legenda = document.getElementById("legenda");
+  if (modoRf) {
+    const selecionados = Array.from((selRf && selRf.selectedOptions) || []).map((opcao) => opcao.value);
+    const filtro = new Set(selecionados);
+    const rastros = (dados.rastros_rf || []).filter((item) => !filtro.size || filtro.has(item.id)).map((item) => ({
+      ...item,
+      lat: Number(item.lat),
+      lon: Number(item.lon),
+      nome: item.nome || item.id,
+      foto: item.foto || `/rosto/${item.id}.jpg`,
+      valor: 1,
+      cor: `hsl(${(Array.from(String(item.id || "")).reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 70% 48%)`,
+    })).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lon));
+    enviarMapa("mapa", rastros, { desenho: "rf", semRotulo: false });
+    if (legenda) {
+      legenda.textContent = rastros.length
+        ? `${rastros.length} passagem(ns) RF/LPR no mapa${filtro.size ? ` · ${filtro.size} pessoa(s) selecionada(s)` : " · todas as pessoas de interesse"}`
+        : "Sem passagem georreferenciada das pessoas selecionadas.";
+    }
+  } else {
+  const lista = linhas.map((ponto) => {
+    const lat = Number(ponto.lat);
+    const lon = Number(ponto.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return {
+      ...ponto,
+      lat,
+      lon,
+      nome: ponto.natureza || ponto.tipo || "Ocorrência",
+      valor: 1,
+      cor: `hsl(${(Array.from(String(ponto.natureza || ponto.tipo || "")).reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 70% 48%)`,
+    };
+  }).filter(Boolean);
+  enviarMapa("mapa", lista, { desenho: desenhoAtual(), semRotulo: true });
   if (legenda) {
-    legenda.textContent = Object.entries(tipos).map(([tipo, total]) => `${tipo}: ${total}`).join(" · ")
-      || "Sem ocorrência do aplicativo neste período.";
+    const textoTipos = Object.entries(tipos).map(([tipo, total]) => `${tipo}: ${total}`).join(" · ");
+    legenda.textContent = lista.length
+      ? `${lista.length} ponto(s) no mapa · ${textoTipos}`
+      : (textoTipos || "Sem ocorrência do aplicativo neste período.");
+  }
   }
   const semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((rotulo) => ({ rotulo, cameras: {} }));
   const nomes = [];
@@ -1193,28 +1278,44 @@ function mapas(tela, dados) {
   }
   const caixaSemana = document.getElementById("legenda-semana");
   if (caixaSemana) caixaSemana.innerHTML = legendaCameras(nomes);
-  const horasGrafico = Array.from({ length: 24 }, (_, hora) => ({
-    rotulo: `${String(hora).padStart(2, "0")}h`,
-    total: linhas.filter((item) => Number(item.hora) === hora).length,
-    cor: "#4c8dff",
-  })).filter((item) => item.total);
+  const nomesNatureza = Object.keys(tipos);
+  const horasEmpilhadas = Array.from({ length: 24 }, (_, hora) => {
+    const cameras = {};
+    linhas.forEach((item) => {
+      if (Number(item.hora) !== hora) return;
+      const natureza = item.natureza || item.tipo || "Ocorrência";
+      const slot = cameras[natureza] || (cameras[natureza] = { Pessoa: 0 });
+      slot.Pessoa += 1;
+    });
+    return { rotulo: `${String(hora).padStart(2, "0")}h`, cameras };
+  }).filter((item) => Object.keys(item.cameras).length);
   const ruasGrafico = contarCampo(linhas, "rua");
   const bairrosGrafico = contarCampo(linhas, "bairro");
   const cidadesGrafico = contarCampo(linhas, "cidade");
   const naturezasGrafico = Object.entries(tipos).map(([nome, total], indice) => ({
     nome, rotulo: nome, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
   }));
-  barrasVerticais(document.getElementById("hora-app"), horasGrafico);
+  const antigoHora = CLASSES.slice();
+  try {
+    CLASSES.splice(0, CLASSES.length, "Pessoa");
+    barrasEmpilhadas(document.getElementById("hora-app"), horasEmpilhadas, { fonte: 12 });
+  } finally {
+    CLASSES.splice(0, CLASSES.length, ...antigoHora);
+  }
   barrasVerticais(document.getElementById("rua-app"), ruasGrafico);
   barrasVerticais(document.getElementById("bairro-app"), bairrosGrafico);
   barrasVerticais(document.getElementById("cidade-app"), cidadesGrafico);
   roscaLivre(document.getElementById("rosca-app"), naturezasGrafico);
+  const caixaHora = document.getElementById("legenda-hora");
+  if (caixaHora) caixaHora.innerHTML = legendaCameras(nomesNatureza);
   const legendas = {
-    "legenda-hora": horasGrafico,
     "legenda-rua": ruasGrafico,
     "legenda-bairro": bairrosGrafico,
     "legenda-cidade": cidadesGrafico,
-    "legenda-natureza": naturezasGrafico,
+    "legenda-natureza": naturezasGrafico.map((item) => ({
+      ...item,
+      rotulo: `${item.rotulo} · ${item.total}`,
+    })),
   };
   Object.entries(legendas).forEach(([id, itens]) => {
     const caixa = document.getElementById(id);
@@ -1271,6 +1372,7 @@ async function ciclo() {
     seloRisco.textContent = aceso ? "!" : "";
   }
   if (window.atualizarStive) window.atualizarStive(dados);
+  atualizarFalaStive(dados);
   if (led) led.className = "led " + (dados.led || "branco");
   const tela = document.getElementById("tela");
   if (tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, dados);
@@ -1283,7 +1385,215 @@ async function ciclo() {
 ciclo();
 setInterval(ciclo, 1000);
 
+function csrfDoBalao() {
+  const form = document.getElementById("form-balao") || document.getElementById("form-stive");
+  const campo = form && form.querySelector("[name=csrf]");
+  return campo ? campo.value : "";
+}
+
+async function confirmarPendencia(botao) {
+  const corpo = new URLSearchParams();
+  corpo.set("csrf", csrfDoBalao());
+  corpo.set("id", botao.dataset.id || "");
+  corpo.set("resposta", botao.dataset.resp || "");
+  corpo.set("tipo", botao.dataset.tipo || "");
+  corpo.set("camera", botao.dataset.camera || "");
+  corpo.set("texto", botao.dataset.texto || "");
+  const resposta = await fetch("/agente/stive/confirmar", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: corpo,
+  });
+  return resposta.json().catch(() => ({}));
+}
+
+const filaFalaStive = [];
+const falasVistas = new Set();
+let falandoStive = false;
+
+function piscarStive() {
+  const avatar = document.querySelector("#abrir-stive");
+  if (!avatar) return;
+  avatar.classList.remove("falando");
+  void avatar.offsetWidth;
+  avatar.classList.add("falando");
+  setTimeout(() => avatar.classList.remove("falando"), 1200);
+}
+
+function mostrarFalaHq(item) {
+  const caixa = document.getElementById("fala-hq");
+  if (!caixa) return;
+  const classe = item.classe || "";
+  caixa.hidden = false;
+  caixa.className = `fala-hq sobe${classe ? ` ${classe}` : ""}`;
+  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${item.html || ""}`;
+  piscarStive();
+}
+
+function enfileirarFalaStive(chave, titulo, texto, opcoes) {
+  if (!chave || !texto || falasVistas.has(chave)) return;
+  falasVistas.add(chave);
+  if (falasVistas.size > 80) {
+    const antigo = falasVistas.values().next().value;
+    falasVistas.delete(antigo);
+  }
+  filaFalaStive.push({
+    chave,
+    titulo: titulo || "Stive",
+    texto,
+    classe: (opcoes && opcoes.classe) || "",
+    html: (opcoes && opcoes.html) || "",
+    duracao: (opcoes && opcoes.duracao) || ((opcoes && opcoes.html) ? 28000 : 7000),
+  });
+  processarFilaFalaStive();
+}
+
+function processarFilaFalaStive() {
+  if (falandoStive) return;
+  const caixa = document.getElementById("fala-hq");
+  if (!caixa) return;
+  const item = filaFalaStive.shift();
+  if (!item) {
+    caixa.hidden = true;
+    caixa.innerHTML = "";
+    return;
+  }
+  falandoStive = true;
+  mostrarFalaHq(item);
+  const terminar = () => {
+    falandoStive = false;
+    processarFilaFalaStive();
+  };
+  if (item.html) {
+    caixa.dataset.travado = "1";
+    return;
+  }
+  caixa.dataset.travado = "";
+  setTimeout(terminar, item.duracao);
+}
+
+function chavesFalaBase(dados) {
+  const chaves = [];
+  const voz = String(dados.voz || "").trim();
+  if (voz) chaves.push(`voz:${voz}`);
+  (dados.informes || []).forEach((item) => {
+    const textoBase = String(item.descricao || item.tipo || "").trim();
+    if (textoBase) chaves.push(`inf:${item.quando}|${textoBase}`);
+  });
+  (dados.app || []).forEach((item) => {
+    chaves.push(`app:${item.quando}|${String(item.titulo || "Ocorrência").trim()}|${item.lugar || ""}`);
+  });
+  (dados.insights || []).forEach((item) => {
+    const texto = String(item.descricao || item.nome || "").trim();
+    if (texto) chaves.push(`ins:${item.quando}|${texto}`);
+  });
+  (dados.pendencias || []).forEach((item) => chaves.push(`pend:${item.id}`));
+  if (dados.match) chaves.push(`match:${dados.match.id}|${dados.match.taxa}|${dados.match.risco}`);
+  return chaves;
+}
+
+function atualizarFalaStive(dados) {
+  if (!document.getElementById("fala-hq")) return;
+  if (!window._stiveBasePronto) {
+    chavesFalaBase(dados).forEach((chave) => falasVistas.add(chave));
+    window._stiveBasePronto = true;
+    const voz = String(dados.voz || "").trim();
+    if (voz) {
+      falasVistas.delete(`voz:${voz}`);
+      enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, {
+        classe: dados.led === "verde" ? "info" : (dados.led === "branco" ? "" : "risco"),
+      });
+    }
+    return;
+  }
+  const pendencias = dados.pendencias || [];
+  if (pendencias[0]) {
+    const item = pendencias[0];
+    enfileirarFalaStive(
+      `pend:${item.id}`,
+      "O que está acontecendo?",
+      item.texto || "Confirma esta situação?",
+      {
+        classe: "pergunta",
+        html: `<div class="pendencia"><span>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Sim</button>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Não</button>
+        </span></div>`,
+      },
+    );
+  }
+  const match = dados.match;
+  if (match) {
+    const risco = !!match.risco;
+    enfileirarFalaStive(
+      `match:${match.id}|${match.taxa}|${match.risco}`,
+      risco ? "Match RF/LPR" : "Presença informativa",
+      risco
+        ? `${match.nome || match.id} na ${match.camera || "câmera"}. ${match.narracao_ia || match.narracao || "Pessoa de risco na área."}`
+        : `${match.nome || match.id} na ${match.camera || "câmera"}. Morador ou pessoa sem classificação de risco.`,
+      { classe: risco ? "risco" : "info" },
+    );
+  }
+  const voz = String(dados.voz || "").trim();
+  if (voz) enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, { classe: dados.led === "verde" ? "info" : (dados.led === "branco" ? "" : "risco") });
+  (dados.informes || []).slice(0, 4).forEach((item) => {
+    const textoBase = String(item.descricao || item.tipo || "").trim();
+    if (!textoBase) return;
+    const baixo = textoBase.toLowerCase();
+    const camera = item.camera ? ` na ${item.camera}` : "";
+    let fala = `Atenção a ${textoBase}${camera}.`;
+    if (/e-?mail|enviad/.test(baixo) || String(item.origem || "").toLowerCase().includes("email")) {
+      fala = /disparo|tiro|arma/.test(baixo)
+        ? `Enviei um alerta para o seu e-mail sobre este disparo${camera}.`
+        : `Enviei um alerta para o seu e-mail${camera}: ${textoBase}`;
+    } else if (/disparo|tiro/.test(baixo)) {
+      fala = `Atenção a disparo${camera}. ${textoBase}`;
+    }
+    enfileirarFalaStive(`inf:${item.quando}|${textoBase}`, "Informe", fala, { classe: "risco" });
+  });
+  (dados.app || []).slice(0, 3).forEach((item) => {
+    const titulo = String(item.titulo || "Ocorrência").trim();
+    enfileirarFalaStive(
+      `app:${item.quando}|${titulo}|${item.lugar || ""}`,
+      "Aplicativo",
+      `Ocorrência nova lançada no app: ${titulo}${item.lugar ? ` em ${item.lugar}` : ""}.`,
+      { classe: "info" },
+    );
+  });
+  (dados.insights || []).slice(0, 3).forEach((item) => {
+    const texto = String(item.descricao || item.nome || "").trim();
+    if (!texto) return;
+    enfileirarFalaStive(`ins:${item.quando}|${texto}`, "Insight", texto, { classe: "info" });
+  });
+}
+
+function iniciarFalaStive() {
+  if (document.body.dataset.falaPronta) return;
+  document.body.dataset.falaPronta = "1";
+  const caixa = document.getElementById("fala-hq");
+  if (!caixa) return;
+  caixa.addEventListener("click", async (evento) => {
+    const botao = evento.target.closest("button[data-resp]");
+    if (!botao) return;
+    const dados = await confirmarPendencia(botao);
+    const chat = document.getElementById("chat-balao") || document.getElementById("chat-stive");
+    if (chat) {
+      const dele = document.createElement("p");
+      dele.className = "bolha stive";
+      dele.textContent = dados.fala || "Confirmação registrada.";
+      chat.appendChild(dele);
+      chat.scrollTop = chat.scrollHeight;
+    }
+    falandoStive = false;
+    caixa.dataset.travado = "";
+    caixa.hidden = true;
+    caixa.innerHTML = "";
+    processarFilaFalaStive();
+  });
+}
+
 function iniciarBalao() {
+  iniciarFalaStive();
   const balao = document.getElementById("balao-stive");
   if (!balao || balao.dataset.pronto) return;
   balao.dataset.pronto = "1";
@@ -1364,4 +1674,5 @@ function iniciarBalao() {
     chat.scrollTop = chat.scrollHeight;
   });
 }
+iniciarFalaStive();
 iniciarBalao();

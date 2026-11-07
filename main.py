@@ -1756,7 +1756,7 @@ def _publicar_cameras(portal, estado, parar):
 _FLUXO = {}
 _SERIE = deque(maxlen=90)
 _NARRACAO = {"chave": "", "texto": "", "pedido": ""}
-_ORDEM_LED = {"branco": 0, "amarelo": 1, "vermelho": 2, "preto": 3}
+_ORDEM_LED = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
 
 
 _FRASES = {
@@ -1861,7 +1861,7 @@ def _frase_camera(nome, visao, audio_suspeito, audio_tipo):
     return "Existe " + ", ".join(partes) + f" na {nome}. Atenção!"
 
 
-def _risco_camera(visao, audio_suspeito, tem_interesse):
+def _risco_camera(visao, audio_suspeito, tem_interesse, interesse_risco=True):
     acoes = {
         item.get("classe") or item.get("nome"): int(item.get("agora") or 0)
         for item in visao.get("comportamentos") or []
@@ -1872,10 +1872,14 @@ def _risco_camera(visao, audio_suspeito, tem_interesse):
     briga = acoes.get("Possivel_Briga", 0) > 0
     if deitado and interacao and audio_suspeito:
         return "preto"
-    if tem_interesse or queda or briga:
+    if queda or briga:
+        return "vermelho"
+    if tem_interesse and interesse_risco:
         return "vermelho"
     if deitado or interacao or audio_suspeito:
         return "amarelo"
+    if tem_interesse:
+        return "verde"
     return "branco"
 
 
@@ -2049,8 +2053,14 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         audio = item.get("audio")
         audio_on = bool(audio and time.time() <= float(getattr(audio, "suspeito_ate", 0) or 0))
         audio_tipo = str(getattr(audio, "suspeito_tipo", "") or "") if audio_on else ""
-        risco = _risco_camera(visao, audio_on, bool(match))
-        if _ORDEM_LED[risco] > _ORDEM_LED[led]:
+        interesse_risco = True
+        if match and match.get("tipo") == "FACE":
+            pessoa_match = pessoas.get(str(match.get("id") or "").upper()) or {}
+            interesse_risco = cadastro.pessoa_de_risco(pessoa_match)
+        elif match and match.get("tipo") == "PLACA":
+            interesse_risco = True
+        risco = _risco_camera(visao, audio_on, bool(match), interesse_risco)
+        if _ORDEM_LED.get(risco, 0) > _ORDEM_LED.get(led, 0):
             led = risco
         slug = slug_camera(item["nome"])
         if risco == "preto":
@@ -2169,7 +2179,8 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "narracao_ia": narracao_ia,
         "historico": historico,
         "memorias": _limpos(pacote.get("memorias"), ("quando", "texto")),
-        "informes": _limpos(pacote.get("enviados"), ("quando", "tipo", "descricao")),
+        "informes": _limpos(pacote.get("enviados"), ("quando", "tipo", "descricao", "camera", "origem")),
+        "insights": _limpos(pacote.get("insights"), ("quando", "tipo", "nome", "descricao")),
         "app": _limpos(pacote.get("app"), ("quando", "titulo", "lugar", "detalhe")),
         "resumo": str(pacote.get("resumo") or ""),
         "assessoramento": str(pacote.get("assessoramento") or ""),

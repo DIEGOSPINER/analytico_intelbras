@@ -7,6 +7,7 @@ página leve: o quadro já publicado troca no lugar, e recarregar volta na hora.
 
 from __future__ import annotations
 
+import csv
 import hmac
 import json
 import threading
@@ -107,6 +108,7 @@ a.texto { color: var(--ciano); }
 .rostos img { width: 100%; height: 110px; object-fit: cover; }
 .led { position: fixed; top: 16px; right: 22px; z-index: 30; width: 48px; height: 48px; border-radius: 50%; }
 .led.branco { background: #f4f7fb; box-shadow: 0 0 28px #fff; animation: pisca 1.4s infinite; }
+.led.verde { background: #3ddc97; box-shadow: 0 0 28px #3ddc97; animation: pisca 1.2s infinite; }
 .led.amarelo { background: #ffb020; box-shadow: 0 0 28px #ffb020; animation: pisca 0.9s infinite; }
 .led.vermelho { background: #ff3b3b; box-shadow: 0 0 32px #ff3b3b; animation: pisca 0.45s infinite; }
 .led.preto { background: #05070c; box-shadow: 0 0 0 6px #ff3b3b, 0 0 32px #ff3b3b; animation: pisca 0.28s infinite; }
@@ -134,10 +136,12 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .termo p { margin: 6px 0 0; font-size: 11px; }
 .voz { margin: 0; text-align: center; font-size: 28px; font-weight: 600; line-height: 1.35; }
 .voz.branco { color: #f4f7fb; }
+.voz.verde { color: #3ddc97; }
 .voz.amarelo { color: #ffb020; }
 .voz.vermelho { color: #ff5a5a; }
 .voz.preto { color: #111318; background: #f4f7fb; border-radius: 12px; padding: 12px; }
 .informe.branco { color: #f4f7fb; }
+.informe.verde { color: #3ddc97; }
 .informe.amarelo { color: #ffb020; }
 .informe.vermelho { color: #ff5a5a; }
 .informe.preto { color: #111318; background: #f4f7fb; border-radius: 8px; padding: 6px 8px; }
@@ -181,13 +185,36 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .pendencia { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
 .pendencia button { background: transparent; color: var(--texto); border: 1px solid var(--linha); }
 .avatar-stive { object-position: center 18%; }
-.balao-stive { position: fixed; right: 22px; bottom: 22px; z-index: 30; width: 320px; display: flex; flex-direction: column-reverse; align-items: flex-end; }
-.balao-stive.fechado { width: 72px; height: 72px; }
-.puxador-stive { width: 72px; height: 72px; border-radius: 50%; padding: 0; overflow: hidden; border: 2px solid #4c8dff; background: #08131f; cursor: grab; }
+.balao-stive { position: fixed; right: 18px; bottom: 18px; z-index: 34; width: 400px; display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 10px; }
+.balao-stive.fechado { width: auto; }
+.grupo-puxador { position: relative; display: flex; flex-direction: column; align-items: center; }
+.puxador-stive { width: 124px; height: 124px; border-radius: 50%; padding: 0; overflow: hidden; border: 3px solid #4c8dff; background: #08131f; cursor: grab; flex: 0 0 auto; }
 .puxador-stive img { width: 100%; height: 100%; object-fit: cover; object-position: center 18%; display: block; }
+.puxador-stive.falando { animation: pisca-stive 1.15s ease; }
+@keyframes pisca-stive {
+  0%, 100% { opacity: 1; filter: brightness(1); }
+  12%, 45%, 78% { opacity: .2; filter: brightness(1.35); }
+  28%, 61%, 92% { opacity: 1; filter: brightness(1); }
+}
+.nome-balao-stive { display: block; margin-top: 6px; color: #f4f7fb; font-size: 13px; font-weight: 650; text-align: center; max-width: 140px; line-height: 1.25; text-shadow: 0 1px 8px #041018; }
 .balao-stive.fechado form { display: none; }
-.balao-stive form { margin-top: 8px; background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px; padding: 12px; }
-.chat-balao { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.balao-stive form { width: 100%; background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); }
+.chat-balao { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.fala-hq { position: absolute; right: calc(100% + 8px); bottom: 72px; width: min(280px, 62vw); background: #fff; color: #141820; border-radius: 22px; padding: 12px 14px 14px; line-height: 1.35; font-size: 14px; font-weight: 550; box-shadow: 0 14px 32px rgba(0,0,0,.35); z-index: 2; animation: sobe .55s ease; }
+.fala-hq::after { content: ""; position: absolute; right: -12px; bottom: 28px; width: 0; height: 0; border: 12px solid transparent; border-left-color: #fff; border-right: 0; }
+.fala-hq strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #4c6fff; margin-bottom: 4px; }
+.fala-hq .pendencia { margin-top: 10px; }
+.fala-hq .pendencia button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; }
+.fala-hq.pergunta { border: 2px solid #4c8dff; }
+.fala-hq.risco { border: 2px solid #ff5c7a; }
+.fala-hq.info { border: 2px solid #3ddc97; }
+.stage-stive { position: relative; display: inline-block; }
+.stage-stive .fala-hq { right: auto; left: calc(100% + 10px); bottom: 120px; }
+.stage-stive .fala-hq::after { right: auto; left: -12px; border-left-color: transparent; border-right-color: #fff; }
+.luz-info { width: 14px; height: 14px; border-radius: 50%; background: #3ddc97; box-shadow: 0 0 12px #3ddc97; animation: pisca .8s infinite; display: inline-block; }
+.caixa-rf { display: grid; gap: 8px; margin: 10px 0 14px; padding: 12px; border: 1px solid var(--linha); border-radius: 14px; background: rgba(8,12,24,.35); }
+.caixa-rf select { min-height: 110px; }
+.caixa-rf.oculta { display: none; }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
   .cartoes, .coluna, .grade, .grade.tres, .stive { grid-template-columns: 1fr; }
@@ -398,15 +425,19 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
     if csrf and ativo != "/painel/stive":
         balao = (
             "<div id='balao-stive' class='balao-stive fechado'>"
-            "<button type='button' class='puxador-stive' id='abrir-stive' title='Stive'>"
-            "<img alt='Stive' src='/agente/stive.png'></button>"
             "<form id='form-balao'>"
             f"<input type='hidden' name='csrf' value='{_html_seguro(csrf)}'>"
             "<div class='chat-balao' id='chat-balao'></div>"
             "<label>Mensagem<input name='pergunta' autocomplete='off' placeholder='Fale com o Stive'></label>"
             "<button type='submit'>Enviar</button>"
             "<a class='texto' href='/painel/stive'>Abrir o Agente Stive</a>"
-            "</form></div>"
+            "</form>"
+            "<div class='grupo-puxador' id='grupo-stive'>"
+            "<div id='fala-hq' class='fala-hq' hidden></div>"
+            "<button type='button' class='puxador-stive' id='abrir-stive' title='Fale com o Agente Stive'>"
+            "<img alt='Stive' src='/agente/stive.png'></button>"
+            "<span class='nome-balao-stive'>Fale com o Agente Stive</span>"
+            "</div></div>"
         )
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -602,7 +633,10 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
     miolo = f"""<main>
 <div class="stive">
 <article class="cartao">
-<img class="avatar-stive" alt="Stive" src="/agente/stive.png" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'avatar-stive',textContent:'S'}}))">
+<div class="stage-stive" id="grupo-stive">
+<div id="fala-hq" class="fala-hq" hidden></div>
+<img class="avatar-stive" id="abrir-stive" alt="Stive" src="/agente/stive.png" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'avatar-stive',textContent:'S'}}))">
+</div>
 <h2>Stive</h2>
 <p>Agente de segurança. Pergunte sobre as informações do seu ambiente ou informe uma ocorrência.</p>
 <div id="pendencias-stive"></div>
@@ -1044,6 +1078,42 @@ def _pessoas_da_conta(documento: str) -> list[dict]:
     ]
 
 
+def _rastros_rf_lpr(nomes: dict) -> list[dict]:
+    caminho = Path("historico_faces.csv")
+    if not caminho.exists() or not nomes:
+        return []
+    try:
+        locais = {str(item.get("nome") or "").strip().lower(): item for item in cadastro.locais_cameras()}
+    except Exception:
+        locais = {}
+    rastros = []
+    try:
+        with caminho.open(encoding="utf-8-sig", newline="") as arquivo:
+            leitor = csv.DictReader(arquivo, delimiter=";")
+            for linha in leitor:
+                ident = str(linha.get("Face_ID") or "").strip().upper()
+                if ident not in nomes:
+                    continue
+                camera = str(linha.get("Camera") or "").strip()
+                local = locais.get(camera.lower()) or {}
+                lat, lon = local.get("latitude"), local.get("longitude")
+                if lat is None or lon is None:
+                    continue
+                rastros.append({
+                    "id": ident,
+                    "nome": nomes.get(ident) or ident,
+                    "camera": camera,
+                    "quando": f"{linha.get('Data') or ''} {linha.get('Hora') or ''}".strip(),
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "foto": f"/rosto/{ident}.jpg",
+                    "valor": 1,
+                })
+    except OSError:
+        return []
+    return rastros[-240:]
+
+
 def _dados_json(portal) -> dict:
     from identidade import contar_passagens_faces
 
@@ -1068,6 +1138,17 @@ def _dados_json(portal) -> dict:
         match = dict(match)
         match["passagens"] = int(contagem.get(str(match.get("id") or "").upper(), 0))
         resumo["match"] = match
+    pessoas = [
+        {
+            "id": ident,
+            "nome": nomes.get(ident, ""),
+            "classe": classes.get(ident, ""),
+            "foto": f"/rosto/{ident}.jpg",
+            "total": contagem.get(ident, 0),
+        }
+        for ident in nomes
+    ]
+    pessoas.sort(key=lambda item: (-int(item.get("total") or 0), item.get("nome") or item.get("id")))
     resumo.update({
         "itens": int(resumo.get("itens") or 0),
         "faces": len(linhas),
@@ -1082,6 +1163,8 @@ def _dados_json(portal) -> dict:
             }
             for ident, total in linhas[:12]
         ],
+        "pessoas_interesse": pessoas,
+        "rastros_rf": _rastros_rf_lpr(nomes),
     })
     return resumo
 
