@@ -108,16 +108,103 @@ def caminho_avatar() -> Path | None:
 
 def _ler() -> dict:
     if not ARQUIVO.exists():
-        return {"respostas": []}
+        return {"respostas": [], "reacoes": []}
     try:
         bruto = json.loads(ARQUIVO.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"respostas": []}
-    return bruto if isinstance(bruto, dict) else {"respostas": []}
+        return {"respostas": [], "reacoes": []}
+    if not isinstance(bruto, dict):
+        return {"respostas": [], "reacoes": []}
+    bruto.setdefault("respostas", [])
+    bruto.setdefault("reacoes", [])
+    return bruto
 
 
 def _gravar(bruto: dict):
     ARQUIVO.write_text(json.dumps(bruto, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def registrar_reacao(documento: str, chave: str, titulo: str, texto: str, nota: int, tipo: str = "") -> dict:
+    """Guarda like (+1), dislike (-1) ou fechamento (0) das falas do Stive."""
+    try:
+        valor = int(nota)
+    except (TypeError, ValueError):
+        valor = 0
+    if valor not in (-1, 0, 1):
+        valor = 0
+    with _TRAVA:
+        bruto = _ler()
+        bruto.setdefault("reacoes", []).append({
+            "documento": str(documento or ""),
+            "chave": str(chave or "")[:120],
+            "titulo": str(titulo or "")[:80],
+            "texto": str(texto or "")[:240],
+            "tipo": str(tipo or "")[:40],
+            "nota": valor,
+            "quando": datetime.now().isoformat(timespec="seconds"),
+        })
+        bruto["reacoes"] = bruto["reacoes"][-1000:]
+        _gravar(bruto)
+    return {"ok": True, "nota": valor}
+
+
+def _taxa_reacoes(itens: list[dict]) -> dict:
+    positivos = sum(1 for item in itens if int(item.get("nota") or 0) == 1)
+    negativos = sum(1 for item in itens if int(item.get("nota") or 0) == -1)
+    avaliados = positivos + negativos
+    percentual = round(100 * positivos / avaliados, 1) if avaliados else 0.0
+    return {
+        "positivos": positivos,
+        "negativos": negativos,
+        "avaliados": avaliados,
+        "percentual": percentual,
+    }
+
+
+def resumo_satisfacao(documento: str = "") -> dict:
+    """Percentual de likes positivos no mês, no ano e no total."""
+    agora = datetime.now()
+    mes_chave = agora.strftime("%Y-%m")
+    ano_chave = agora.strftime("%Y")
+    with _TRAVA:
+        reacoes = list((_ler().get("reacoes") or []))
+    if documento:
+        reacoes = [item for item in reacoes if str(item.get("documento") or "") == str(documento)]
+    do_mes = [item for item in reacoes if str(item.get("quando") or "").startswith(mes_chave)]
+    do_ano = [item for item in reacoes if str(item.get("quando") or "").startswith(ano_chave)]
+    return {
+        "mes": _taxa_reacoes(do_mes),
+        "ano": _taxa_reacoes(do_ano),
+        "total": _taxa_reacoes(reacoes),
+        "serie_mes": _serie_meses(reacoes),
+    }
+
+
+def _serie_meses(reacoes: list[dict]) -> list[dict]:
+    totais = {}
+    for item in reacoes:
+        nota = int(item.get("nota") or 0)
+        if nota not in (-1, 1):
+            continue
+        chave = str(item.get("quando") or "")[:7]
+        if len(chave) < 7:
+            continue
+        slot = totais.setdefault(chave, {"positivos": 0, "negativos": 0})
+        if nota == 1:
+            slot["positivos"] += 1
+        else:
+            slot["negativos"] += 1
+    saida = []
+    for chave in sorted(totais)[-12:]:
+        slot = totais[chave]
+        avaliados = slot["positivos"] + slot["negativos"]
+        saida.append({
+            "rotulo": chave,
+            "positivos": slot["positivos"],
+            "negativos": slot["negativos"],
+            "percentual": round(100 * slot["positivos"] / avaliados, 1) if avaliados else 0.0,
+        })
+    return saida
 
 
 def _guardar(documento: str, pergunta: str, fala: str):

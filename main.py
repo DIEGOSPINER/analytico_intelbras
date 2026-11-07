@@ -1826,10 +1826,11 @@ def _pendencias_vivas(cameras):
 def _montar_voz(cameras, match, narracao, narracao_ia):
     partes = []
     for camera in cameras or []:
-        if camera.get("risco") not in (None, "", "branco") and camera.get("frase"):
+        risco = camera.get("risco") or "branco"
+        if risco in ("amarelo", "vermelho", "preto") and camera.get("frase"):
             partes.append(camera["frase"])
         partes.extend(camera.get("permanencias") or [])
-        if camera.get("risco") in ("vermelho", "preto") and camera.get("rua"):
+        if risco in ("vermelho", "preto") and camera.get("rua"):
             partes.append(f"O ponto é {camera['rua']}, na {camera['nome']}.")
     if match and match.get("tipo") == "FACE":
         quem = match.get("nome") or match.get("id") or "uma pessoa"
@@ -1902,6 +1903,30 @@ def _fluxo_pessoa(nome, passagens):
 
 
 _TRILHAS = {}
+_INTERVALO_AVISO_PARADO = 600
+
+
+def _formatar_duracao(segundos) -> str:
+    total = max(0, int(segundos))
+    if total < 60:
+        return f"{total} segundo{'s' if total != 1 else ''}"
+    dias, resto = divmod(total, 86400)
+    horas, resto = divmod(resto, 3600)
+    minutos, segs = divmod(resto, 60)
+    if dias:
+        partes = [f"{dias} dia{'s' if dias != 1 else ''}"]
+        if horas:
+            partes.append(f"{horas} hora{'s' if horas != 1 else ''}")
+        return " e ".join(partes)
+    if horas:
+        partes = [f"{horas} hora{'s' if horas != 1 else ''}"]
+        if minutos:
+            partes.append(f"{minutos} minuto{'s' if minutos != 1 else ''}")
+        return " e ".join(partes)
+    texto = f"{minutos} minuto{'s' if minutos != 1 else ''}"
+    if segs:
+        texto += f" e {segs} segundo{'s' if segs != 1 else ''}"
+    return texto
 
 
 def _permanencias(nome, centros_pessoa, centros_veiculo):
@@ -1929,7 +1954,7 @@ def _permanencias(nome, centros_pessoa, centros_veiculo):
                     melhor = indice
                     melhor_dist = dist
             if melhor is None:
-                trilhas.append({"x": x, "y": y, "inicio": agora, "parado": agora, "visto": agora})
+                trilhas.append({"x": x, "y": y, "inicio": agora, "parado": agora, "visto": agora, "avisou": 0.0})
                 continue
             usados.add(melhor)
             trilha = trilhas[melhor]
@@ -1938,15 +1963,22 @@ def _permanencias(nome, centros_pessoa, centros_veiculo):
             else:
                 trilha["x"], trilha["y"] = x, y
                 trilha["parado"] = agora
+                trilha["avisou"] = 0.0
             trilha["visto"] = agora
             na_cena = agora - trilha["inicio"]
             parado = agora - trilha["parado"]
             if parado >= parado_seg:
-                frases.append(
-                    f"{sujeito} está parado no mesmo lugar há {int(parado)} segundos na {nome}."
-                )
+                ultima = float(trilha.get("avisou") or 0)
+                if ultima <= 0 or agora - ultima >= _INTERVALO_AVISO_PARADO:
+                    trilha["avisou"] = agora
+                    frases.append(
+                        f"{sujeito} está parado no mesmo lugar há {_formatar_duracao(parado)} na {nome}."
+                    )
             elif na_cena >= cena_seg:
-                frases.append(f"{sujeito} permanece na {nome} há {int(na_cena)} segundos.")
+                ultima = float(trilha.get("avisou") or 0)
+                if ultima <= 0 or agora - ultima >= _INTERVALO_AVISO_PARADO:
+                    trilha["avisou"] = agora
+                    frases.append(f"{sujeito} permanece na {nome} há {_formatar_duracao(na_cena)}.")
         _TRILHAS[chave] = [item for item in trilhas if agora - item["visto"] <= 3]
     return frases
 

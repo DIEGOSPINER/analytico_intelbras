@@ -175,13 +175,24 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .selo { min-width: 18px; height: 18px; margin-left: auto; border-radius: 99px; background: #ff3b3b; color: white;
   font-style: normal; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
 .stive { display: grid; grid-template-columns: 240px minmax(0, 1fr) minmax(240px, .8fr); gap: 22px; align-items: start; }
+.stive-pagina { display: grid; grid-template-rows: auto 1fr; gap: 18px; min-height: calc(100vh - 110px); }
+.stive-topo { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 22px; align-items: start; }
+.stive-chat-area { display: flex; flex-direction: column; justify-content: flex-end; width: min(760px, 100%); margin: 0 auto; gap: 12px; }
 .avatar-stive { width: 180px; height: 220px; border-radius: 24px; object-fit: cover; background: linear-gradient(160deg, #4c8dff, #3ee0ff);
   display: grid; place-items: center; color: #041018; font-size: 72px; font-weight: 700; }
 .chat { display: flex; flex-direction: column; gap: 10px; min-height: 360px; max-height: 62vh; overflow: auto; }
+.stive-chat-area .chat { min-height: 280px; max-height: 52vh; justify-content: flex-end; }
+.stive-chat-area form { margin: 0; }
 .bolha { max-width: 92%; padding: 12px 14px; border-radius: 16px; line-height: 1.4; }
 .bolha.stive { background: rgba(76,141,255,.16); }
 .bolha.eu { margin-left: auto; background: rgba(255,255,255,.06); }
 .quadro-stive { min-height: 220px; }
+.acoes-fala { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.acoes-fala button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; padding: 8px 12px; border-radius: 10px; font-size: 13px; }
+.acoes-fala button[data-reacao="-1"] { background: #ffecec; border-color: #ffb3b3; }
+.acoes-fala button[data-fechar] { background: #f4f7fb; border-color: #d5deea; }
+.satisfacao-stive { margin-top: 28px; }
+.satisfacao-stive .cartoes { margin-top: 12px; }
 .pendencia { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
 .pendencia button { background: transparent; color: var(--texto); border: 1px solid var(--linha); }
 .avatar-stive { object-position: center 18%; }
@@ -217,7 +228,7 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .caixa-rf.oculta { display: none; }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
-  .cartoes, .coluna, .grade, .grade.tres, .stive { grid-template-columns: 1fr; }
+  .cartoes, .coluna, .grade, .grade.tres, .stive, .stive-topo { grid-template-columns: 1fr; }
   nav a .selo { display: grid; }
 }
 """
@@ -631,7 +642,8 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 </script>
 """
     miolo = f"""<main>
-<div class="stive">
+<div class="stive-pagina">
+<section class="stive-topo">
 <article class="cartao">
 <div class="stage-stive" id="grupo-stive">
 <div id="fala-hq" class="fala-hq" hidden></div>
@@ -641,15 +653,16 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 <p>Agente de segurança. Pergunte sobre as informações do seu ambiente ou informe uma ocorrência.</p>
 <div id="pendencias-stive"></div>
 </article>
-<article class="cartao">
+<article class="cartao quadro-stive" id="quadro-stive"><h2>Quadro do Stive</h2><p>O que você pedir na conversa aparece aqui.</p></article>
+</section>
+<section class="stive-chat-area cartao">
 <div class="chat" id="chat-stive"><p class="bolha stive">Pode perguntar quantas pessoas passaram, o que o aplicativo registrou, ou me contar uma ocorrência.</p></div>
 <form id="form-stive">
 {_csrf(sessao)}
 <label>Mensagem<input name="pergunta" autocomplete="off" placeholder="Fale com o Stive"></label>
 <button type="submit">Enviar</button>
 </form>
-</article>
-<article class="cartao quadro-stive" id="quadro-stive"><h2>Quadro do Stive</h2><p>O que você pedir na conversa aparece aqui.</p></article>
+</section>
 </div>
 </main>
 {script}"""
@@ -819,6 +832,13 @@ def _pagina_criar(aviso: str = "") -> str:
 def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False) -> str:
     novo = ""
     if sessao.get("perfil") == "administrador":
+        from agente.stive import resumo_satisfacao
+
+        sat = resumo_satisfacao(sessao.get("documento") or "")
+        mes = sat.get("mes") or {}
+        ano = sat.get("ano") or {}
+        total = sat.get("total") or {}
+        serie = sat.get("serie_mes") or []
         novo = f"""<h2>Novo cliente</h2>
 <p>Ao criar, o cliente recebe no e-mail o login e uma senha provisória, que deve ser trocada no primeiro acesso.</p>
 <form method="post" action="/cadastro/cliente/novo">
@@ -827,7 +847,29 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
 {_campo("CPF ou CNPJ", "documento_novo", obrigatorio=True)}
 {_campo("E-mail", "email_novo", tipo="email", obrigatorio=True)}
 <button type="submit">{_svg(_ICONES["mais"])}Criar cliente e enviar acesso</button>
-</form>"""
+</form>
+<section class="satisfacao-stive">
+<h2>Satisfação com o Stive</h2>
+<p>Reações Legal e Não legal nas falas do agente, para medir se o conteúdo agrada.</p>
+<div class="cartoes">
+<article class="cartao"><span>Mês</span><strong>{mes.get('percentual', 0)}%</strong><p>{mes.get('positivos', 0)} legal · {mes.get('negativos', 0)} não legal</p></article>
+<article class="cartao"><span>Ano</span><strong>{ano.get('percentual', 0)}%</strong><p>{ano.get('positivos', 0)} legal · {ano.get('negativos', 0)} não legal</p></article>
+<article class="cartao"><span>Total</span><strong>{total.get('percentual', 0)}%</strong><p>{total.get('positivos', 0)} legal · {total.get('negativos', 0)} não legal</p></article>
+</div>
+<article class="cartao"><h2>Positivos por mês</h2><canvas class="grafico" id="grafico-satisfacao" width="640" height="280"></canvas></article>
+<script>
+window.addEventListener("load", () => {{
+  const serie = {json.dumps(serie, ensure_ascii=False)};
+  const canvas = document.getElementById("grafico-satisfacao");
+  if (!canvas || typeof barrasVerticais !== "function") return;
+  barrasVerticais(canvas, serie.map((item) => ({{
+    rotulo: item.rotulo,
+    total: item.percentual,
+    cor: item.percentual >= 60 ? "#3ddc97" : (item.percentual >= 40 ? "#ffb020" : "#ff5c7a"),
+  }})));
+}});
+</script>
+</section>"""
     miolo = f"""<main>
 <h1>Cliente</h1>
 <p>Estes dados são da conta do CPF ou CNPJ com o qual você entrou.</p>
@@ -1111,6 +1153,7 @@ def _rastros_rf_lpr(nomes: dict) -> list[dict]:
                 })
     except OSError:
         return []
+    rastros.sort(key=lambda item: str(item.get("quando") or ""))
     return rastros[-240:]
 
 
@@ -1260,6 +1303,9 @@ def _tratador(portal: Portal):
                 return
             if caminho == "/agente/stive/confirmar":
                 self._confirmar_stive(sessao, campos)
+                return
+            if caminho == "/agente/stive/reacao":
+                self._reacao_stive(sessao, campos)
                 return
             self.send_error(404)
 
@@ -1663,6 +1709,23 @@ def _tratador(portal: Portal):
                 self._json({"fala": str(exc)})
                 return
             self._json({"fala": fala})
+
+        def _reacao_stive(self, sessao: dict, campos: dict):
+            from agente.stive import registrar_reacao
+
+            try:
+                saida = registrar_reacao(
+                    sessao.get("documento") or "",
+                    _um(campos, "chave"),
+                    _um(campos, "titulo"),
+                    _um(campos, "texto"),
+                    _um(campos, "nota") or "0",
+                    _um(campos, "tipo"),
+                )
+            except Exception:
+                self._json({"ok": False})
+                return
+            self._json(saida)
 
         def _tile(self, zoom: int, x: int, y: int):
             from mapa import _baixar

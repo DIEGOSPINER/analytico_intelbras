@@ -17,6 +17,58 @@ let estadoFolium = null;
 mapaFolium.eachLayer((camada) => {{
   if (camada._heat) mapaFolium.removeLayer(camada);
 }});
+function rotuloQuandoFolium(quando) {{
+  const texto = String(quando || "").trim();
+  const achado = texto.match(/(\\d{{4}})-(\\d{{2}})-(\\d{{2}})[ T](\\d{{2}}):(\\d{{2}})/);
+  if (achado) return achado[3] + "/" + achado[2] + " " + achado[4] + ":" + achado[5];
+  return texto.slice(0, 16);
+}}
+function setaFolium(a, b, cor) {{
+  const meio = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const angulo = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+  const icone = L.divIcon({{
+    className: "seta-rf",
+    html: `<div style="width:18px;height:18px;display:grid;place-items:center;transform:rotate(${{angulo}}deg)"><div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:14px solid ${{cor || "#4c8dff"}};filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))"></div></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  }});
+  L.marker(meio, {{ icon: icone, interactive: false }}).addTo(grupoFolium);
+}}
+function desenharRastroRf(pontos) {{
+  const porPessoa = {{}};
+  pontos.forEach((ponto) => {{
+    const chave = String(ponto.id || ponto.nome || "pessoa");
+    (porPessoa[chave] = porPessoa[chave] || []).push(ponto);
+  }});
+  Object.values(porPessoa).forEach((lista) => {{
+    lista.sort((a, b) => String(a.quando || "").localeCompare(String(b.quando || "")));
+    const cor = lista[0].cor || "#4c8dff";
+    const latlngs = lista.map((ponto) => [ponto.lat, ponto.lon]);
+    if (latlngs.length >= 2) {{
+      L.polyline(latlngs, {{ color: cor, weight: 4, opacity: 0.88 }}).addTo(grupoFolium);
+      for (let i = 0; i < latlngs.length - 1; i += 1) setaFolium(latlngs[i], latlngs[i + 1], cor);
+    }}
+    lista.forEach((ponto, indice) => {{
+      const foto = String(ponto.foto || "").replace(/"/g, "");
+      const nome = String(ponto.nome || ponto.id || "").replace(/</g, "");
+      const quando = rotuloQuandoFolium(ponto.quando);
+      const camera = String(ponto.camera || "").replace(/</g, "");
+      const icone = L.divIcon({{
+        className: "marcador-rf",
+        html: `<div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+          <div style="width:46px;height:46px;border-radius:50%;overflow:hidden;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.35);background:#101624"><img alt="" src="${{foto}}" style="width:100%;height:100%;object-fit:cover"></div>
+          <span style="padding:3px 7px;border-radius:8px;background:#fff;color:#141820;font:700 11px Segoe UI,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.28);white-space:nowrap">${{quando || (indice + 1)}}</span>
+        </div>`,
+        iconSize: [120, 72],
+        iconAnchor: [60, 28],
+      }});
+      const marca = L.marker([ponto.lat, ponto.lon], {{ icon: icone }});
+      const texto = [nome, camera, quando].filter(Boolean).join(" · ");
+      if (texto) marca.bindTooltip(texto, {{ direction: "top" }});
+      marca.addTo(grupoFolium);
+    }});
+  }});
+}}
 function desenharFolium(mensagem) {{
   estadoFolium = mensagem;
   grupoFolium.clearLayers();
@@ -39,20 +91,7 @@ function desenharFolium(mensagem) {{
     }}).addTo(mapaFolium);
   }}
   if (desenho === "rf" || desenho === "fotos") {{
-    pontos.forEach((ponto) => {{
-      const foto = String(ponto.foto || "").replace(/"/g, "");
-      const nome = String(ponto.nome || ponto.id || "").replace(/</g, "");
-      const icone = L.divIcon({{
-        className: "marcador-rf",
-        html: `<div style="width:44px;height:44px;border-radius:50%;overflow:hidden;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.35);background:#101624"><img alt="" src="${{foto}}" style="width:100%;height:100%;object-fit:cover"></div>`,
-        iconSize: [44, 44],
-        iconAnchor: [22, 22],
-      }});
-      const marca = L.marker([ponto.lat, ponto.lon], {{ icon: icone }});
-      const texto = [nome, ponto.camera || "", ponto.quando || ""].filter(Boolean).join(" · ");
-      if (texto) marca.bindTooltip(texto, {{ direction: "top" }});
-      marca.addTo(grupoFolium);
-    }});
+    desenharRastroRf(pontos);
   }} else if (desenho === "pontos" || mensagem.fixo) {{
     const maior = Math.max(1, ...pontos.map((ponto) => Number(ponto.valor) || 0));
     pontos.forEach((ponto) => {{
@@ -70,7 +109,7 @@ function desenharFolium(mensagem) {{
       marca.addTo(grupoFolium);
     }});
   }}
-  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "")).join("|");
+  const chave = pontos.map((ponto) => ponto.lat + "," + ponto.lon + "," + (ponto.id || "") + "," + (ponto.quando || "")).join("|");
   if (!ajustouFolium || mapaFolium._ultimaChave !== chave) {{
     mapaFolium.fitBounds(pontos.map((ponto) => [ponto.lat, ponto.lon]), {{padding: [28, 28], maxZoom: 17}});
     mapaFolium._ultimaChave = chave;

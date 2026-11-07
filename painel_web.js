@@ -1223,17 +1223,21 @@ function mapas(tela, dados) {
     const filtro = new Set(selecionados);
     const rastros = (dados.rastros_rf || []).filter((item) => !filtro.size || filtro.has(item.id)).map((item) => ({
       ...item,
+      id: item.id || "",
       lat: Number(item.lat),
       lon: Number(item.lon),
       nome: item.nome || item.id,
+      camera: item.camera || "",
+      quando: item.quando || "",
       foto: item.foto || `/rosto/${item.id}.jpg`,
       valor: 1,
       cor: `hsl(${(Array.from(String(item.id || "")).reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 70% 48%)`,
     })).filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lon));
-    enviarMapa("mapa", rastros, { desenho: "rf", semRotulo: false });
+    rastros.sort((a, b) => String(a.quando || "").localeCompare(String(b.quando || "")));
+    enviarMapa("mapa", rastros, { desenho: "rf", semRotulo: true });
     if (legenda) {
       legenda.textContent = rastros.length
-        ? `${rastros.length} passagem(ns) RF/LPR no mapa${filtro.size ? ` · ${filtro.size} pessoa(s) selecionada(s)` : " · todas as pessoas de interesse"}`
+        ? `${rastros.length} passagem(ns) com data/hora · linha do passado ao presente${filtro.size ? ` · ${filtro.size} pessoa(s)` : " · todas as pessoas de interesse"}`
         : "Sem passagem georreferenciada das pessoas selecionadas.";
     }
   } else {
@@ -1420,13 +1424,23 @@ function piscarStive() {
   setTimeout(() => avatar.classList.remove("falando"), 1200);
 }
 
+function acoesFalaHtml(item) {
+  const extra = item.html || "";
+  return `${extra}<div class="acoes-fala">
+    <button type="button" data-reacao="1" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">Legal</button>
+    <button type="button" data-reacao="-1" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">Não legal</button>
+    <button type="button" data-fechar="1" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">Fechar</button>
+  </div>`;
+}
+
 function mostrarFalaHq(item) {
   const caixa = document.getElementById("fala-hq");
   if (!caixa) return;
   const classe = item.classe || "";
   caixa.hidden = false;
+  caixa.dataset.travado = "1";
   caixa.className = `fala-hq sobe${classe ? ` ${classe}` : ""}`;
-  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${item.html || ""}`;
+  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${acoesFalaHtml(item)}`;
   piscarStive();
 }
 
@@ -1441,9 +1455,9 @@ function enfileirarFalaStive(chave, titulo, texto, opcoes) {
     chave,
     titulo: titulo || "Stive",
     texto,
+    tipo: (opcoes && opcoes.tipo) || "",
     classe: (opcoes && opcoes.classe) || "",
     html: (opcoes && opcoes.html) || "",
-    duracao: (opcoes && opcoes.duracao) || ((opcoes && opcoes.html) ? 28000 : 7000),
   });
   processarFilaFalaStive();
 }
@@ -1456,20 +1470,11 @@ function processarFilaFalaStive() {
   if (!item) {
     caixa.hidden = true;
     caixa.innerHTML = "";
+    caixa.dataset.travado = "";
     return;
   }
   falandoStive = true;
   mostrarFalaHq(item);
-  const terminar = () => {
-    falandoStive = false;
-    processarFilaFalaStive();
-  };
-  if (item.html) {
-    caixa.dataset.travado = "1";
-    return;
-  }
-  caixa.dataset.travado = "";
-  setTimeout(terminar, item.duracao);
 }
 
 function chavesFalaBase(dados) {
@@ -1492,18 +1497,35 @@ function chavesFalaBase(dados) {
   return chaves;
 }
 
+let ultimaVozBaixaEm = 0;
+
+function vozDeBaixoRisco(dados, voz) {
+  const led = dados.led || "branco";
+  if (led === "amarelo" || led === "vermelho" || led === "preto") return false;
+  const baixo = String(voz || "").toLowerCase();
+  return /observação|observacao|nenhum risco|sem comportamento de risco|área está|area esta/.test(baixo) || !baixo;
+}
+
+function falarVozStive(dados) {
+  const voz = String(dados.voz || "").trim();
+  if (!voz) return;
+  const classe = dados.led === "verde" ? "info" : (dados.led === "branco" ? "" : "risco");
+  if (vozDeBaixoRisco(dados, voz)) {
+    const agora = Date.now();
+    if (agora - ultimaVozBaixaEm < 5 * 60 * 1000) return;
+    ultimaVozBaixaEm = agora;
+    enfileirarFalaStive(`voz:baixa:${Math.floor(agora / 300000)}`, "Detector de risco", voz, { classe });
+    return;
+  }
+  enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, { classe });
+}
+
 function atualizarFalaStive(dados) {
   if (!document.getElementById("fala-hq")) return;
   if (!window._stiveBasePronto) {
     chavesFalaBase(dados).forEach((chave) => falasVistas.add(chave));
     window._stiveBasePronto = true;
-    const voz = String(dados.voz || "").trim();
-    if (voz) {
-      falasVistas.delete(`voz:${voz}`);
-      enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, {
-        classe: dados.led === "verde" ? "info" : (dados.led === "branco" ? "" : "risco"),
-      });
-    }
+    falarVozStive(dados);
     return;
   }
   const pendencias = dados.pendencias || [];
@@ -1514,6 +1536,7 @@ function atualizarFalaStive(dados) {
       "O que está acontecendo?",
       item.texto || "Confirma esta situação?",
       {
+        tipo: "pendencia",
         classe: "pergunta",
         html: `<div class="pendencia"><span>
           <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Sim</button>
@@ -1534,8 +1557,7 @@ function atualizarFalaStive(dados) {
       { classe: risco ? "risco" : "info" },
     );
   }
-  const voz = String(dados.voz || "").trim();
-  if (voz) enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, { classe: dados.led === "verde" ? "info" : (dados.led === "branco" ? "" : "risco") });
+  falarVozStive(dados);
   (dados.informes || []).slice(0, 4).forEach((item) => {
     const textoBase = String(item.descricao || item.tipo || "").trim();
     if (!textoBase) return;
@@ -1567,28 +1589,63 @@ function atualizarFalaStive(dados) {
   });
 }
 
+async function enviarReacaoStive(botao, nota) {
+  const corpo = new URLSearchParams();
+  corpo.set("csrf", csrfDoBalao());
+  corpo.set("chave", botao.dataset.chave || "");
+  corpo.set("titulo", botao.dataset.titulo || "");
+  corpo.set("texto", botao.dataset.texto || "");
+  corpo.set("tipo", botao.dataset.tipo || "");
+  corpo.set("nota", String(nota));
+  await fetch("/agente/stive/reacao", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: corpo,
+  }).catch(() => ({}));
+}
+
+function fecharFalaStive() {
+  const caixa = document.getElementById("fala-hq");
+  if (caixa) {
+    caixa.hidden = true;
+    caixa.innerHTML = "";
+    caixa.dataset.travado = "";
+  }
+  falandoStive = false;
+  processarFilaFalaStive();
+}
+
 function iniciarFalaStive() {
   if (document.body.dataset.falaPronta) return;
   document.body.dataset.falaPronta = "1";
   const caixa = document.getElementById("fala-hq");
   if (!caixa) return;
   caixa.addEventListener("click", async (evento) => {
-    const botao = evento.target.closest("button[data-resp]");
-    if (!botao) return;
-    const dados = await confirmarPendencia(botao);
-    const chat = document.getElementById("chat-balao") || document.getElementById("chat-stive");
-    if (chat) {
-      const dele = document.createElement("p");
-      dele.className = "bolha stive";
-      dele.textContent = dados.fala || "Confirmação registrada.";
-      chat.appendChild(dele);
-      chat.scrollTop = chat.scrollHeight;
+    const confirmar = evento.target.closest("button[data-resp]");
+    if (confirmar) {
+      const dados = await confirmarPendencia(confirmar);
+      const chat = document.getElementById("chat-balao") || document.getElementById("chat-stive");
+      if (chat) {
+        const dele = document.createElement("p");
+        dele.className = "bolha stive";
+        dele.textContent = dados.fala || "Confirmação registrada.";
+        chat.appendChild(dele);
+        chat.scrollTop = chat.scrollHeight;
+      }
+      fecharFalaStive();
+      return;
     }
-    falandoStive = false;
-    caixa.dataset.travado = "";
-    caixa.hidden = true;
-    caixa.innerHTML = "";
-    processarFilaFalaStive();
+    const reacao = evento.target.closest("button[data-reacao]");
+    if (reacao) {
+      await enviarReacaoStive(reacao, reacao.dataset.reacao || "0");
+      fecharFalaStive();
+      return;
+    }
+    const fechar = evento.target.closest("button[data-fechar]");
+    if (fechar) {
+      await enviarReacaoStive(fechar, 0);
+      fecharFalaStive();
+    }
   });
 }
 
