@@ -5,3 +5,6 @@ numpy
 rapidocr-onnxruntime
 onnxruntime
 folium
+psycopg[binary]
+fastapi
+uvicorn

@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import hmac
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -342,7 +343,10 @@ def _cookie(cabecalho: str) -> str:
 
 
 def _cabecalho_cookie(token: str) -> str:
-    return f"{COOKIE}={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000"
+    # Secure quando o acesso público é HTTPS (túnel Cloudflare/Tailscale).
+    seguro = os.getenv("WEB_HTTPS", "").strip().lower() in ("1", "true", "sim", "yes")
+    base = f"{COOKIE}={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000"
+    return f"{base}; Secure" if seguro else base
 
 
 def _html_seguro(texto) -> str:

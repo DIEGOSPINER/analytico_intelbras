@@ -1,0 +1,45 @@
+# Portal/API na nuvem (Lightsail, ECS ou PC de testes).
+# YOLO continua na borda (PC do cliente). Aqui: Postgres + API de ingestão.
+#
+# Subir:  docker compose -f nuvem/docker-compose.yml up -d
+# Schema: docker compose -f nuvem/docker-compose.yml exec api python -c "from db.conexao import aplicar_schema; aplicar_schema()"
+# Carga:  DATABASE_URL=postgresql://c4istar:c4istar@127.0.0.1:5432/c4istar python -m db.migrar_csv
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: c4istar-db
+    environment:
+      POSTGRES_DB: c4istar
+      POSTGRES_USER: c4istar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-c4istar}
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - c4istar_pg:/var/lib/postgresql/data
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U c4istar -d c4istar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: nuvem/Dockerfile.api
+    container_name: c4istar-api
+    environment:
+      DATABASE_URL: postgresql://c4istar:${POSTGRES_PASSWORD:-c4istar}@db:5432/c4istar
+      INGEST_TOKEN: ${INGEST_TOKEN:-troque-este-token}
+      WEB_SENHA: ${WEB_SENHA:-}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  c4istar_pg:

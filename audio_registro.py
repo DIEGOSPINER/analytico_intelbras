@@ -178,6 +178,20 @@ def registrar(
             _RANK[camera][f"{item['categoria']}:{item['palavra']}"] += 1
         if evento["risco"]:
             _ALERTAS.appendleft(evento)
+    try:
+        from db.crud import inserir_audio
+        inserir_audio(
+            camera,
+            tipo=tipo,
+            categoria=linha["Categoria"],
+            nivel=linha["Nivel"],
+            texto=texto,
+            palavras=linha["Palavras"],
+            confianca=linha["Confianca"],
+            detalhe=detalhe,
+        )
+    except Exception as exc:
+        print(f"Postgres audio: {exc}")
 
 
 def _top(counter: Counter, limite: int = 20) -> list[dict]:

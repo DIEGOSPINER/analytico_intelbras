@@ -1432,6 +1432,11 @@ def salvar_evento(camera, categoria, classe, track_id, total_unicos, quantidade_
     ]
     with open(ARQUIVO_HISTORICO, mode="a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f, delimiter=";").writerow(linha)
+    try:
+        from db.crud import inserir_analitico
+        inserir_analitico(camera, categoria, classe, track_id, total_unicos, quantidade_cena)
+    except Exception as exc:
+        print(f"Postgres analitico: {exc}")
     print(
         f"[{linha[1]}] {camera} | {categoria}: {classe} | "
         f"ID {track_id} | Total únicos: {total_unicos}"
@@ -1477,6 +1482,16 @@ def salvar_ocorrencia(
     ]
     with open(ARQUIVO_OCORRENCIAS, mode="a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f, delimiter=";").writerow(linha)
+    try:
+        from db.crud import inserir_ocorrencia
+        inserir_ocorrencia(
+            camera, categoria, classe, track_id, total_unicos, quantidade_cena,
+            id_alvo=id_alvo, duracao=duracao, confianca=confianca, status=status,
+            pessoas_envolvidas=pessoas_envolvidas, detalhe=detalhe, risco=risco,
+            nivel_risco=nivel_risco, qualidade_pose=qualidade_pose,
+        )
+    except Exception as exc:
+        print(f"Postgres ocorrencia: {exc}")
 
     print(
         f"[{linha[1]}] OCORRENCIA {camera} | "
@@ -1713,10 +1728,19 @@ def _abrir_portal(acervo):
     portal = Portal(senha, host, porta)
     portal.ligar_acervo(acervo)
     portal.iniciar()
-    for url in _enderecos_portal(host, porta):
-        print(f"Acesso no navegador: {url}")
-    print("De fora de casa, use o túnel. Não abra a porta da câmera no roteador.")
-    print("No navegador, entre com o e-mail do usuário. O primeiro acesso cria a conta.")
+    urls = _enderecos_portal(host, porta)
+    print("--- Acesso do portal ---")
+    print(f"Escutando em {host}:{porta}")
+    for url in urls:
+        if "127.0.0.1" in url:
+            print(f"Neste PC:     {url}")
+        else:
+            print(f"Na mesma rede (celular/outro PC): {url}")
+    print("Fora da rede: rode .\\abrir_tunel.ps1 (Cloudflare) com o main.py ligado.")
+    print("Não abra no roteador a porta 554 das câmeras nem a 8787.")
+    print("Login: e-mail do usuário. O primeiro acesso usa WEB_SENHA e cria a conta.")
+    if os.getenv("WEB_HTTPS", "").strip().lower() in ("1", "true", "sim", "yes"):
+        print("WEB_HTTPS=1 ativo: cookie Secure para túnel HTTPS.")
     return portal
 
 

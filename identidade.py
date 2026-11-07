@@ -191,6 +191,11 @@ def salvar_passagem_face(registro: dict):
     ]
     with open(ARQUIVO_FACES, "a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f, delimiter=";").writerow(linha)
+    try:
+        from db.crud import inserir_face
+        inserir_face(registro)
+    except Exception as exc:
+        print(f"Postgres face: {exc}")
     print(
         f"[{linha[1]}] FACE {linha[2]} | {linha[4]} {linha[3]} | "
         f"passagens={linha[5]} | track={linha[6]}"
@@ -216,6 +221,11 @@ def salvar_passagem_placa(registro: dict):
     ]
     with open(ARQUIVO_PLACAS, "a", newline="", encoding="utf-8-sig") as f:
         csv.writer(f, delimiter=";").writerow(linha)
+    try:
+        from db.crud import inserir_placa
+        inserir_placa(registro)
+    except Exception as exc:
+        print(f"Postgres placa: {exc}")
     print(
         f"[{linha[1]}] PLACA {linha[2]} | {linha[4]} ({linha[3]}) | "
         f"{linha[5]} | passagens={linha[6]}"

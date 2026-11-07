@@ -50,23 +50,82 @@ python -m agente vigiar
 
 Os relatórios em markdown ficam em `relatorios/`. O JSON do Power BI é um só, `relatorios/historico_relatorios.json`: cada dia entra como mais um registro na série, sem arquivo novo por data. As impressões também seguem em `historico_insights.csv` e os alertas em `historico_alertas_ia.csv`. A memória do que já foi observado na rua fica em `memoria_rua.json`.
 
-## Acesso de fora de casa
+## Acesso na rede e pela internet
 
-A análise fica no computador que enxerga as câmeras. Um servidor na nuvem não alcança os endereços `192.168.x.x`. O navegador, no celular ou em outro lugar, entra por um túnel até essa máquina.
+A análise **precisa** rodar no PC que enxerga as câmeras RTSP (`192.168.x.x`). Um VPS na nuvem sozinho não alcança essas câmeras. O navegador (celular, outro PC, fora de casa) entra no portal web deste PC.
 
-1. No `.env`, grave `WEB_SENHA`. Ela só autoriza o primeiro usuário. Reinicie `python main.py`, abra `http://127.0.0.1:8787/criar` e informe e-mail, CPF ou CNPJ e a senha da instalação. Nos próximos acessos, entre com esse e-mail. Cada usuário vê somente a conta do próprio CPF. Na mesma rede, use `http://` seguido do IP deste computador e `:8787/`.
-2. Instale o túnel: `winget install --id Cloudflare.cloudflared`.
-3. Na mesma pasta do analítico, com ele aberto: `cloudflared tunnel --url http://127.0.0.1:8787`. O comando mostra um endereço `https://....trycloudflare.com`. Esse é o acesso de fora. A senha continua valendo. O endereço muda cada vez que o comando sobe.
-4. Para um endereço fixo, use um domínio na Cloudflare, crie um túnel nomeado apontando para `http://127.0.0.1:8787` e deixe `cloudflared tunnel run` junto com o analítico.
-5. Se o acesso for só dos seus aparelhos, a Tailscale também serve: `winget install --id Tailscale.Tailscale`, entre na mesma conta no celular e rode `tailscale serve 8787`. O celular abre o endereço HTTPS que a Tailscale mostrar.
+### Passo a passo
 
-Não encaminhe no roteador a porta `554` nem a `8787`. A câmera permanece na rede da casa. O computador que roda o `main.py` precisa ficar ligado.
+1. **`.env`** — defina pelo menos:
+
+```
+WEB_SENHA=uma-senha-forte
+WEB_HOST=0.0.0.0
+WEB_PORT=8787
+```
+
+`WEB_SENHA` só cria o primeiro usuário. Depois cada pessoa entra com e-mail e senha próprios.
+
+2. **Suba o analítico**
+
+```bash
+.\venv\Scripts\python.exe main.py
+```
+
+O console mostra as URLs. Exemplo na LAN: `http://192.168.0.3:8787/`.
+
+3. **Mesma rede (celular / outro PC)**
+   - Abra a URL da LAN no navegador.
+   - Se não carregar, rode `.\abrir_tunel.ps1` uma vez (cria regra de firewall TCP 8787) ou libere a porta no Windows Defender Firewall.
+   - Primeiro acesso: `/entrar` com e-mail, CPF/CNPJ e a `WEB_SENHA`.
+
+4. **Fora da rede (internet)** — sem abrir porta no roteador:
+
+```bash
+winget install --id Cloudflare.cloudflared
+.\abrir_tunel.ps1
+```
+
+Com o `main.py` ligado, o script imprime um `https://….trycloudflare.com`. Use esse endereço no celular 4G ou de outro lugar.  
+Opcional no `.env` enquanto o túnel estiver ativo: `WEB_HTTPS=1` (cookie Secure).
+
+5. **URL fixa (opcional)** — domínio na Cloudflare + túnel nomeado apontando para `http://127.0.0.1:8787`, depois `cloudflared tunnel run`.
+
+6. **Só seus aparelhos (opcional)** — Tailscale: `winget install --id Tailscale.Tailscale`, mesma conta no celular, `tailscale serve 8787`.
+
+### O que não fazer
+
+- Não encaminhe no roteador a porta `554` (RTSP) nem a `8787` para a internet.
+- Não desligue o PC que roda o `main.py` se quiser ver o portal ao vivo.
+- Não compartilhe a URL `trycloudflare.com` publicamente: quem tiver o link ainda precisa do login, mas o endereço muda a cada execução do túnel rápido.
 
 ## Conta do cliente
 
 O arquivo `clientes.json` (copie `clientes.example.json`) agrupa, por CPF ou CNPJ, os dados pessoais, as câmeras, as pessoas e os veículos de interesse e os e-mails e telefones de apoio. Cada conta só consulta e recebe os próprios alertas.
 
 Uma pessoa de interesse só pode ser incluída com base legal: mandado judicial, medida protetiva ou acompanhamento de filhos e parentes, com a referência do processo, da medida ou do parentesco. No WhatsApp, depois de se identificar pelo CPF ou CNPJ, o cliente escolhe cadastrar veículo e motivo, pessoa e motivo, contatos ou uma ocorrência. A ocorrência guarda data, hora, natureza, descrição, latitude, longitude, endereço, placa, pessoa e a foto ou o vídeo. O agente liga a descrição ao que já existe na conta e nas câmeras e leva esses vínculos ao relatório. `fenomenos.json` só acumula contagens entre clientes, sem nome, placa, endereço ou documento. O aplicativo de consulta vem depois.
+
+## Banco Postgres e nuvem (borda + API)
+
+YOLO continua no PC do cliente. A nuvem guarda dados em Postgres.
+
+```bash
+# Schema: db/schema.sql
+# Subir Postgres+API (com Docker):
+cd nuvem
+docker compose up -d --build
+
+# Ou Postgres local já instalado:
+.\db\preparar_local.ps1 -PostgresPassword "SENHA_DO_USUARIO_postgres" -ClienteDocumento "SEU_CPF"
+
+# Migrar CSVs → banco:
+.\venv\Scripts\python.exe -m db.migrar_csv --documento SEU_CPF
+
+# Enviar da borda para a API:
+.\venv\Scripts\python.exe -m borda.enviar_nuvem --url http://127.0.0.1:8080 --token SEU_TOKEN --documento SEU_CPF
+```
+
+Instalável no PC do cliente: `instalador\README_INSTALACAO.md` (`instalar.ps1`, `empacotar.ps1`).
 
 ## Arquivos de saída
 
@@ -75,4 +134,6 @@ Uma pessoa de interesse só pode ser incluída com base legal: mandado judicial,
 - `historico_ocorrencias_informadas.csv` — relatos feitos pelo cliente, com vínculos extraídos da descrição
 - `historico_faces.csv` — cadastro/reaparecimento de faces próximas à câmera
 - `historico_placas.csv` — leitura e reaparecimento de placas de veículos
+- `historico_audio.csv` — transcrições e riscos de áudio
 - `evidencias/faces/` e `evidencias/placas/` — screenshots de referência e passagens
+- `db/schema.sql` — tabelas Postgres equivalentes
