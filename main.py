@@ -1148,6 +1148,7 @@ class CameraAnalitica:
 
             if categoria == "Veiculo" and track_id is not None:
                 veiculos_cena[track_id] = {
+                    "centro": ((x1 + x2) / 2, (y1 + y2) / 2),
                     "bbox": (x1, y1, x2, y2),
                     "bbox_nitida": (
                         int(x1 * escala_x),
@@ -1251,6 +1252,8 @@ class CameraAnalitica:
                 "anotacoes": anotacoes,
                 "quando": time.time(),
                 "match": self._match if self._match and time.time() <= self._match.get("ate", 0) else None,
+                "centros_pessoa": [list(item["centro"]) for item in pessoas_cena.values() if item.get("centro")],
+                "centros_veiculo": [list(item["centro"]) for item in veiculos_cena.values() if item.get("centro")],
             }
             if eventos_comp:
                 ev = max(eventos_comp, key=lambda item: item["nivel_risco"])
@@ -1766,6 +1769,27 @@ _FRASES = {
 }
 
 
+def _montar_voz(cameras, match, narracao, narracao_ia):
+    partes = []
+    for camera in cameras or []:
+        if camera.get("risco") not in (None, "", "branco") and camera.get("frase"):
+            partes.append(camera["frase"])
+        partes.extend(camera.get("permanencias") or [])
+        if camera.get("risco") in ("vermelho", "preto") and camera.get("rua"):
+            partes.append(f"O ponto é {camera['rua']}, na {camera['nome']}.")
+    if match and match.get("tipo") == "FACE":
+        quem = match.get("nome") or match.get("id") or "uma pessoa"
+        partes.append(
+            f"Reconhecimento facial: {quem} na {match.get('camera') or 'câmera'}. "
+            f"{narracao_ia or narracao or ''}".strip()
+        )
+    elif match and match.get("tipo") == "PLACA":
+        partes.append(f"Veículo de interesse {match.get('id') or ''} na {match.get('camera') or 'câmera'}.")
+    if not partes:
+        return "A área está em observação. Nenhum risco acima de informe neste momento."
+    return " ".join(parte.strip() for parte in partes if str(parte).strip())
+
+
 def _frase_camera(nome, visao, audio_suspeito, audio_tipo):
     partes = []
     for item in visao.get("comportamentos") or []:
@@ -1801,11 +1825,11 @@ def _risco_camera(visao, audio_suspeito, tem_interesse):
     return "branco"
 
 
-def _fluxo_pessoa(nome, passagens):
+def _fluxo_serie(nome, tipo, acumulado):
     agora = time.time()
-    fila = _FLUXO.setdefault(nome, deque())
-    delta = 0 if not fila else max(0, int(passagens) - int(fila[-1][1]))
-    fila.append((agora, int(passagens), delta))
+    fila = _FLUXO.setdefault((nome, tipo), deque())
+    delta = 0 if not fila else max(0, int(acumulado) - int(fila[-1][1]))
+    fila.append((agora, int(acumulado), delta))
     while fila and agora - fila[0][0] > 3600:
         fila.popleft()
     return {
@@ -1813,6 +1837,60 @@ def _fluxo_pessoa(nome, passagens):
         "minuto": sum(item[2] for item in fila if agora - item[0] <= 60),
         "hora": sum(item[2] for item in fila),
     }
+
+
+def _fluxo_pessoa(nome, passagens):
+    return _fluxo_serie(nome, "pessoa", passagens)
+
+
+_TRILHAS = {}
+
+
+def _permanencias(nome, centros_pessoa, centros_veiculo):
+    """Conta quem permanece na cena e quem fica parado no mesmo ponto."""
+    agora = time.time()
+    frases = []
+    for tipo, centros, parado_seg, cena_seg, sujeito in (
+        ("pessoa", centros_pessoa, 20, 10, "Uma pessoa"),
+        ("veiculo", centros_veiculo, 20, 10, "Um veículo"),
+    ):
+        chave = (nome, tipo)
+        trilhas = _TRILHAS.setdefault(chave, [])
+        usados = set()
+        for centro in centros or []:
+            if not centro or len(centro) < 2:
+                continue
+            x, y = float(centro[0]), float(centro[1])
+            melhor = None
+            melhor_dist = 90
+            for indice, trilha in enumerate(trilhas):
+                if indice in usados:
+                    continue
+                dist = ((trilha["x"] - x) ** 2 + (trilha["y"] - y) ** 2) ** 0.5
+                if dist < melhor_dist:
+                    melhor = indice
+                    melhor_dist = dist
+            if melhor is None:
+                trilhas.append({"x": x, "y": y, "inicio": agora, "parado": agora, "visto": agora})
+                continue
+            usados.add(melhor)
+            trilha = trilhas[melhor]
+            if melhor_dist <= 28:
+                trilha["x"], trilha["y"] = x, y
+            else:
+                trilha["x"], trilha["y"] = x, y
+                trilha["parado"] = agora
+            trilha["visto"] = agora
+            na_cena = agora - trilha["inicio"]
+            parado = agora - trilha["parado"]
+            if parado >= parado_seg:
+                frases.append(
+                    f"{sujeito} está parado no mesmo lugar há {int(parado)} segundos na {nome}."
+                )
+            elif na_cena >= cena_seg:
+                frases.append(f"{sujeito} permanece na {nome} há {int(na_cena)} segundos.")
+        _TRILHAS[chave] = [item for item in trilhas if agora - item["visto"] <= 3]
+    return frases
 
 
 def _lado_pessoa(comportamento):
@@ -1965,7 +2043,13 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
                 for comp in (visao.get("comportamentos") or [])[:6]
             ],
             "frase": _frase_camera(item["nome"], visao, audio_on, audio_tipo),
-            "fluxo": _fluxo_pessoa(item["nome"], acumulado["Pessoa"]),
+            "fluxo": _fluxo_serie(item["nome"], "pessoa", acumulado["Pessoa"]),
+            "fluxo_veiculo": _fluxo_serie(item["nome"], "veiculo", acumulado["Veiculo"]),
+            "permanencias": _permanencias(
+                item["nome"],
+                visao.get("centros_pessoa") or [],
+                visao.get("centros_veiculo") or [],
+            ),
             "risco": risco,
             "cena": f"/img/cena-{slug}.jpg" if risco == "preto" else "",
         })
@@ -2034,6 +2118,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "assessoramento": str(pacote.get("assessoramento") or ""),
         "aprendizado": str(pacote.get("aprendizado") or ""),
         "relatorio": _linha_relatorio(pacote),
+        "voz": _montar_voz(cameras, match_vivo, narracao, narracao_ia),
     })
 
 

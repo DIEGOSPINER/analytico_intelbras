@@ -171,14 +171,20 @@ def cliente_por_documento(documento: str) -> dict | None:
     return None
 
 
+DOCUMENTO_ADMIN = "02401001581"
+
+
 def cliente_ativo() -> dict | None:
-    """A instalação local usa CLIENTE_DOCUMENTO ou a única conta existente."""
+    """A instalação local usa CLIENTE_DOCUMENTO, a conta do administrador ou a única conta ativa."""
     documento = os.getenv("CLIENTE_DOCUMENTO", "").strip()
     if documento:
         return cliente_por_documento(documento)
-    clientes = listar_clientes()
-    if len(clientes) == 1:
-        return clientes[0]
+    ativos = [item for item in listar_clientes() if item.get("ativo") is not False]
+    if len(ativos) == 1:
+        return ativos[0]
+    administrador = cliente_por_documento(DOCUMENTO_ADMIN)
+    if administrador is not None and administrador.get("ativo") is not False:
+        return administrador
     return None
 
 
@@ -540,6 +546,98 @@ def cadastrar_aviso(documento: str, camera_id: str, aviso: dict) -> dict:
     _substituir(cliente)
     _espelhar_cameras(cliente)
     return registro
+
+
+def remover_camera(documento: str, ident: str):
+    cliente = _exigir(documento)
+    ident = str(ident or "").strip()
+    cameras = [item for item in cliente.get("cameras") or [] if isinstance(item, dict)]
+    restantes = [item for item in cameras if str(item.get("id")) != ident]
+    if len(restantes) == len(cameras):
+        raise ValueError("Câmera não encontrada nesta conta.")
+    cliente["cameras"] = restantes
+    _substituir(cliente)
+    _espelhar_cameras(cliente)
+
+
+def limpar_pessoas() -> int:
+    """Apaga os cadastros de pessoas de interesse. As câmeras e as contas permanecem."""
+    dados = _ler()
+    total = 0
+    for cliente in dados["clientes"]:
+        total += len(cliente.get("pessoas") or [])
+        cliente["pessoas"] = []
+    _gravar(dados)
+    interesse = Path("interesse.json")
+    if interesse.exists():
+        try:
+            bruto = json.loads(interesse.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            bruto = {}
+        if isinstance(bruto, dict):
+            bruto["pessoas"] = []
+            interesse.write_text(json.dumps(bruto, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return total
+
+
+def criar_cliente(nome: str, documento: str, email: str) -> dict:
+    digitos = _digitos(documento)
+    if not documento_valido(digitos):
+        raise ValueError("Informe um CPF ou CNPJ válido.")
+    if not _email_valido(email):
+        raise ValueError("Informe o e-mail do cliente.")
+    if cliente_por_documento(digitos) is not None:
+        raise ValueError("Este documento já pertence a um cliente.")
+    cliente = _cliente_novo(len(listar_clientes()) + 1)
+    cliente["nome"] = (nome or "").strip()
+    cliente["documento"] = digitos
+    cliente["tipo_documento"] = "cnpj" if len(digitos) == 14 else "cpf"
+    cliente["email"] = str(email).strip().lower()
+    cliente["ativo"] = True
+    dados = _ler()
+    dados["clientes"].append(cliente)
+    _gravar(dados)
+    return cliente
+
+
+def definir_atividade(documento: str, ativo: bool):
+    if _digitos(documento) == DOCUMENTO_ADMIN:
+        raise ValueError("A conta do administrador permanece ativa.")
+    cliente = cliente_por_documento(documento)
+    if cliente is None:
+        raise ValueError("Cliente não encontrado.")
+    cliente["ativo"] = bool(ativo)
+    _substituir(cliente)
+    return cliente
+
+
+def excluir_cliente(documento: str):
+    if _digitos(documento) == DOCUMENTO_ADMIN:
+        raise ValueError("A conta do administrador não pode ser excluída.")
+    dados = _ler()
+    digitos = _digitos(documento)
+    restantes = [item for item in dados["clientes"] if _digitos(item.get("documento")) != digitos]
+    if len(restantes) == len(dados["clientes"]):
+        raise ValueError("Cliente não encontrado.")
+    _gravar({"clientes": restantes})
+    from acesso import remover_por_documento
+
+    remover_por_documento(digitos)
+
+
+def resumo_clientes() -> list[dict]:
+    saida = []
+    for cliente in listar_clientes():
+        cameras = [item for item in cliente.get("cameras") or [] if isinstance(item, dict)]
+        saida.append({
+            "nome": cliente.get("nome") or "",
+            "documento": cliente.get("documento") or "",
+            "email": cliente.get("email") or "",
+            "ativo": cliente.get("ativo") is not False,
+            "cameras": len(cameras),
+            "cameras_ativas": sum(1 for item in cameras if item.get("ativa") is not False),
+        })
+    return saida
 
 
 def remover_aviso(documento: str, camera_id: str, indice: int):

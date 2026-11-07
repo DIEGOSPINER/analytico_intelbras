@@ -49,9 +49,9 @@ TTL_TRACK_SEG = 6
 MAX_AMOSTRAS = 12
 
 # Similaridade de cosseno do SFace. Abaixo disso a foto vira outra pessoa.
-LIMIAR_MATCH = 0.50
-LIMIAR_CERTEZA = 0.60
-MARGEM_MATCH = 0.05
+LIMIAR_MATCH = 0.58
+LIMIAR_CERTEZA = 0.64
+MARGEM_MATCH = 0.08
 LIMIAR_FUNDIR = 0.52
 
 MODELO_SFACE = "face_recognition_sface_2021dec.onnx"
@@ -483,12 +483,10 @@ class IdentificadorFaces:
         ranking.sort(reverse=True)
         melhor_score, melhor_id = ranking[0]
         segundo = ranking[1][0] if len(ranking) > 1 else -1.0
-        aceito = melhor_score >= self.limiar_certeza or (
-            melhor_score >= self.limiar_match
-            and (melhor_score - segundo) >= MARGEM_MATCH
-        )
+        separado = segundo < 0 or (melhor_score - segundo) >= MARGEM_MATCH
+        aceito = melhor_score >= self.limiar_certeza and separado
         if aceito and melhor_id in self._ids_protegidos():
-            if melhor_score < self.limiar_certeza or (melhor_score - segundo) < 0.08:
+            if melhor_score < max(self.limiar_certeza, 0.70) or (segundo >= 0 and (melhor_score - segundo) < 0.12):
                 return None, melhor_score
         if aceito:
             return melhor_id, melhor_score
@@ -539,7 +537,7 @@ class IdentificadorFaces:
             self._salvar_caracteristicas(face_id)
             return
         score = self._score_contra_id(face_id, vetor, alinhado)
-        if face_id in self._ids_protegidos() and score < 0.75:
+        if score < 0.80:
             return
         if score >= 0.92:
             return

@@ -101,7 +101,7 @@ function linha(canvas, series, rotulos, eixoX) {
     ctx.fillText(String(Math.round(pico * fracao)), 2, y + 4);
   });
   const n = Math.max(rotulos.length, 1);
-  const passo = rotulos.length > 16 ? 2 : 1;
+  const passo = Math.max(1, Math.ceil(rotulos.length / 6));
   rotulos.forEach((rotulo, indice) => {
     if (indice % passo) return;
     const x = esquerda + (n <= 1 ? w / 2 : (indice / (n - 1)) * w);
@@ -314,6 +314,70 @@ function pontosGeo(dados, campo) {
 }
 
 const pulso = { canvas: null, pontos: [], opcoes: null };
+const cacheTile = {};
+let ocorrenciaRedraw = null;
+
+function pedirTile(z, x, y) {
+  const n = 2 ** z;
+  if (x < 0 || y < 0 || x >= n || y >= n) return null;
+  const chave = `${z}/${x}/${y}`;
+  if (cacheTile[chave]) return cacheTile[chave].img;
+  const item = { img: null };
+  const imagem = new Image();
+  imagem.onload = () => {
+    item.img = imagem;
+    if (pulso.canvas && document.body.contains(pulso.canvas)) mapaCameras(pulso.canvas, pulso.pontos, pulso.opcoes);
+    if (ocorrenciaRedraw) ocorrenciaRedraw();
+  };
+  imagem.src = `/mapa/${z}/${x}/${y}.png`;
+  cacheTile[chave] = item;
+  return null;
+}
+
+function mercator(lat, lon, zoom) {
+  const n = 2 ** zoom;
+  const x = (Number(lon) + 180) / 360 * n;
+  const limitado = Math.max(-85, Math.min(85, Number(lat)));
+  const rad = limitado * Math.PI / 180;
+  const y = (1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n;
+  return [x, y];
+}
+
+function projetarRuas(ctx, largura, altura, pontos) {
+  if (!pontos.length) return null;
+  let zoom = pontos.length <= 1 ? 17 : 16;
+  const lats = pontos.map((ponto) => Number(ponto.lat));
+  const lons = pontos.map((ponto) => Number(ponto.lon));
+  const span = Math.max(Math.max(...lats) - Math.min(...lats), Math.max(...lons) - Math.min(...lons), 0.0004);
+  for (let candidato = 17; candidato >= 13; candidato -= 1) {
+    if (span / (360 / (2 ** candidato)) <= 1.5) {
+      zoom = candidato;
+      break;
+    }
+    zoom = candidato;
+  }
+  const fracoes = pontos.map((ponto) => mercator(ponto.lat, ponto.lon, zoom));
+  const xs = fracoes.map((item) => item[0]);
+  const ys = fracoes.map((item) => item[1]);
+  const margem = 0.7;
+  const x0 = Math.min(...xs) - margem;
+  const x1 = Math.max(...xs) + margem;
+  const y0 = Math.min(...ys) - margem;
+  const y1 = Math.max(...ys) + margem;
+  for (let ty = Math.floor(y0); ty <= Math.floor(y1); ty += 1) {
+    for (let tx = Math.floor(x0); tx <= Math.floor(x1); tx += 1) {
+      const imagem = pedirTile(zoom, tx, ty);
+      if (!imagem) continue;
+      const dx = (tx - x0) / (x1 - x0) * largura;
+      const dy = (ty - y0) / (y1 - y0) * altura;
+      ctx.drawImage(imagem, dx, dy, largura / (x1 - x0) + 1, altura / (y1 - y0) + 1);
+    }
+  }
+  return (indice) => {
+    const [fx, fy] = fracoes[indice];
+    return [(fx - x0) / (x1 - x0) * largura, (fy - y0) / (y1 - y0) * altura];
+  };
+}
 
 function mapaCameras(canvas, pontos, opcoes) {
   if (!canvas) return;
@@ -332,23 +396,12 @@ function mapaCameras(canvas, pontos, opcoes) {
     ctx.fillText("Câmeras sem latitude.", 24, 40);
     return;
   }
-  const lats = pontos.map((ponto) => Number(ponto.lat));
-  const lons = pontos.map((ponto) => Number(ponto.lon));
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const folgaLat = Math.max(0.0008, (maxLat - minLat) * 0.45);
-  const folgaLon = Math.max(0.0008, (maxLon - minLon) * 0.45);
-  const px = (ponto) => [
-    ((Number(ponto.lon) - (minLon - folgaLon)) / ((maxLon + folgaLon) - (minLon - folgaLon))) * (largura - 70) + 28,
-    (1 - (Number(ponto.lat) - (minLat - folgaLat)) / ((maxLat + folgaLat) - (minLat - folgaLat))) * (altura - 50) + 20,
-  ];
+  const projetor = projetarRuas(ctx, largura, altura, pontos);
   const maior = Math.max(1, ...pontos.map((ponto) => ponto.valor || 0));
   ctx.font = "13px Segoe UI";
   pontos.forEach((ponto, indice) => {
-    const [x, y] = px(ponto);
-    const raio = 10 + Math.sqrt((ponto.valor || 0) / maior) * 26;
+    const [x, y] = projetor(indice);
+    const raio = opcoes && opcoes.fixo ? 9 : 10 + Math.sqrt((ponto.valor || 0) / maior) * 26;
     const risco = opcoes && opcoes.pisca ? (ponto.risco || "branco") : "";
     const cor = risco ? (COR_LED[risco] || corCamera(ponto.nome, indice)) : corCamera(ponto.nome, indice);
     const periodo = { branco: 1400, amarelo: 900, vermelho: 450, preto: 280 }[risco] || 0;
@@ -366,8 +419,10 @@ function mapaCameras(canvas, pontos, opcoes) {
     ctx.globalAlpha = 1;
     ctx.fillStyle = "#f4f7fb";
     ctx.fillText(ponto.nome || "", x + raio + 4, y - 4);
-    ctx.fillStyle = "#93a0b8";
-    ctx.fillText(String(ponto.valor || 0), x + raio + 4, y + 12);
+    if (!(opcoes && opcoes.fixo)) {
+      ctx.fillStyle = "#93a0b8";
+      ctx.fillText(String(ponto.valor || 0), x + raio + 4, y + 12);
+    }
   });
 }
 
@@ -529,7 +584,7 @@ function alertas(tela, dados) {
   const caixaHist = document.getElementById("historico");
   if (caixaHist.dataset.chave !== chaveHist) {
     caixaHist.innerHTML = historico.map((item) => `<div class="alerta-linha">
-      <div><strong>${escapar(item.tipo)} ${escapar(item.id)}</strong>
+      <div><strong class="titulo-alerta">${escapar(item.tipo)} ${escapar(item.id)}</strong><span class="nome-alerta">${escapar(item.nome || "")}</span>
       <p>${escapar(item.quando)} · ${escapar(item.rotulo || "SIM")} ${Number(item.taxa || 0).toFixed(2)} · ${escapar(item.nome)} · ${escapar(item.camera)}</p></div>
       ${fotos(`${item.ref}?t=${encodeURIComponent(item.quando)}`, `${item.agora}?t=${encodeURIComponent(item.quando)}`)}
     </div>`).join("") || "<p>Nenhum alerta de rosto ou placa ainda.</p>";
@@ -569,25 +624,39 @@ function arco(cx, cy, raio, a0, a1) {
   return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${raio} ${raio} 0 ${grande} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`;
 }
 
-function tacho(camera) {
+function svgTacho(chave, rotulo) {
   const inicio = (150 * Math.PI) / 180;
   const fim = ((150 + 240) * Math.PI) / 180;
   const verde = inicio + (4 / 12) * (fim - inicio);
   const amarelo = inicio + (10 / 12) * (fim - inicio);
-  return `<article class="cartao" data-fluxo="${escapar(camera.nome)}">
-    <h2>Monitor de Fluxo: ${escapar(camera.nome)}</h2>
-    <div class="tacho"><svg viewBox="0 0 200 150">
-      <path d="${arco(100, 108, 72, inicio, verde)}" fill="none" stroke="#3ddc97" stroke-width="14" stroke-linecap="butt"/>
+  return `<div class="tacho" data-agulha="${escapar(chave)}">
+    <svg viewBox="0 0 200 150">
+      <path d="${arco(100, 108, 72, inicio, verde)}" fill="none" stroke="#3ddc97" stroke-width="14"/>
       <path d="${arco(100, 108, 72, verde, amarelo)}" fill="none" stroke="#ffb020" stroke-width="14"/>
-      <path d="${arco(100, 108, 72, amarelo, fim)}" fill="none" stroke="#ff3b3b" stroke-width="14" stroke-linecap="butt"/>
-      <line class="agulha" x1="100" y1="108" x2="100" y2="48" stroke="#f4f7fb" stroke-width="3" stroke-linecap="round"/>
+      <path d="${arco(100, 108, 72, amarelo, fim)}" fill="none" stroke="#ff3b3b" stroke-width="14"/>
+      <line class="agulha" x1="100" y1="108" x2="46" y2="139" stroke="#3ddc97" stroke-width="3" stroke-linecap="round"/>
       <circle cx="100" cy="108" r="5" fill="#f4f7fb"/>
-      <text class="marca" x="100" y="96" text-anchor="middle" fill="#f4f7fb" font-size="18">0</text>
+      <text class="marca" x="100" y="96" text-anchor="middle" fill="#f4f7fb" font-size="20">0</text>
     </svg>
-    <p>Pessoas por minuto. A escala fecha em 10 e passa ao vermelho acima disso.</p>
-    <p class="taxas"></p></div>
-    ${camera.cena ? `<img alt="Cena" src="${camera.cena}">` : ""}
-  </article>`;
+    <p>${rotulo}</p>
+  </div>`;
+}
+
+function fileiraFluxo(camera) {
+  const nome = escapar(camera.nome);
+  const relogios = [
+    ["pessoa", "segundo", "Pessoas / s", 2],
+    ["pessoa", "minuto", "Pessoas / min", 12],
+    ["pessoa", "hora", "Pessoas / h", 120],
+    ["veiculo", "segundo", "Veículos / s", 2],
+    ["veiculo", "minuto", "Veículos / min", 12],
+    ["veiculo", "hora", "Veículos / h", 120],
+  ];
+  return `<article class="cartao"><div class="fileira-fluxo">
+    <h2>Monitor de Fluxo: ${nome}</h2>
+    ${relogios.map(([tipo, faixa, rotulo]) => svgTacho(`${camera.nome}|${tipo}|${faixa}`, rotulo)).join("")}
+    <div class="termo" data-termo="${nome}"><div class="tubo"><i></i></div><p>Risco</p></div>
+  </div></article>`;
 }
 
 function desenharAgulha(artigo, graus) {
@@ -598,43 +667,52 @@ function desenharAgulha(artigo, graus) {
   agulha.setAttribute("y2", (108 + Math.sin(rad) * 62).toFixed(1));
 }
 
-function posicionarAgulha(artigo, minuto) {
-  const limitado = Math.max(0, Math.min(Number(minuto) || 0, 12));
-  artigo._alvo = 150 + (limitado / 12) * 240;
+function posicionarAgulha(artigo, valor, topo) {
+  const limitado = Math.max(0, Math.min(Number(valor) || 0, topo));
+  artigo._alvo = 150 + (limitado / topo) * 240;
   if (artigo._atual == null) artigo._atual = artigo._alvo;
-  const cor = faixaFluxo(Number(minuto) || 0);
+  const fracao = (Number(valor) || 0) / topo;
+  const cor = fracao > 0.84 ? "#ff3b3b" : fracao >= 0.4 ? "#ffb020" : "#3ddc97";
   const agulha = artigo.querySelector(".agulha");
-  if (agulha) agulha.setAttribute("stroke", cor === "vermelho" ? "#ff3b3b" : cor === "amarelo" ? "#ffb020" : "#3ddc97");
+  if (agulha) agulha.setAttribute("stroke", cor);
   const marca = artigo.querySelector(".marca");
-  if (marca) marca.textContent = String(Math.round(Number(minuto) || 0));
+  if (marca) marca.textContent = String(Math.round(Number(valor) || 0));
 }
 
 function risco(tela, dados) {
   const cameras = dados.cameras_vivo || [];
   const assinatura = cameras.map((camera) => camera.nome).join("|");
   if (tela.dataset.pronto !== assinatura) {
-    const aviso = "";
-    tela.innerHTML = `${aviso}<section class="cartoes">
-      <article class="cartao"><span>Branco</span><p>Apenas informes.</p></article>
-      <article class="cartao"><span>Amarelo</span><p>Pessoa deitada, interação ou áudio suspeito.</p></article>
-      <article class="cartao"><span>Vermelho</span><p>Pessoa ou veículo de interesse, queda ou interação suspeita.</p></article>
-      <article class="cartao"><span>Preto</span><p>Deitada, interação e som de risco ao mesmo tempo. Chamar apoio.</p></article>
-    </section>
-    <section id="odometros" class="grade">${cameras.map((camera) => tacho(camera)).join("") || "<p>Nenhuma câmera em análise.</p>"}</section>
+    tela.innerHTML = `<article class="cartao"><p id="voz" class="voz branco"></p></article>
+    <div id="odometros">${cameras.map((camera) => fileiraFluxo(camera)).join("") || "<p>Nenhuma câmera em análise.</p>"}</div>
+    <article class="cartao"><h2>Mapa de risco</h2><canvas class="mapa" id="mapa-risco"></canvas></article>
     <article class="cartao"><h2>Telemetria</h2><canvas class="grafico" id="esteira"></canvas></article>
+    <article class="cartao"><h2>Últimos informes</h2><div id="informes-risco"></div></article>
     <article class="cartao" id="subida"></article>`;
     tela.dataset.pronto = assinatura;
   }
+  const voz = document.getElementById("voz");
+  if (voz) {
+    voz.textContent = dados.voz || "A área está em observação.";
+    voz.className = "voz " + (dados.led || "branco");
+  }
+  const topos = { segundo: 2, minuto: 12, hora: 120 };
   cameras.forEach((camera) => {
-    const artigo = document.querySelector(`[data-fluxo="${CSS.escape(camera.nome)}"]`);
-    if (!artigo) return;
-    const fluxo = camera.fluxo || {};
-    posicionarAgulha(artigo, fluxo.minuto || 0);
-    const taxas = artigo.querySelector(".taxas");
-    if (taxas) taxas.textContent = `por segundo ${fluxo.segundo || 0} · por minuto ${fluxo.minuto || 0} · por hora ${fluxo.hora || 0}`;
-    const lampada = camera.risco === "vermelho" || camera.risco === "preto" ? "Atenção. " : "";
-    artigo.querySelector("h2").textContent = `${lampada}Monitor de Fluxo: ${camera.nome}`;
+    [["pessoa", camera.fluxo || {}], ["veiculo", camera.fluxo_veiculo || {}]].forEach(([tipo, fluxo]) => {
+      ["segundo", "minuto", "hora"].forEach((faixa) => {
+        const artigo = document.querySelector(`[data-agulha="${CSS.escape(`${camera.nome}|${tipo}|${faixa}`)}"]`);
+        if (artigo) posicionarAgulha(artigo, fluxo[faixa] || 0, topos[faixa]);
+      });
+    });
+    const termo = document.querySelector(`[data-termo="${CSS.escape(camera.nome)}"] i`);
+    const altura = { branco: "18%", amarelo: "46%", vermelho: "74%", preto: "100%" }[camera.risco] || "18%";
+    const cor = COR_LED[camera.risco] || "#f4f7fb";
+    if (termo) {
+      termo.style.height = altura;
+      termo.style.background = cor;
+    }
   });
+  observarMapa(document.getElementById("mapa-risco"), pontosGeo(dados, "itens").map((ponto) => ({ ...ponto, valor: 1 })), { pisca: true, fixo: true });
   const pontos = dados.serie || [];
   const rotulos = pontos.map((ponto) => new Date((ponto.t || 0) * 1000).toTimeString().slice(0, 8));
   const series = ["Pessoa", "Animal", "Veiculo", "Objeto"].map((nome) => ({
@@ -646,6 +724,18 @@ function risco(tela, dados) {
     series.push({ nome: "Risco", cor: "#ff3b3b", teto: true, valores: pontos.map((ponto) => (ponto.Risco ? 1 : 0)) });
   }
   linha(document.getElementById("esteira"), series, rotulos, "tempo");
+  const caixaInforme = document.getElementById("informes-risco");
+  if (caixaInforme) {
+    caixaInforme.innerHTML = (dados.informes || []).map((item) => {
+      const texto = `${item.descricao || item.tipo || ""}`;
+      const baixo = texto.toLowerCase();
+      let cor = "branco";
+      if (dados.led === "preto" || /disparo|arma/.test(baixo)) cor = "preto";
+      else if (/briga|queda|interesse|risco|alerta/.test(baixo)) cor = "vermelho";
+      else if (/deitad|intera|suspeito|áudio|audio/.test(baixo)) cor = "amarelo";
+      return `<p class="informe ${cor}"><strong>${escapar(item.quando)}</strong><br>${escapar(texto)}</p>`;
+    }).join("") || "<p>Nenhum informe enviado.</p>";
+  }
   const subida = document.getElementById("subida");
   const match = dados.match;
   const chaveSubida = match && match.risco ? `${match.id}|${match.taxa}|${match.passagens}|${match.narracao_ia || match.narracao || ""}` : "";
@@ -734,22 +824,15 @@ function mapas(tela, dados) {
     document.getElementById("legenda").textContent = "";
     return;
   }
-  const lats = lista.map((ponto) => ponto.lat);
-  const lons = lista.map((ponto) => ponto.lon);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const folgaLat = Math.max(0.002, (maxLat - minLat) * 0.25);
-  const folgaLon = Math.max(0.002, (maxLon - minLon) * 0.25);
-  const px = (ponto) => [
-    ((ponto.lon - (minLon - folgaLon)) / ((maxLon + folgaLon) - (minLon - folgaLon))) * (canvas.width - 40) + 20,
-    (1 - (ponto.lat - (minLat - folgaLat)) / ((maxLat + folgaLat) - (minLat - folgaLat))) * (canvas.height - 40) + 20,
-  ];
+  ocorrenciaRedraw = () => {
+    const alvo = document.getElementById("tela");
+    if (alvo && alvo.dataset.tela === "mapas") mapas(alvo, dados);
+  };
+  const projetor = projetarRuas(ctx, canvas.width, canvas.height, lista);
   const modo = desenhoAtual();
   const tipos = {};
-  lista.forEach((ponto) => {
-    const [x, y] = px(ponto);
+  lista.forEach((ponto, indice) => {
+    const [x, y] = projetor(indice);
     const cor = `hsl(${(Array.from(ponto.tipo || "").reduce((s, c) => s + c.charCodeAt(0), 0) * 17) % 360} 80% 60%)`;
     tipos[ponto.tipo] = (tipos[ponto.tipo] || 0) + 1;
     if (modo === "pontos") {
@@ -778,7 +861,7 @@ function pulsar() {
   if (pulso.opcoes && pulso.opcoes.pisca && pulso.canvas && document.body.contains(pulso.canvas)) {
     mapaCameras(pulso.canvas, pulso.pontos, pulso.opcoes);
   }
-  document.querySelectorAll("[data-fluxo]").forEach((artigo) => {
+  document.querySelectorAll("[data-agulha]").forEach((artigo) => {
     if (artigo._alvo == null) return;
     const atual = artigo._atual == null ? artigo._alvo : artigo._atual;
     artigo._atual = atual + (artigo._alvo - atual) * 0.12;

@@ -97,11 +97,21 @@ def _exigir_senha(senha: str, confirmacao: str):
         raise ValueError("A senha nova precisa ter pelo menos 8 caracteres.")
 
 
+def perfil_de(documento: str) -> str:
+    from cadastro import DOCUMENTO_ADMIN
+
+    if _digitos(documento) == _digitos(DOCUMENTO_ADMIN):
+        return "administrador"
+    return "cliente"
+
+
 def _publico(usuario: dict) -> dict:
     return {
         "email": usuario.get("email") or "",
         "nome": usuario.get("nome") or "",
         "documento": usuario.get("documento") or "",
+        "perfil": perfil_de(usuario.get("documento") or ""),
+        "trocar_no_acesso": bool(usuario.get("trocar_no_acesso")),
     }
 
 
@@ -151,6 +161,40 @@ def criar_usuario(documento: str, nome: str, email: str, senha: str, confirmacao
     return _publico(usuario)
 
 
+def criar_convite(documento: str, nome: str, email: str, senha: str) -> dict:
+    from cadastro import cliente_por_documento
+
+    if cliente_por_documento(documento) is None:
+        raise ValueError("Cadastre o cliente deste CPF antes de criar o acesso.")
+    if not email_valido(email):
+        raise ValueError("Informe um e-mail válido.")
+    if len(senha) < 8:
+        raise ValueError("A senha provisória precisa ter pelo menos 8 caracteres.")
+    dados = _ler()
+    if _por_email(email):
+        raise ValueError("Este e-mail já está em uso.")
+    usuario = {
+        "email": email.strip().lower(),
+        "nome": (nome or "").strip(),
+        "documento": _digitos(documento),
+        "senha_hash": gerar_hash(senha),
+        "trocar_no_acesso": True,
+    }
+    dados["usuarios"].append(usuario)
+    _gravar(dados)
+    return _publico(usuario)
+
+
+def remover_por_documento(documento: str):
+    digitos = _digitos(documento)
+    dados = _ler()
+    dados["usuarios"] = [
+        item for item in dados["usuarios"]
+        if _digitos(item.get("documento")) != digitos
+    ]
+    _gravar(dados)
+
+
 def autenticar(email: str, senha: str) -> dict:
     chave = str(email or "").strip().lower()
     agora = time.time()
@@ -183,6 +227,7 @@ def trocar_senha(email: str, atual: str, nova: str, confirmacao: str) -> dict:
         raise ValueError("A senha atual não confere.")
     _exigir_senha(nova, confirmacao)
     usuario["senha_hash"] = gerar_hash(nova)
+    usuario["trocar_no_acesso"] = False
     _gravar(dados)
     return _publico(usuario) | {"marca": _marca(usuario["senha_hash"])}
 
@@ -244,4 +289,6 @@ def ler_cookie(valor: str, segredo: str) -> dict | None:
     if _marca(usuario.get("senha_hash")) != str(corpo.get("marca") or ""):
         return None
     corpo["nome"] = usuario.get("nome") or ""
+    corpo["perfil"] = perfil_de(usuario.get("documento") or "")
+    corpo["trocar_no_acesso"] = bool(usuario.get("trocar_no_acesso"))
     return corpo

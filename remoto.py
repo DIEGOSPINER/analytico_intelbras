@@ -43,8 +43,9 @@ ESTILO = """
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; color: var(--texto); font-family: Segoe UI, sans-serif; font-size: 16px;
   background: radial-gradient(1200px 500px at 80% -10%, rgba(76, 141, 255, 0.18), transparent 55%), var(--fundo); }
-.app { display: flex; min-height: 100vh; }
-aside { width: 248px; flex: none; padding: 22px 16px; background: rgba(10, 14, 28, 0.82);
+.app { display: flex; min-height: 100vh; align-items: flex-start; }
+aside { width: 248px; flex: none; position: sticky; top: 0; height: 100vh; overflow: auto;
+  padding: 22px 16px; background: rgba(10, 14, 28, 0.82);
   border-right: 1px solid var(--linha); backdrop-filter: blur(16px); }
 .marca { display: flex; gap: 12px; align-items: center; margin-bottom: 28px; }
 .logo { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; font-weight: 700;
@@ -61,8 +62,8 @@ nav a.ativo, nav a:hover { color: var(--texto); background: rgba(76, 141, 255, 0
 .topo { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 22px 0; }
 .topo h1 { margin: 0; font-size: 28px; font-weight: 600; }
 .topo p { margin: 4px 0 0; color: var(--mudo); font-size: 15px; }
-main { padding: 18px 22px 40px; }
-.cartoes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+main { padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 22px; }
+.cartoes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 0; }
 .cartao, .painel, .video, figure { background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); backdrop-filter: blur(10px); }
 .cartao { padding: 16px 18px; }
@@ -72,7 +73,7 @@ button svg { stroke: currentColor; width: 16px; height: 16px; }
 .cartao strong { display: block; margin-top: 8px; font-size: 32px; font-weight: 650; letter-spacing: -0.03em;
   transition: color 0.3s; }
 .cartao strong.sobe { color: var(--verde); }
-.grade { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grade { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
 .atalho { display: flex; align-items: center; gap: 12px; min-height: 92px; padding: 18px; font-size: 18px;
   color: var(--texto); text-decoration: none; }
 .atalho svg { width: 22px; height: 22px; stroke: var(--ciano); fill: none; stroke-width: 1.8; }
@@ -104,11 +105,11 @@ a.texto { color: var(--ciano); }
 .rostos { display: flex; gap: 12px; flex-wrap: wrap; }
 .rostos figure { width: 140px; margin: 0; overflow: hidden; }
 .rostos img { width: 100%; height: 110px; object-fit: cover; }
-.led { position: fixed; top: 18px; right: 22px; z-index: 30; width: 16px; height: 16px; border-radius: 50%; }
-.led.branco { background: #f4f7fb; box-shadow: 0 0 14px #fff; animation: pisca 1.4s infinite; }
-.led.amarelo { background: #ffb020; box-shadow: 0 0 14px #ffb020; animation: pisca 0.9s infinite; }
-.led.vermelho { background: #ff3b3b; box-shadow: 0 0 16px #ff3b3b; animation: pisca 0.45s infinite; }
-.led.preto { background: #05070c; box-shadow: 0 0 0 3px #ff3b3b, 0 0 16px #ff3b3b; animation: pisca 0.28s infinite; }
+.led { position: fixed; top: 16px; right: 22px; z-index: 30; width: 48px; height: 48px; border-radius: 50%; }
+.led.branco { background: #f4f7fb; box-shadow: 0 0 28px #fff; animation: pisca 1.4s infinite; }
+.led.amarelo { background: #ffb020; box-shadow: 0 0 28px #ffb020; animation: pisca 0.9s infinite; }
+.led.vermelho { background: #ff3b3b; box-shadow: 0 0 32px #ff3b3b; animation: pisca 0.45s infinite; }
+.led.preto { background: #05070c; box-shadow: 0 0 0 6px #ff3b3b, 0 0 32px #ff3b3b; animation: pisca 0.28s infinite; }
 @keyframes pisca { 50% { opacity: 0.28; } }
 .grafico, .mapa { width: 100%; height: 280px; border-radius: 12px; background: #101624; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
@@ -120,10 +121,27 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .empilha i { display: grid; place-items: center; font-style: normal; font-size: 12px; color: #041018; overflow: hidden; }
 .legenda-linha { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; color: var(--mudo); font-size: 13px; }
 .legenda-linha b { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-.tacho { width: min(280px, 100%); margin: 8px auto 0; }
+.fileira-fluxo { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; padding: 8px 4px 4px; }
+.fileira-fluxo h2 { flex: 0 0 180px; margin: 0 0 28px; font-size: 16px; }
+.tacho { width: 112px; margin: 0; }
 .tacho svg { width: 100%; height: auto; display: block; }
-.tacho p, .leitura p { line-height: 1.45; }
-.alerta-linha { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-top: 12px; }
+.tacho p, .leitura p { line-height: 1.45; margin: 4px 0 0; font-size: 12px; text-align: center; }
+.termo { width: 46px; text-align: center; }
+.termo .tubo { height: 96px; border-radius: 12px; background: rgba(255,255,255,0.08); display: flex; align-items: flex-end; overflow: hidden; }
+.termo i { display: block; width: 100%; }
+.termo p { margin: 6px 0 0; font-size: 11px; }
+.voz { margin: 0; text-align: center; font-size: 28px; font-weight: 600; line-height: 1.35; }
+.voz.branco { color: #f4f7fb; }
+.voz.amarelo { color: #ffb020; }
+.voz.vermelho { color: #ff5a5a; }
+.voz.preto { color: #111318; background: #f4f7fb; border-radius: 12px; padding: 12px; }
+.informe.branco { color: #f4f7fb; }
+.informe.amarelo { color: #ffb020; }
+.informe.vermelho { color: #ff5a5a; }
+.informe.preto { color: #111318; background: #f4f7fb; border-radius: 8px; padding: 6px 8px; }
+.titulo-alerta { font-size: 14px; font-weight: 650; }
+.nome-alerta { margin-left: 8px; font-size: 16px; }
+.alerta-linha { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-top: 18px; }
 .alerta-linha img { width: 84px; height: 52px; object-fit: cover; border-radius: 8px; }
 .linha-face img, .mini { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
 .placar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
@@ -303,7 +321,7 @@ _ICONES = {
 }
 
 
-def _menu(ativo: str) -> str:
+def _menu(ativo: str, perfil: str = "") -> str:
     itens = [
         ("/", "Início", "inicio"),
         ("/painel/1", "Contagens", "contagem"),
@@ -312,6 +330,7 @@ def _menu(ativo: str) -> str:
         ("/painel/4", "Mapas", "mapa"),
         ("/painel/risco", "Detector de risco", "alerta"),
         ("/painel/cameras", "Ao vivo", "camera"),
+        ("/gestao", "Gestão de ativos", "cliente"),
         ("/cadastro/cliente", "Cliente", "cliente"),
         ("/cadastro/cameras", "Câmeras", "camera"),
         ("/cadastro/pessoas", "Pessoas", "pessoa"),
@@ -321,7 +340,9 @@ def _menu(ativo: str) -> str:
     ]
     partes = ["<p class='grupo'>Navegação</p><nav>"]
     for href, titulo, icone in itens:
-        if href == "/cadastro/cliente":
+        if href == "/gestao" and perfil != "administrador":
+            continue
+        if href == "/gestao" or (href == "/cadastro/cliente" and perfil != "administrador"):
             partes.append("<p class='grupo'>Conta</p>")
         classe = " class='ativo'" if href == ativo else ""
         partes.append(
@@ -331,7 +352,7 @@ def _menu(ativo: str) -> str:
     return "".join(partes)
 
 
-def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False) -> str:
+def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: str = "") -> str:
     classe = " parede" if parede else ""
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -345,7 +366,7 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False) -> str:
 <div class="app">
 <aside>
 <div class="marca"><span class="logo">C</span><div><strong>C4ISTAR</strong><small>Monitor</small></div></div>
-{_menu(ativo)}
+{_menu(ativo, perfil)}
 </aside>
 <section class="palco{classe}">{miolo}</section>
 </div>
@@ -367,7 +388,7 @@ def _inicio(sessao: dict) -> str:
         "Dashboard",
         f"{_html_seguro(sessao.get('email') or '')} · {_html_seguro(_documento_visivel(sessao.get('documento') or ''))}",
     ) + "<main id='tela' data-tela='inicio'></main>"
-    return _moldura("C4ISTAR MONITOR", miolo, "/")
+    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=sessao.get("perfil") or "")
 
 
 def _ranking_html() -> str:
@@ -404,7 +425,7 @@ setInterval(ranking, 1000);
 </script>"""
 
 
-def _painel(numero: str, titulo: str, chave: str, mapas: bool) -> str:
+def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "") -> str:
     telas = {"1": "contagens", "2": "comportamento", "3": "alertas", "4": "mapas"}
     comandos = ""
     if mapas:
@@ -417,15 +438,15 @@ def _painel(numero: str, titulo: str, chave: str, mapas: bool) -> str:
 <button type="button" data-desenho="mancha">{_svg(_ICONES["mapa"])}Mancha</button>
 </div>"""
     miolo = _cabeca(titulo, "Os quadros seguem o mesmo padrão da tela de início.") + comandos + f"<main id='tela' data-tela='{telas[numero]}'></main>"
-    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}")
+    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", perfil=perfil)
 
 
-def _risco() -> str:
+def _risco(perfil: str = "") -> str:
     miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
-    return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco")
+    return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco", perfil=perfil)
 
 
-def _ao_vivo(cameras) -> str:
+def _ao_vivo(cameras, perfil: str = "") -> str:
     blocos = []
     for slug, nome, rua in cameras:
         legenda = _html_seguro(f"{nome} {rua}".strip())
@@ -437,13 +458,13 @@ def _ao_vivo(cameras) -> str:
         )
     grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
     miolo = _cabeca("Ao vivo", "O placar mostra a cena agora e o acumulado de cada câmera.") + f"<main data-tela='vivo'><section class='grade'>{grade}</section></main>"
-    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras")
+    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras", perfil=perfil)
 
 
-def _sem_analise() -> str:
+def _sem_analise(perfil: str = "") -> str:
     miolo = """<header class="topo"><div><h1>Painéis</h1>
 <p>As câmeras em análise nesta máquina pertencem a outro CPF. O seu cadastro continua disponível.</p></div></header>"""
-    return _moldura("C4ISTAR MONITOR", miolo, "/")
+    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=perfil)
 
 
 def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool = False) -> str:
@@ -503,7 +524,7 @@ classe.addEventListener("change", filtrarMotivo);
 filtrarMotivo();
 </script>
 </main>"""
-    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas")
+    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas", perfil=sessao.get("perfil") or "")
 
 
 def _aviso_html(texto: str, ok: bool = False) -> str:
@@ -598,6 +619,17 @@ def _pagina_criar(aviso: str = "") -> str:
 
 
 def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False) -> str:
+    novo = ""
+    if sessao.get("perfil") == "administrador":
+        novo = f"""<h2>Novo cliente</h2>
+<p>Ao criar, o cliente recebe no e-mail o login e uma senha provisória, que deve ser trocada no primeiro acesso.</p>
+<form method="post" action="/cadastro/cliente/novo">
+{_csrf(sessao)}
+{_campo("Nome", "nome_novo")}
+{_campo("CPF ou CNPJ", "documento_novo", obrigatorio=True)}
+{_campo("E-mail", "email_novo", tipo="email", obrigatorio=True)}
+<button type="submit">{_svg(_ICONES["mais"])}Criar cliente e enviar acesso</button>
+</form>"""
     miolo = f"""<main>
 <h1>Cliente</h1>
 <p>Estes dados são da conta do CPF ou CNPJ com o qual você entrou.</p>
@@ -610,8 +642,60 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
 {_campo("E-mail da conta", "email", cliente.get("email") or "", tipo="email")}
 <button type="submit">{_svg(_ICONES["mais"])}Salvar cliente</button>
 </form>
+{novo}
 </main>"""
-    return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente")
+    return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente", perfil=sessao.get("perfil") or "")
+
+
+def _gestao(sessao: dict, portal, aviso: str = "", ok: bool = False) -> str:
+    clientes = cadastro.resumo_clientes()
+    resumo = portal.resumo()
+    periodos = (resumo.get("periodos") or {}).get("total") or {}
+    online = len(portal.cameras())
+    cadastradas = sum(item["cameras"] for item in clientes)
+    cards = "".join(
+        f"<article class='cartao'><span>{rotulo}</span><strong>{valor}</strong></article>"
+        for rotulo, valor in (
+            ("Clientes cadastrados", len(clientes)),
+            ("Câmeras online", online),
+            ("Câmeras cadastradas", cadastradas),
+            ("Pessoas contabilizadas", int(periodos.get("Pessoa") or 0)),
+            ("Veículos contabilizados", int(periodos.get("Veiculo") or 0)),
+        )
+    )
+    linhas = []
+    for item in clientes:
+        documento = _html_seguro(item.get("documento") or "")
+        estado = "ativo" if item.get("ativo") else "inativo"
+        acao = "inativar" if item.get("ativo") else "ativar"
+        linhas.append(
+            "<tr>"
+            f"<td>{_html_seguro(item.get('nome'))}</td>"
+            f"<td>{_html_seguro(_documento_visivel(item.get('documento') or ''))}</td>"
+            f"<td>{_html_seguro(item.get('email'))}</td>"
+            f"<td>{item.get('cameras')}</td>"
+            f"<td>{estado}</td>"
+            "<td>"
+            f"<form method='post' action='/gestao/{acao}'>{_csrf(sessao)}"
+            f"<input type='hidden' name='documento' value='{documento}'>"
+            f"<button type='submit'>{acao.capitalize()}</button></form>"
+            f"<form method='post' action='/gestao/excluir'>{_csrf(sessao)}"
+            f"<input type='hidden' name='documento' value='{documento}'>"
+            "<button type='submit'>Excluir</button></form>"
+            "</td></tr>"
+        )
+    tabela = (
+        "<table><tr><th>Cliente</th><th>Documento</th><th>E-mail</th><th>Câmeras</th><th></th><th></th></tr>"
+        + "".join(linhas) + "</table>"
+    ) if linhas else "<p>Nenhum cliente cadastrado.</p>"
+    miolo = f"""<main>
+<h1>Gestão de ativos</h1>
+<p>Visão de todas as contas. A análise desta máquina continua na conta do administrador.</p>
+{_aviso_html(aviso, ok)}
+<section class="cartoes">{cards}</section>
+{tabela}
+</main>"""
+    return _moldura("Gestão de ativos · C4ISTAR MONITOR", miolo, "/gestao", perfil="administrador")
 
 
 def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: str = "", ok: bool = False) -> str:
@@ -625,10 +709,13 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
             f"<td>{_html_seguro(camera.get('cidade'))}</td>"
             f"<td>{estado}</td>"
             f"<td><a class='texto' href='/cadastro/cameras?id={_html_seguro(camera.get('id'))}'>Editar</a></td>"
+            "<td><form method='post' action='/cadastro/cameras/remover'>"
+            f"{_csrf(sessao)}<input type='hidden' name='id' value='{_html_seguro(camera.get('id'))}'>"
+            "<button type='submit'>Excluir</button></form></td>"
             "</tr>"
         )
     tabela = (
-        "<table><tr><th>Câmera</th><th>Rua</th><th>Cidade</th><th></th><th></th></tr>"
+        "<table><tr><th>Câmera</th><th>Rua</th><th>Cidade</th><th></th><th></th><th></th></tr>"
         + "".join(linhas)
         + "</table>"
     ) if linhas else "<p>Nenhuma câmera nesta conta.</p>"
@@ -665,7 +752,7 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 <button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>
 </form>
 </main>"""
-    return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras")
+    return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras", perfil=sessao.get("perfil") or "")
 
 
 def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = False) -> str:
@@ -715,7 +802,7 @@ def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = 
 <button type="submit">{_svg(_ICONES["mais"])}Salvar aviso</button>
 </form>
 </main>"""
-    return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos")
+    return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos", perfil=sessao.get("perfil") or "")
 
 
 def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
@@ -747,7 +834,7 @@ def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 <button type="submit">{_svg(_ICONES["mais"])}Criar usuário</button>
 </form>
 </main>"""
-    return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta")
+    return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta", perfil=sessao.get("perfil") or "")
 
 
 def np_from(foto: bytes):
@@ -809,6 +896,7 @@ def _dados_json(portal) -> dict:
             continue
         nomes[ident] = str(pessoa.get("nome") or "")
         classes[ident] = cadastro.classe_pessoa(pessoa)
+    linhas = [(ident, total) for ident, total in linhas if ident in nomes]
     contagem = {ident: total for ident, total in linhas}
     resumo = dict(portal.resumo())
     match = resumo.get("match")
@@ -893,8 +981,17 @@ def _tratador(portal: Portal):
             if caminho == "/cadastro/cliente":
                 self._salvar_cliente(sessao, campos)
                 return
+            if caminho == "/cadastro/cliente/novo":
+                self._criar_cliente(sessao, campos)
+                return
             if caminho == "/cadastro/cameras":
                 self._salvar_camera(sessao, campos)
+                return
+            if caminho == "/cadastro/cameras/remover":
+                self._remover_camera(sessao, campos)
+                return
+            if caminho in ("/gestao/ativar", "/gestao/inativar", "/gestao/excluir"):
+                self._gerir_cliente(sessao, campos, caminho.rsplit("/", 1)[-1])
                 return
             if caminho == "/cadastro/avisos":
                 self._salvar_aviso(sessao, campos)
@@ -912,6 +1009,10 @@ def _tratador(portal: Portal):
 
         def _pagina_autenticada(self, caminho: str, consulta: dict, sessao: dict):
             documento = sessao.get("documento") or ""
+            perfil = sessao.get("perfil") or ""
+            if sessao.get("trocar_no_acesso") and caminho not in ("/conta", "/sair") and not caminho.startswith("/conta"):
+                self._html(_form_conta(sessao, "No primeiro acesso, troque a senha enviada por e-mail."), 200)
+                return
             ver = cadastro.pode_ver_analise(documento)
             if caminho == "/painel.js":
                 self._bytes(Path("painel_web.js").read_bytes(), "text/javascript; charset=utf-8")
@@ -921,18 +1022,18 @@ def _tratador(portal: Portal):
                 return
             if caminho.startswith("/painel/"):
                 if not ver:
-                    self._html(_sem_analise(), 200)
+                    self._html(_sem_analise(perfil), 200)
                     return
                 numero = caminho.removeprefix("/painel/")
                 if numero == "cameras":
-                    self._html(_ao_vivo(portal.cameras()), 200)
+                    self._html(_ao_vivo(portal.cameras(), perfil), 200)
                     return
                 if numero == "risco":
-                    self._html(_risco(), 200)
+                    self._html(_risco(perfil), 200)
                     return
                 for item, chave, titulo in PAINEIS:
                     if item == numero:
-                        self._html(_painel(item, titulo, chave, mapas=item == "4"), 200)
+                        self._html(_painel(item, titulo, chave, mapas=item == "4", perfil=perfil), 200)
                         return
                 self.send_error(404)
                 return
@@ -947,6 +1048,20 @@ def _tratador(portal: Portal):
                 self._bytes(dados, "image/jpeg")
                 return
             aviso, ok = _mensagem(consulta)
+            if caminho.startswith("/mapa/") and caminho.endswith(".png"):
+                pedacos = caminho.strip("/").split("/")
+                if len(pedacos) == 4:
+                    try:
+                        self._tile(int(pedacos[1]), int(pedacos[2]), int(pedacos[3][:-4]))
+                    except ValueError:
+                        self.send_error(404)
+                    return
+            if caminho == "/gestao":
+                if perfil != "administrador":
+                    self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta tela é do administrador.</p></main>", "/", perfil=perfil), 403)
+                    return
+                self._html(_gestao(sessao, portal, aviso, ok), 200)
+                return
             if caminho == "/cadastro/cliente":
                 cliente = cadastro.cliente_por_documento(documento) or {}
                 self._html(_form_cliente(sessao, cliente, aviso, ok), 200)
@@ -1082,7 +1197,12 @@ def _tratador(portal: Portal):
             except ValueError as exc:
                 self._html(_pagina_senha(str(exc)), 401)
                 return
-            self._redirecionar("/", _cabecalho_cookie(acesso.emitir_cookie(usuario, portal.senha)))
+            conta = cadastro.cliente_por_documento(usuario.get("documento") or "")
+            if conta is not None and conta.get("ativo") is False and usuario.get("perfil") != "administrador":
+                self._html(_pagina_senha("Esta conta está inativa."), 403)
+                return
+            destino = "/conta" if usuario.get("trocar_no_acesso") else "/"
+            self._redirecionar(destino, _cabecalho_cookie(acesso.emitir_cookie(usuario, portal.senha)))
 
         def _criar_primeiro(self, campos: dict):
             try:
@@ -1124,6 +1244,47 @@ def _tratador(portal: Portal):
                 cookie = _cabecalho_cookie(acesso.emitir_cookie(usuario, portal.senha))
             self._redirecionar("/cadastro/cliente?ok=salvo", cookie)
 
+        def _criar_cliente(self, sessao: dict, campos: dict):
+            if sessao.get("perfil") != "administrador":
+                self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta ação é do administrador.</p></main>", "/", perfil=sessao.get("perfil") or ""), 403)
+                return
+            import secrets
+            import string
+            from agente.envio import enviar_email
+
+            nome = _um(campos, "nome_novo")
+            documento = _um(campos, "documento_novo")
+            email = _um(campos, "email_novo").strip().lower()
+            senha = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+            try:
+                cadastro.criar_cliente(nome, documento, email)
+                acesso.criar_convite(documento, nome, email, senha)
+            except ValueError as exc:
+                try:
+                    cadastro.excluir_cliente(documento)
+                except ValueError:
+                    pass
+                atual = cadastro.cliente_por_documento(sessao.get("documento") or "") or {}
+                self._html(_form_cliente(sessao, atual, str(exc)), 400)
+                return
+            enviado = enviar_email(
+                "Acesso ao C4ISTAR MONITOR",
+                "Seu acesso ao C4ISTAR MONITOR foi criado.\n\n"
+                f"Login: {email}\n"
+                f"Senha provisória: {senha}\n\n"
+                "No primeiro acesso, troque esta senha. Ela não é reenviada.",
+                destinos=[email],
+            )
+            if not enviado:
+                try:
+                    cadastro.excluir_cliente(documento)
+                except ValueError:
+                    pass
+                atual = cadastro.cliente_por_documento(sessao.get("documento") or "") or {}
+                self._html(_form_cliente(sessao, atual, "O e-mail de acesso não saiu. O cliente não foi criado."), 400)
+                return
+            self._redirecionar("/cadastro/cliente?ok=criado")
+
         def _salvar_camera(self, sessao: dict, campos: dict):
             documento = sessao.get("documento") or ""
             try:
@@ -1150,6 +1311,43 @@ def _tratador(portal: Portal):
                 self._html(_form_camera(sessao, cameras, None, str(exc)), 400)
                 return
             self._redirecionar("/cadastro/cameras?ok=salvo")
+
+        def _remover_camera(self, sessao: dict, campos: dict):
+            documento = sessao.get("documento") or ""
+            try:
+                cadastro.remover_camera(documento, _um(campos, "id"))
+            except ValueError as exc:
+                self._html(_form_camera(sessao, _cameras_ou_vazio(documento), None, str(exc)), 400)
+                return
+            self._redirecionar("/cadastro/cameras?ok=removido")
+
+        def _gerir_cliente(self, sessao: dict, campos: dict, acao: str):
+            if sessao.get("perfil") != "administrador":
+                self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta ação é do administrador.</p></main>", "/", perfil=sessao.get("perfil") or ""), 403)
+                return
+            documento = _um(campos, "documento")
+            try:
+                if acao == "excluir":
+                    cadastro.excluir_cliente(documento)
+                else:
+                    cadastro.definir_atividade(documento, acao == "ativar")
+            except ValueError as exc:
+                self._html(_gestao(sessao, portal, str(exc)), 400)
+                return
+            self._redirecionar(f"/gestao?ok={acao}")
+
+        def _tile(self, zoom: int, x: int, y: int):
+            from mapa import _baixar
+
+            imagem = _baixar(zoom, x, y)
+            if imagem is None or getattr(imagem, "size", 0) == 0:
+                self.send_error(404)
+                return
+            ok, bruto = cv2.imencode(".png", imagem)
+            if not ok:
+                self.send_error(404)
+                return
+            self._bytes(bruto.tobytes(), "image/png")
 
         def _salvar_aviso(self, sessao: dict, campos: dict):
             documento = sessao.get("documento") or ""
@@ -1266,7 +1464,11 @@ def _mensagem(consulta: dict) -> tuple[str, bool]:
     codigo = (consulta.get("ok") or [""])[0]
     textos = {
         "salvo": "Salvo.",
-        "removido": "Aviso removido.",
+        "removido": "Removido.",
+        "criado": "Cliente criado. O acesso foi enviado para o e-mail informado.",
+        "ativar": "Cliente ativado.",
+        "inativar": "Cliente inativado.",
+        "excluir": "Cliente excluído.",
         "senha": "Senha atualizada. Os outros acessos desta conta precisam entrar de novo.",
         "usuario": "Usuário criado. Ele entra com o e-mail e a senha informados.",
     }
