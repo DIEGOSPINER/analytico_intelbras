@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "C4ISTAR Monitor",
+    "slug": "c4istar-monitor",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "c4istar",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#071018"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "br.com.c4istar.monitor"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#071018"
+      },
+      "package": "br.com.c4istar.monitor"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "substitua-apos-eas-init"
+      }
+    }
+  }
+}

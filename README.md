@@ -50,6 +50,10 @@ python -m agente vigiar
 
 Os relatórios em markdown ficam em `relatorios/`. O JSON do Power BI é um só, `relatorios/historico_relatorios.json`: cada dia entra como mais um registro na série, sem arquivo novo por data. As impressões também seguem em `historico_insights.csv` e os alertas em `historico_alertas_ia.csv`. A memória do que já foi observado na rua fica em `memoria_rua.json`.
 
+## App iOS / Android
+
+Pasta [`mobile/`](mobile/) — Expo espelhando o portal. YOLO continua no PC; o app usa `/api/mobile/login`, `/dados`, `/stive` e `/custos`. Instalação, EAS, TestFlight/Play e WhatsApp Meta: veja [`mobile/README.md`](mobile/README.md).
+
 ## Acesso na rede e pela internet
 
 A análise **precisa** rodar no PC que enxerga as câmeras RTSP (`192.168.x.x`). Um VPS na nuvem sozinho não alcança essas câmeras. O navegador (celular, outro PC, fora de casa) entra no portal web deste PC.

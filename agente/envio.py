@@ -23,7 +23,12 @@ def email_configurado() -> bool:
 
 def whatsapp_configurado() -> bool:
     ativo = _limpo("WHATSAPP_ATIVO").lower() in ("1", "true", "sim", "yes")
-    return ativo and bool(_limpo("WHATSAPP_DESTINO") and _limpo("WHATSAPP_APIKEY"))
+    if not ativo:
+        return False
+    modo = (_limpo("WHATSAPP_MODO") or "callmebot").lower()
+    if modo in ("meta", "cloud", "oficial"):
+        return bool(_limpo("WHATSAPP_TOKEN") and _limpo("WHATSAPP_PHONE_NUMBER_ID") and _limpo("WHATSAPP_DESTINO"))
+    return bool(_limpo("WHATSAPP_DESTINO") and _limpo("WHATSAPP_APIKEY"))
 
 
 def enviar_email(assunto: str, texto: str, anexo: str = "", destinos=None) -> bool:
@@ -59,33 +64,27 @@ def enviar_email(assunto: str, texto: str, anexo: str = "", destinos=None) -> bo
         print(f"E-mail não enviado: {exc}")
         return False
     print(f"E-mail enviado para {', '.join(lista)}.")
+    try:
+        from custos.estimativa import registrar_envio
+
+        registrar_envio("email", "out", unidades=float(len(lista)), detalhe=assunto[:120])
+    except Exception:
+        pass
     return True
 
 
 def enviar_whatsapp(texto: str) -> bool:
-    destino = "".join(caractere for caractere in _limpo("WHATSAPP_DESTINO") if caractere.isdigit())
-    apikey = _limpo("WHATSAPP_APIKEY")
-    if not (destino and apikey):
-        print("WhatsApp não enviado. Preencha WHATSAPP_APIKEY no .env.")
+    ativo = _limpo("WHATSAPP_ATIVO").lower() in ("1", "true", "sim", "yes")
+    if not ativo:
+        print("WhatsApp desligado (WHATSAPP_ATIVO=0).")
         return False
-    consulta = urllib.parse.urlencode({
-        "phone": destino,
-        "text": (texto or "")[:1200],
-        "apikey": apikey,
-    })
-    url = f"https://api.callmebot.com/whatsapp.php?{consulta}"
     try:
-        with urllib.request.urlopen(url, timeout=30) as resposta:
-            corpo = resposta.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detalhe = exc.read().decode("utf-8", errors="replace")[:300]
-        print(f"WhatsApp não enviado: HTTP {exc.code}: {detalhe}")
+        from agente.whatsapp_canal import enviar
+
+        ok = enviar(texto or "")
+        if ok:
+            print("WhatsApp enviado.")
+        return ok
+    except Exception as exc:
+        print(f"WhatsApp não enviado: {exc}")
         return False
-    except urllib.error.URLError as exc:
-        print(f"WhatsApp não enviado: {exc.reason}")
-        return False
-    if "error" in corpo.lower() and "message sent" not in corpo.lower():
-        print(f"WhatsApp não enviado: {corpo[:300]}")
-        return False
-    print(f"WhatsApp enviado para {destino}.")
-    return True

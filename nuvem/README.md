@@ -11,7 +11,8 @@ docker compose up -d --build
 ```
 
 API: `http://127.0.0.1:8080/saude`  
-Ingestão: `POST /v1/ingestao` com header `X-Api-Key: <INGEST_TOKEN>`
+Ingestão: `POST /v1/ingestao` com header `X-Api-Key: <INGEST_TOKEN>`  
+WhatsApp Meta (Stive): `GET/POST /v1/whatsapp` com `WHATSAPP_VERIFY_TOKEN` / `WHATSAPP_TOKEN`
 
 ## Carga dos CSVs deste PC
 

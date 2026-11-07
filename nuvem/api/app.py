@@ -13,6 +13,16 @@ app = FastAPI(title="C4ISTAR Ingestão", version="1.0.0")
 
 TOKEN = (os.getenv("INGEST_TOKEN") or os.getenv("WEB_SENHA") or "").strip()
 
+try:
+    try:
+        from nuvem.api.whatsapp_webhook import router as whatsapp_router
+    except ImportError:
+        from whatsapp_webhook import router as whatsapp_router  # type: ignore
+
+    app.include_router(whatsapp_router)
+except Exception:
+    pass
+
 
 def _auth(authorization: str | None = Header(default=None), x_api_key: str | None = Header(default=None)):
     if not TOKEN:

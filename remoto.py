@@ -308,8 +308,13 @@ class Portal:
         with self._trava:
             return list(self._cameras)
 
-    def abrir_sessao(self, cabecalho: str):
-        return acesso.ler_cookie(_cookie(cabecalho), self.senha)
+    def abrir_sessao(self, cabecalho: str, authorization: str = ""):
+        from api_mobile import token_de_headers
+
+        token = token_de_headers(cabecalho, authorization)
+        if not token:
+            token = _cookie(cabecalho)
+        return acesso.ler_cookie(token, self.senha)
 
     def iniciar(self):
         tratador = _tratador(self)
@@ -1334,8 +1339,17 @@ def _tratador(portal: Portal):
         def log_message(self, formato, *args):
             return
 
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self._cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_GET(self):
             caminho, consulta = _caminho(self.path)
+            if caminho.startswith("/api/mobile/"):
+                self._api_mobile_get(caminho)
+                return
             if caminho == "/entrar":
                 self._html(_pagina_senha(), 200)
                 return
@@ -1345,7 +1359,7 @@ def _tratador(portal: Portal):
             if caminho == "/sair":
                 self._html(_pagina_senha(), 200, f"{COOKIE}=; HttpOnly; Path=/; Max-Age=0")
                 return
-            sessao = portal.abrir_sessao(self.headers.get("Cookie"))
+            sessao = portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))
             if sessao is None:
                 self._html(_pagina_senha(), 200)
                 return
@@ -1353,8 +1367,11 @@ def _tratador(portal: Portal):
 
         def do_POST(self):
             caminho, _consulta = _caminho(self.path)
+            if caminho.startswith("/api/mobile/"):
+                self._api_mobile_post(caminho)
+                return
             if caminho == "/cadastro/pessoas":
-                sessao = portal.abrir_sessao(self.headers.get("Cookie"))
+                sessao = portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))
                 if sessao is None:
                     self._html(_pagina_senha(), 200)
                     return
@@ -1369,7 +1386,7 @@ def _tratador(portal: Portal):
             if caminho == "/criar":
                 self._criar_primeiro(campos)
                 return
-            sessao = portal.abrir_sessao(self.headers.get("Cookie"))
+            sessao = portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))
             if sessao is None:
                 self._html(_pagina_senha(), 200)
                 return
@@ -1647,14 +1664,64 @@ def _tratador(portal: Portal):
                 return
             self._bytes(caminho.read_bytes(), "image/jpeg")
 
+        def _cors(self):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
         def _json(self, corpo: dict):
-            dados = json.dumps(corpo).encode("utf-8")
-            self.send_response(200)
+            self._json_status(200, corpo)
+
+        def _json_status(self, status: int, corpo: dict):
+            dados = json.dumps(corpo, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(dados)))
             self.send_header("Cache-Control", "no-store")
+            self._cors()
             self.end_headers()
             self.wfile.write(dados)
+
+        def _api_mobile_sessao(self):
+            return portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))
+
+        def _api_mobile_get(self, caminho: str):
+            import api_mobile
+
+            if caminho == "/api/mobile/saude":
+                self._json_status(200, api_mobile.saude())
+                return
+            sessao = self._api_mobile_sessao()
+            if sessao is None:
+                self._json_status(401, {"ok": False, "erro": "Faça login."})
+                return
+            if caminho == "/api/mobile/dados":
+                status, corpo = api_mobile.dados(portal, sessao, _dados_json)
+                self._json_status(status, corpo)
+                return
+            if caminho == "/api/mobile/custos":
+                status, corpo = api_mobile.custos(sessao)
+                self._json_status(status, corpo)
+                return
+            self._json_status(404, {"ok": False, "erro": "Rota mobile desconhecida."})
+
+        def _api_mobile_post(self, caminho: str):
+            import api_mobile
+
+            payload = api_mobile.corpo_json(self.rfile, self.headers.get("Content-Length") or "0")
+            if caminho == "/api/mobile/login":
+                status, corpo = api_mobile.login(portal, payload.get("email") or "", payload.get("senha") or "")
+                self._json_status(status, corpo)
+                return
+            sessao = self._api_mobile_sessao()
+            if sessao is None:
+                self._json_status(401, {"ok": False, "erro": "Faça login."})
+                return
+            if caminho == "/api/mobile/stive":
+                status, corpo = api_mobile.stive(portal, sessao, payload.get("pergunta") or "")
+                self._json_status(status, corpo)
+                return
+            self._json_status(404, {"ok": False, "erro": "Rota mobile desconhecida."})
 
         def _entrar(self, campos: dict):
             try:
