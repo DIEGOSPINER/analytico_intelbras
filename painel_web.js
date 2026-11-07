@@ -171,12 +171,14 @@ function barrasEmpilhadas(canvas, dias, opcoes) {
   dias.forEach((dia) => Object.keys(dia.cameras || {}).forEach((nome) => {
     if (!cameras.includes(nome)) cameras.push(nome);
   }));
-  const fonte = (opcoes && opcoes.fonte) || 11;
+  const grupos = Math.max(dias.length, 1);
+  const fontePedida = (opcoes && opcoes.fonte) || 11;
+  const muitos = grupos > 8;
+  const fonte = muitos ? Math.min(fontePedida, 11) : Math.min(fontePedida, 13);
   const esquerda = fonte >= 15 ? 64 : 42;
   const topo = 18;
   const baixo = fonte >= 15 ? 58 : 46;
   const h = Math.max(10, altura - topo - baixo);
-  const grupos = Math.max(dias.length, 1);
   const barrasPorGrupo = CLASSES.length;
   const larguraGrupo = (largura - esquerda - 8) / grupos;
   const larguraBarra = Math.max(6, Math.min(18, (larguraGrupo - 16) / barrasPorGrupo));
@@ -210,20 +212,33 @@ function barrasEmpilhadas(canvas, dias, opcoes) {
         total += valor;
         ctx.fillStyle = corCamera(camera, indiceCamera);
         ctx.fillRect(x, y, larguraBarra, alturaBarra);
-        if (alturaBarra >= 14) {
+        if (!muitos && alturaBarra >= 16 && larguraBarra >= 16) {
           ctx.fillStyle = "#041018";
+          ctx.font = "10px Segoe UI";
           ctx.fillText(String(valor), x + 1, y + 12);
+          ctx.font = `${fonte}px Segoe UI`;
         }
       });
-      if (total) {
+      if (total && larguraBarra >= 18) {
         ctx.fillStyle = "#f4f7fb";
+        ctx.font = "11px Segoe UI";
         ctx.fillText(String(total), x, y - 3);
+        ctx.font = `${fonte}px Segoe UI`;
       }
-      ctx.fillStyle = CORES[classe];
-      ctx.fillText(NOME_CLASSE[classe].slice(0, 3), x, topo + h + 14);
+      if (!muitos) {
+        ctx.fillStyle = CORES[classe];
+        ctx.font = "11px Segoe UI";
+        ctx.fillText(NOME_CLASSE[classe].slice(0, 3), x, topo + h + 14);
+        ctx.font = `${fonte}px Segoe UI`;
+      }
     });
-    ctx.fillStyle = "#93a0b8";
-    ctx.fillText(dia.rotulo || "", x0, altura - 8);
+    const passoRotulo = muitos ? Math.ceil(grupos / 8) : 1;
+    if (indiceDia % passoRotulo === 0) {
+      ctx.fillStyle = "#93a0b8";
+      ctx.font = "11px Segoe UI";
+      ctx.fillText(dia.rotulo || "", x0, altura - 8);
+      ctx.font = `${fonte}px Segoe UI`;
+    }
   });
   ctx.fillStyle = "#93a0b8";
   ctx.fillText("contagens", 2, 12);
@@ -750,7 +765,7 @@ function contagens(tela, dados) {
   enviarMapa("mapa-contagens", pontos, null);
   document.getElementById("legenda-contagens").innerHTML = legendaCameras(pontos.map((ponto) => ponto.nome));
   const diasFonte = baldeDias || dados.dias_empilhados || [];
-  const cameras = barrasEmpilhadas(document.getElementById("dias"), diasFonte, { fonte: 16 });
+  const cameras = barrasEmpilhadas(document.getElementById("dias"), diasFonte, { fonte: 12 });
   document.getElementById("legenda-dias").innerHTML = legendaCameras(cameras || []);
   if (baldeHoras) {
     linha(document.getElementById("horas"), seriesClasse(baldeHoras, (nome) => somarClasse(baldeHoras, nome)), baldeHoras.map((item) => item.rotulo), graoHoras, { fonte: 16 });
@@ -1104,14 +1119,14 @@ function mapas(tela, dados) {
       <article class="cartao"><h2>Mancha criminal</h2><iframe class="mapa-folium" id="mapa" title="Mancha criminal" src="/mapa/folha"></iframe><div id="legenda"></div></article>
       <article class="cartao"><h2>Ocorrências por dia da semana</h2><canvas class="grafico" id="semana-app"></canvas><div id="legenda-semana"></div></article>
       <section class="grade">
-        <article class="cartao"><h2>Por hora do dia</h2><canvas class="grafico" id="hora-app"></canvas></article>
-        <article class="cartao"><h2>Por natureza</h2><canvas class="grafico" id="rosca-app"></canvas></article>
+        <article class="cartao"><h2>Por hora do dia</h2><canvas class="grafico" id="hora-app"></canvas><div id="legenda-hora"></div></article>
+        <article class="cartao"><h2>Por natureza</h2><canvas class="grafico" id="rosca-app"></canvas><div id="legenda-natureza"></div></article>
       </section>
       <section class="grade">
-        <article class="cartao"><h2>Por logradouro</h2><canvas class="grafico" id="rua-app"></canvas></article>
-        <article class="cartao"><h2>Por bairro</h2><canvas class="grafico" id="bairro-app"></canvas></article>
+        <article class="cartao"><h2>Por logradouro</h2><canvas class="grafico" id="rua-app"></canvas><div id="legenda-rua"></div></article>
+        <article class="cartao"><h2>Por bairro</h2><canvas class="grafico" id="bairro-app"></canvas><div id="legenda-bairro"></div></article>
       </section>
-      <article class="cartao"><h2>Por cidade</h2><canvas class="grafico" id="cidade-app"></canvas></article>`;
+      <article class="cartao"><h2>Por cidade</h2><canvas class="grafico" id="cidade-app"></canvas><div id="legenda-cidade"></div></article>`;
     tela.dataset.pronto = "1";
     document.querySelectorAll("button[data-periodo],button[data-desenho]").forEach((botao) => {
       botao.addEventListener("click", () => {
@@ -1142,7 +1157,7 @@ function mapas(tela, dados) {
   const hojeNum = numeroDia(isoLocal(new Date()));
   const minimo = datas.length ? Math.min(...datas) : hojeNum - 29;
   const maximo = datas.length ? Math.max(hojeNum, ...datas) : hojeNum;
-  ligarPeriodo(document.getElementById("periodo-mapas"), minimo, maximo, isoDe(maximo - 29), isoDe(maximo));
+  ligarPeriodo(document.getElementById("periodo-mapas"), minimo, maximo, isoDe(minimo), isoDe(maximo));
   const linhas = linhasApp(dados);
   const lista = linhas.filter((ponto) => ponto.lat != null && ponto.lon != null).map((ponto) => ({
     ...ponto,
@@ -1178,17 +1193,39 @@ function mapas(tela, dados) {
   }
   const caixaSemana = document.getElementById("legenda-semana");
   if (caixaSemana) caixaSemana.innerHTML = legendaCameras(nomes);
-  barrasVerticais(document.getElementById("hora-app"), Array.from({ length: 24 }, (_, hora) => ({
+  const horasGrafico = Array.from({ length: 24 }, (_, hora) => ({
     rotulo: `${String(hora).padStart(2, "0")}h`,
     total: linhas.filter((item) => Number(item.hora) === hora).length,
     cor: "#4c8dff",
-  })).filter((item, indice, listaHora) => item.total || listaHora.some((outro) => outro.total)));
-  barrasVerticais(document.getElementById("rua-app"), contarCampo(linhas, "rua"));
-  barrasVerticais(document.getElementById("bairro-app"), contarCampo(linhas, "bairro"));
-  barrasVerticais(document.getElementById("cidade-app"), contarCampo(linhas, "cidade"));
-  roscaLivre(document.getElementById("rosca-app"), Object.entries(tipos).map(([nome, total], indice) => ({
-    nome, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
-  })));
+  })).filter((item) => item.total);
+  const ruasGrafico = contarCampo(linhas, "rua");
+  const bairrosGrafico = contarCampo(linhas, "bairro");
+  const cidadesGrafico = contarCampo(linhas, "cidade");
+  const naturezasGrafico = Object.entries(tipos).map(([nome, total], indice) => ({
+    nome, rotulo: nome, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
+  }));
+  barrasVerticais(document.getElementById("hora-app"), horasGrafico);
+  barrasVerticais(document.getElementById("rua-app"), ruasGrafico);
+  barrasVerticais(document.getElementById("bairro-app"), bairrosGrafico);
+  barrasVerticais(document.getElementById("cidade-app"), cidadesGrafico);
+  roscaLivre(document.getElementById("rosca-app"), naturezasGrafico);
+  const legendas = {
+    "legenda-hora": horasGrafico,
+    "legenda-rua": ruasGrafico,
+    "legenda-bairro": bairrosGrafico,
+    "legenda-cidade": cidadesGrafico,
+    "legenda-natureza": naturezasGrafico,
+  };
+  Object.entries(legendas).forEach(([id, itens]) => {
+    const caixa = document.getElementById(id);
+    if (caixa) caixa.innerHTML = legendaBarras(itens);
+  });
+}
+
+function legendaBarras(itens) {
+  const visiveis = (itens || []).filter((item) => item.total);
+  if (!visiveis.length) return "";
+  return `<div class="legenda-linha">${visiveis.map((item) => `<span><b style="background:${item.cor || "#4c8dff"}"></b>${escapar(item.rotulo || item.nome || "")}</span>`).join("")}</div>`;
 }
 
 const render = { inicio, contagens, comportamento, alertas, mapas, risco, vivo };
@@ -1221,6 +1258,18 @@ async function ciclo() {
     selo.hidden = !total;
     selo.textContent = total ? String(total) : "";
   }
+  const seloAlertas = document.getElementById("selo-alertas");
+  if (seloAlertas) {
+    const total = (dados.match ? 1 : 0) + ((dados.historico || []).length);
+    seloAlertas.hidden = !total;
+    seloAlertas.textContent = total ? String(total) : "";
+  }
+  const seloRisco = document.getElementById("selo-risco");
+  if (seloRisco) {
+    const aceso = ["amarelo", "vermelho", "preto"].includes(dados.led);
+    seloRisco.hidden = !aceso;
+    seloRisco.textContent = aceso ? "!" : "";
+  }
   if (window.atualizarStive) window.atualizarStive(dados);
   if (led) led.className = "led " + (dados.led || "branco");
   const tela = document.getElementById("tela");
@@ -1233,3 +1282,86 @@ async function ciclo() {
 
 ciclo();
 setInterval(ciclo, 1000);
+
+function iniciarBalao() {
+  const balao = document.getElementById("balao-stive");
+  if (!balao || balao.dataset.pronto) return;
+  balao.dataset.pronto = "1";
+  try {
+    const pos = JSON.parse(localStorage.getItem("stive-pos") || "null");
+    if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
+      balao.style.left = `${pos.left}px`;
+      balao.style.top = `${pos.top}px`;
+      balao.style.right = "auto";
+      balao.style.bottom = "auto";
+    }
+  } catch (erro) {}
+  const puxador = document.getElementById("abrir-stive");
+  let arrastando = false;
+  let moveu = false;
+  let dx = 0;
+  let dy = 0;
+  let origemX = 0;
+  let origemY = 0;
+  puxador.addEventListener("pointerdown", (evento) => {
+    arrastando = true;
+    moveu = false;
+    origemX = evento.clientX;
+    origemY = evento.clientY;
+    const rect = balao.getBoundingClientRect();
+    dx = evento.clientX - rect.left;
+    dy = evento.clientY - rect.top;
+    puxador.setPointerCapture(evento.pointerId);
+  });
+  puxador.addEventListener("pointermove", (evento) => {
+    if (!arrastando) return;
+    if (Math.hypot(evento.clientX - origemX, evento.clientY - origemY) > 5) moveu = true;
+    if (!moveu) return;
+    balao.style.left = `${Math.max(8, evento.clientX - dx)}px`;
+    balao.style.top = `${Math.max(8, evento.clientY - dy)}px`;
+    balao.style.right = "auto";
+    balao.style.bottom = "auto";
+  });
+  puxador.addEventListener("pointerup", () => {
+    if (!arrastando) return;
+    arrastando = false;
+    if (moveu) {
+      const rect = balao.getBoundingClientRect();
+      localStorage.setItem("stive-pos", JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }));
+      return;
+    }
+    balao.classList.toggle("fechado");
+  });
+  const form = document.getElementById("form-balao");
+  const chat = document.getElementById("chat-balao");
+  form.addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    const campo = form.querySelector("[name=pergunta]");
+    const texto = campo.value.trim();
+    if (!texto) return;
+    const eu = document.createElement("p");
+    eu.className = "bolha eu";
+    eu.textContent = texto;
+    chat.appendChild(eu);
+    campo.value = "";
+    const corpo = new URLSearchParams(new FormData(form));
+    corpo.set("pergunta", texto);
+    const resposta = await fetch("/agente/stive", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: corpo,
+    });
+    const dados = await resposta.json().catch(() => ({}));
+    const visual = dados.visual || {};
+    const grafico = visual.tipo === "barras" || visual.tipo === "linha" || visual.tipo === "rosca";
+    if (grafico) {
+      try { sessionStorage.setItem("stive-visual", JSON.stringify(visual)); } catch (erro) {}
+    }
+    const dele = document.createElement("p");
+    dele.className = "bolha stive";
+    dele.textContent = `${dados.fala || "Não consegui consultar a base agora."}${grafico ? " Para ver o gráfico, abra a página do Agente Stive." : ""}`;
+    chat.appendChild(dele);
+    chat.scrollTop = chat.scrollHeight;
+  });
+}
+iniciarBalao();

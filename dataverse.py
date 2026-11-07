@@ -124,13 +124,13 @@ class ClienteDataverse:
             filtros.append(f"createdon ge {inicio}T00:00:00Z")
         consulta = {
             "$orderby": "createdon asc",
-            "$top": "100",
+            "$top": "200",
         }
         if filtros:
             consulta["$filter"] = " and ".join(filtros)
         caminho = f"/api/data/v9.2/{self._conjunto}?{urllib.parse.urlencode(consulta)}"
         registros = []
-        while caminho and len(registros) < 300:
+        while caminho and len(registros) < 800:
             dados = self._get(caminho)
             registros.extend(dados.get("value") or [])
             seguinte = str(dados.get("@odata.nextLink") or "")

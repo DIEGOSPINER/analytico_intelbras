@@ -277,6 +277,34 @@ def cadastrar_pessoa(documento: str, pessoa: dict):
     return registro
 
 
+def remover_pessoa(documento: str, face_id: str):
+    cliente = _exigir(documento)
+    ident = str(face_id or "").strip().upper()
+    if not ident:
+        raise ValueError("Informe a pessoa que será excluída.")
+    pessoas = [
+        item for item in cliente.get("pessoas") or []
+        if str(item.get("face_id") or "").upper() != ident
+    ]
+    if len(pessoas) == len(cliente.get("pessoas") or []):
+        raise ValueError("Pessoa não encontrada nesta conta.")
+    cliente["pessoas"] = pessoas
+    _substituir(cliente)
+    interesse = Path("interesse.json")
+    if interesse.exists():
+        try:
+            bruto = json.loads(interesse.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            bruto = {}
+        if isinstance(bruto, dict):
+            bruto["pessoas"] = [
+                item for item in bruto.get("pessoas") or []
+                if str(item.get("face_id") or "").upper() != ident
+            ]
+            interesse.write_text(json.dumps(bruto, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return ident
+
+
 def cadastrar_veiculo(documento: str, veiculo: dict):
     if not isinstance(veiculo, dict) or not str(veiculo.get("placa") or "").strip():
         raise ValueError("Informe a placa.")

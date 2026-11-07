@@ -13,10 +13,12 @@ _CHATS = {}
 
 _SISTEMA = (
     "Você é Stive, agente de segurança do C4ISTAR MONITOR. "
-    "Responda em português, com frases curtas, só com base no contexto enviado. "
+    "Responda em português, com frases curtas, só com o contexto enviado. "
+    "O contexto é a base inteira do cliente logado, não apenas o dia de hoje. "
     "Quando o operador relatar uma ocorrência, preencha o objeto ocorrencia. "
     "Devolva sempre um JSON com as chaves fala, visual e ocorrencia. "
-    "visual tem tipo (numeros, lista ou texto), titulo e itens [{rotulo, total}]. "
+    "visual.tipo pode ser numeros, lista, texto, barras, linha ou rosca. "
+    "Para gráfico, análise ou comparação, use barras, linha ou rosca e preencha itens com rotulo e total. "
     "ocorrencia tem natureza, descricao, endereco, data e hora, ou fica vazio."
 )
 
@@ -133,28 +135,61 @@ def _historico_texto(documento: str) -> str:
     return "\n".join(linhas) or "(início da conversa)"
 
 
+def _somar(itens, chave):
+    totais = {}
+    for item in itens:
+        nome = str(item.get(chave) or "").strip() or "Sem informação"
+        totais[nome] = totais.get(nome, 0) + 1
+    return sorted(totais.items(), key=lambda par: -par[1])[:8]
+
+
 def _contexto(resumo: dict) -> str:
-    periodos = ((resumo or {}).get("periodos") or {}).get("dia") or {}
-    cameras = []
-    for camera in (resumo or {}).get("cameras_vivo") or []:
+    resumo = resumo or {}
+    periodos = resumo.get("periodos") or {}
+    total = periodos.get("total") or {}
+    mes = periodos.get("mes") or {}
+    cubo = resumo.get("cubo") or []
+    por_classe = {}
+    por_camera = {}
+    datas = []
+    for item in cubo:
+        classe = str(item.get("k") or "")
+        camera = str(item.get("c") or "")
+        valor = int(item.get("n") or 0)
+        if classe:
+            por_classe[classe] = por_classe.get(classe, 0) + valor
+        if camera:
+            por_camera[camera] = por_camera.get(camera, 0) + valor
+        if item.get("d"):
+            datas.append(str(item.get("d")))
+    app = resumo.get("app_linhas") or []
+    datas_app = [str(item.get("data") or "") for item in app if item.get("data")]
+    naturezas = ", ".join(f"{nome} {qtd}" for nome, qtd in _somar(app, "natureza")) or "nenhuma"
+    ruas = ", ".join(f"{nome} {qtd}" for nome, qtd in _somar(app, "rua")) or "nenhuma"
+    cameras_agora = []
+    for camera in resumo.get("cameras_vivo") or []:
         agora = camera.get("agora") or {}
-        cameras.append(
+        cameras_agora.append(
             f"{camera.get('nome')}: pessoas {agora.get('Pessoa', 0)}, "
             f"veículos {agora.get('Veiculo', 0)}, risco {camera.get('risco') or 'branco'}"
         )
-    linhas = []
-    for item in ((resumo or {}).get("app_linhas") or [])[-20:]:
-        linhas.append(
-            f"{item.get('data')} {item.get('natureza')} em {item.get('rua') or item.get('camera')}"
-        )
-    pendencias = [item.get("texto") or "" for item in (resumo or {}).get("pendencias") or []]
+    pendencias = [item.get("texto") or "" for item in resumo.get("pendencias") or []]
+    intervalo = ""
+    if datas or datas_app:
+        tudo = datas + datas_app
+        intervalo = f"Período coberto: {min(tudo)} a {max(tudo)}."
     return "\n".join([
-        f"LED geral: {(resumo or {}).get('led') or 'branco'}",
-        "Contagens de hoje: " + ", ".join(f"{chave} {valor}" for chave, valor in periodos.items()),
-        "Câmeras agora: " + ("; ".join(cameras) or "nenhuma"),
-        "Ocorrências recentes do aplicativo: " + ("; ".join(linhas) or "nenhuma"),
+        "Base completa do cliente logado, não só o dia corrente.",
+        intervalo,
+        "Acumulado analítico: " + ", ".join(f"{chave} {valor}" for chave, valor in por_classe.items()),
+        "Totais gravados: " + ", ".join(f"{chave} {valor}" for chave, valor in total.items()),
+        "No mês: " + ", ".join(f"{chave} {valor}" for chave, valor in mes.items()),
+        "Por câmera no histórico: " + ", ".join(f"{nome} {qtd}" for nome, qtd in sorted(por_camera.items(), key=lambda par: -par[1])[:8]),
+        "Câmeras neste instante: " + ("; ".join(cameras_agora) or "nenhuma"),
+        f"Ocorrências do aplicativo: {len(app)}. Naturezas: {naturezas}. Logradouros: {ruas}.",
         "Confirmações pendentes: " + ("; ".join(pendencias) or "nenhuma"),
-        f"Voz da tela: {(resumo or {}).get('voz') or ''}"[:500],
+        f"LED geral: {resumo.get('led') or 'branco'}",
+        f"Voz da tela: {resumo.get('voz') or ''}"[:500],
     ])
 
 
@@ -174,7 +209,7 @@ def _normalizar(saida: dict) -> dict:
     return {
         "fala": str(saida.get("fala") or "Estou com a base, pode perguntar de novo.")[:1200],
         "visual": {
-            "tipo": str(visual.get("tipo") or "texto"),
+            "tipo": str(visual.get("tipo") or "texto") if str(visual.get("tipo") or "texto") in ("numeros", "lista", "texto", "barras", "linha", "rosca") else "texto",
             "titulo": str(visual.get("titulo") or "")[:80],
             "itens": itens[:12],
         },
@@ -203,9 +238,15 @@ def _registrar_ocorrencia(documento: str, ocorrencia: dict):
     }, usar_modelo=False)
 
 
+def _total_base(resumo: dict, classe: str) -> int:
+    cubo = (resumo or {}).get("cubo") or []
+    if cubo:
+        return sum(int(item.get("n") or 0) for item in cubo if item.get("k") == classe)
+    return int((((resumo or {}).get("periodos") or {}).get("total") or {}).get(classe) or 0)
+
+
 def _local(pergunta: str, resumo: dict) -> dict:
     baixo = pergunta.lower()
-    periodos = ((resumo or {}).get("periodos") or {}).get("dia") or {}
     if any(trecho in baixo for trecho in ("registr", "informar ocorr", "houve ", "aconteceu")):
         return _normalizar({
             "fala": "Anotado como ocorrência informada pelo operador.",
@@ -218,24 +259,38 @@ def _local(pergunta: str, resumo: dict) -> dict:
                 "hora": datetime.now().strftime("%H:%M"),
             },
         })
+    quer_grafico = any(trecho in baixo for trecho in ("gráf", "graf", "analis", "visual", "compar"))
     if "pessoa" in baixo:
-        total = int(periodos.get("Pessoa") or 0)
+        total = _total_base(resumo, "Pessoa")
         return _normalizar({
-            "fala": f"Hoje as câmeras contaram {total} pessoas.",
-            "visual": {"tipo": "numeros", "titulo": "Pessoas hoje", "itens": [{"rotulo": "Pessoas", "total": total}]},
+            "fala": f"Na base do cliente há {total} pessoas contadas.",
+            "visual": {"tipo": "barras" if quer_grafico else "numeros", "titulo": "Pessoas na base", "itens": [{"rotulo": "Pessoas", "total": total}]},
         })
     if "veícul" in baixo or "veicul" in baixo or "placa" in baixo:
-        total = int(periodos.get("Veiculo") or 0)
+        total = _total_base(resumo, "Veiculo")
         return _normalizar({
-            "fala": f"Hoje as câmeras contaram {total} veículos.",
-            "visual": {"tipo": "numeros", "titulo": "Veículos hoje", "itens": [{"rotulo": "Veículos", "total": total}]},
+            "fala": f"Na base do cliente há {total} veículos contados.",
+            "visual": {"tipo": "barras" if quer_grafico else "numeros", "titulo": "Veículos na base", "itens": [{"rotulo": "Veículos", "total": total}]},
         })
     linhas = (resumo or {}).get("app_linhas") or []
     if "ocorr" in baixo or "natureza" in baixo:
-        itens = [{"rotulo": item.get("natureza") or "Ocorrência", "total": item.get("data") or ""} for item in linhas[-6:]]
+        pares = _somar(linhas, "natureza")
+        itens = [{"rotulo": nome, "total": qtd} for nome, qtd in pares] or [
+            {"rotulo": item.get("natureza") or "Ocorrência", "total": item.get("data") or ""} for item in linhas[-6:]
+        ]
         return _normalizar({
-            "fala": f"A base do aplicativo tem {len(linhas)} ocorrências carregadas nesta visão.",
-            "visual": {"tipo": "lista", "titulo": "Ocorrências", "itens": itens},
+            "fala": f"A base do aplicativo tem {len(linhas)} ocorrências.",
+            "visual": {"tipo": "rosca" if quer_grafico else "lista", "titulo": "Ocorrências", "itens": itens},
+        })
+    if quer_grafico:
+        itens = [
+            {"rotulo": classe, "total": _total_base(resumo, classe)}
+            for classe in ("Pessoa", "Veiculo", "Arma", "Fogo", "Animal", "Bicicleta")
+            if _total_base(resumo, classe)
+        ]
+        return _normalizar({
+            "fala": "Este é o acumulado da base do cliente.",
+            "visual": {"tipo": "barras", "titulo": "Base do cliente", "itens": itens or [{"rotulo": "Sem contagem", "total": 0}]},
         })
     voz = (resumo or {}).get("voz") or "A área está em observação."
     return _normalizar({

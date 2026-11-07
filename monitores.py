@@ -881,6 +881,30 @@ def _endereco_partes(item, local):
     return rua, "", ""
 
 
+def _linhas_csv_app():
+    caminho = "historico_ocorrencias_informadas.csv"
+    if not os.path.exists(caminho):
+        return []
+    saida = []
+    try:
+        with open(caminho, encoding="utf-8-sig", newline="") as arquivo:
+            leitor = csv.DictReader(arquivo, delimiter=";")
+            for linha in leitor:
+                saida.append({
+                    "id": linha.get("Id") or "",
+                    "data": linha.get("Data") or "",
+                    "hora": linha.get("Hora") or "",
+                    "natureza": linha.get("Natureza") or "Ocorrencia",
+                    "titulo": linha.get("Natureza") or "Ocorrencia",
+                    "endereco": linha.get("Endereco") or "",
+                    "latitude": linha.get("Latitude") or "",
+                    "longitude": linha.get("Longitude") or "",
+                })
+    except OSError:
+        return []
+    return saida
+
+
 def _linha_app(item):
     lat, lon = _coordenada_item(item)
     aproximado = False
@@ -1327,20 +1351,31 @@ class Acervo:
 
     def _ler_app(self):
         caminho = "ocorrencias_informadas.json"
-        if not os.path.exists(caminho):
+        csv_caminho = "historico_ocorrencias_informadas.csv"
+        marca = os.path.getmtime(caminho) if os.path.exists(caminho) else 0
+        marca_csv = os.path.getmtime(csv_caminho) if os.path.exists(csv_caminho) else 0
+        if not marca and not marca_csv:
             return
-        marca = os.path.getmtime(caminho)
-        if marca == self._mtime_app:
+        chave_marca = (marca, marca_csv)
+        if chave_marca == self._mtime_app:
             return
-        self._mtime_app = marca
-        try:
-            with open(caminho, encoding="utf-8") as arquivo:
-                bruto = json.loads(arquivo.read())
-        except (OSError, json.JSONDecodeError):
-            return
-        itens = bruto.get("ocorrencias") if isinstance(bruto, dict) else bruto
-        if not isinstance(itens, list):
-            return
+        self._mtime_app = chave_marca
+        itens = []
+        if os.path.exists(caminho):
+            try:
+                with open(caminho, encoding="utf-8") as arquivo:
+                    bruto = json.loads(arquivo.read())
+            except (OSError, json.JSONDecodeError):
+                bruto = {}
+            lidos = bruto.get("ocorrencias") if isinstance(bruto, dict) else bruto
+            if isinstance(lidos, list):
+                itens = list(lidos)
+        conhecidos = {str(item.get("id") or "") for item in itens if item.get("id")}
+        for extra in _linhas_csv_app():
+            ident = str(extra.get("id") or "")
+            if ident and ident in conhecidos:
+                continue
+            itens.append(extra)
         itens = sorted(itens, key=lambda item: (item.get("data") or "", item.get("hora") or ""))
         avisos = []
         pontos = []
@@ -1357,9 +1392,9 @@ class Acervo:
             self.linhas_locais = linhas
 
     def _agendar_app_remoto(self):
-        if not (self.quer_leitura or self.quer_mapas) or self._app_buscando:
+        if self._app_buscando:
             return
-        if time.time() - self._app_remoto_em < INTERVALO_PAINEL_SEG:
+        if time.time() - self._app_remoto_em < 120:
             return
         self._app_remoto_em = time.time()
         self._app_buscando = True
@@ -1371,7 +1406,7 @@ class Acervo:
             cliente = ClienteDataverse()
             if not cliente.configurado():
                 return
-            inicio = (date.today() - timedelta(days=14)).isoformat()
+            inicio = (date.today() - timedelta(days=180)).isoformat()
             linhas = cliente.listar(inicio=inicio)
         except Exception:
             return

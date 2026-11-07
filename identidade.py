@@ -1045,6 +1045,23 @@ class IdentificadorFaces:
             self.cadastro.setdefault(ident, {})["foto_referencia"] = str(ref).replace("\\", "/")
             return ident
 
+    def remover_foto(self, face_id):
+        """Tira a pessoa da galeria viva e apaga a pasta dela."""
+        import shutil
+
+        with self._trava:
+            ident = str(face_id or "").strip().upper()
+            if not ident:
+                return
+            self.galeria.pop(ident, None)
+            self.cadastro.pop(ident, None)
+            self.track_para_face = {
+                chave: valor for chave, valor in self.track_para_face.items() if valor != ident
+            }
+        pasta = DIR_FACES / ident
+        if pasta.is_dir():
+            shutil.rmtree(pasta, ignore_errors=True)
+
     def processar(self, camera, frame, pessoas):
         with self._trava:
             return self._processar_bloqueado(camera, frame, pessoas)

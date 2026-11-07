@@ -180,6 +180,14 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .quadro-stive { min-height: 220px; }
 .pendencia { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
 .pendencia button { background: transparent; color: var(--texto); border: 1px solid var(--linha); }
+.avatar-stive { object-position: center 18%; }
+.balao-stive { position: fixed; right: 22px; bottom: 22px; z-index: 30; width: 320px; display: flex; flex-direction: column-reverse; align-items: flex-end; }
+.balao-stive.fechado { width: 72px; height: 72px; }
+.puxador-stive { width: 72px; height: 72px; border-radius: 50%; padding: 0; overflow: hidden; border: 2px solid #4c8dff; background: #08131f; cursor: grab; }
+.puxador-stive img { width: 100%; height: 100%; object-fit: cover; object-position: center 18%; display: block; }
+.balao-stive.fechado form { display: none; }
+.balao-stive form { margin-top: 8px; background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px; padding: 12px; }
+.chat-balao { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
   .cartoes, .coluna, .grade, .grade.tres, .stive { grid-template-columns: 1fr; }
@@ -371,7 +379,12 @@ def _menu(ativo: str, perfil: str = "") -> str:
         if href == "/gestao" or (href == "/cadastro/cliente" and perfil != "administrador"):
             partes.append("<p class='grupo'>Conta</p>")
         classe = " class='ativo'" if href == ativo else ""
-        selo = "<i id='selo-stive' class='selo' hidden></i>" if href == "/painel/stive" else ""
+        selos = {
+            "/painel/stive": "<i id='selo-stive' class='selo' hidden></i>",
+            "/painel/3": "<i id='selo-alertas' class='selo' hidden></i>",
+            "/painel/risco": "<i id='selo-risco' class='selo' hidden></i>",
+        }
+        selo = selos.get(href, "")
         partes.append(
             f"<a href='{href}'{classe}>{_svg(_ICONES[icone])}<span>{titulo}</span>{selo}</a>"
         )
@@ -379,8 +392,22 @@ def _menu(ativo: str, perfil: str = "") -> str:
     return "".join(partes)
 
 
-def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: str = "") -> str:
+def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: str = "", csrf: str = "") -> str:
     classe = " parede" if parede else ""
+    balao = ""
+    if csrf and ativo != "/painel/stive":
+        balao = (
+            "<div id='balao-stive' class='balao-stive fechado'>"
+            "<button type='button' class='puxador-stive' id='abrir-stive' title='Stive'>"
+            "<img alt='Stive' src='/agente/stive.png'></button>"
+            "<form id='form-balao'>"
+            f"<input type='hidden' name='csrf' value='{_html_seguro(csrf)}'>"
+            "<div class='chat-balao' id='chat-balao'></div>"
+            "<label>Mensagem<input name='pergunta' autocomplete='off' placeholder='Fale com o Stive'></label>"
+            "<button type='submit'>Enviar</button>"
+            "<a class='texto' href='/painel/stive'>Abrir o Agente Stive</a>"
+            "</form></div>"
+        )
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -398,6 +425,7 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
 <section class="palco{classe}">{miolo}</section>
 </div>
 <div id="led" class="led branco" title="Risco"></div>
+{balao}
 <script src="/painel.js"></script>
 </body>
 </html>"""
@@ -415,7 +443,7 @@ def _inicio(sessao: dict) -> str:
         "Dashboard",
         f"{_html_seguro(sessao.get('email') or '')} · {_html_seguro(_documento_visivel(sessao.get('documento') or ''))}",
     ) + "<main id='tela' data-tela='inicio'></main>"
-    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=sessao.get("perfil") or "")
+    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
 def _ranking_html() -> str:
@@ -452,7 +480,7 @@ setInterval(ranking, 1000);
 </script>"""
 
 
-def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "") -> str:
+def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "", csrf: str = "") -> str:
     telas = {"1": "contagens", "2": "comportamento", "3": "alertas", "4": "mapas"}
     comandos = ""
     if mapas:
@@ -465,15 +493,15 @@ def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "")
 <button type="button" data-desenho="mancha">{_svg(_ICONES["mapa"])}Mancha</button>
 </div>"""
     miolo = _cabeca(titulo, "Os quadros seguem o mesmo padrão da tela de início.") + comandos + f"<main id='tela' data-tela='{telas[numero]}'></main>"
-    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", perfil=perfil)
+    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", perfil=perfil, csrf=csrf)
 
 
-def _risco(perfil: str = "") -> str:
+def _risco(perfil: str = "", csrf: str = "") -> str:
     miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
-    return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco", perfil=perfil)
+    return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco", perfil=perfil, csrf=csrf)
 
 
-def _ao_vivo(cameras, perfil: str = "") -> str:
+def _ao_vivo(cameras, perfil: str = "", csrf: str = "") -> str:
     blocos = []
     for slug, nome, rua in cameras:
         legenda = _html_seguro(f"{nome} {rua}".strip())
@@ -485,7 +513,7 @@ def _ao_vivo(cameras, perfil: str = "") -> str:
         )
     grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
     miolo = _cabeca("Ao vivo", "O placar mostra a cena agora e o acumulado de cada câmera.") + f"<main data-tela='vivo'><section class='grade'>{grade}</section></main>"
-    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras", perfil=perfil)
+    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras", perfil=perfil, csrf=csrf)
 
 
 def _stive(sessao: dict) -> str:
@@ -505,10 +533,31 @@ function desenharVisual(visual) {
   if (!quadro) return;
   const itens = (visual && visual.itens) || [];
   const titulo = (visual && visual.titulo) || "Quadro do Stive";
+  const tipo = (visual && visual.tipo) || "texto";
+  if ((tipo === "barras" || tipo === "linha" || tipo === "rosca") && itens.length) {
+    quadro.innerHTML = "<h2></h2><canvas class='grafico' id='grafico-stive' width='640' height='280'></canvas>";
+    quadro.querySelector("h2").textContent = titulo;
+    const canvas = document.getElementById("grafico-stive");
+    const serie = itens.map((item, indice) => ({
+      rotulo: String(item.rotulo || ""),
+      nome: String(item.rotulo || ""),
+      total: Number(item.total) || 0,
+      cor: ["#4c8dff", "#3ee0ff", "#7cffb2", "#ffb020", "#ff5c7a", "#c084fc"][indice % 6],
+    }));
+    if (tipo === "rosca" && typeof roscaLivre === "function") roscaLivre(canvas, serie);
+    else if (typeof barrasVerticais === "function") barrasVerticais(canvas, serie);
+    return;
+  }
   quadro.innerHTML = "<h2>" + titulo.replace(/[&<>]/g, "") + "</h2>" + (itens.map((item) =>
     "<div class='linha-face'><span>" + String(item.rotulo || "") + "</span><strong>" + String(item.total ?? "") + "</strong></div>"
   ).join("") || "<p>O quadro acompanha o que você pedir na conversa.</p>");
 }
+window.addEventListener("load", () => {
+  try {
+    const salvo = sessionStorage.getItem("stive-visual");
+    if (salvo) desenharVisual(JSON.parse(salvo));
+  } catch (erro) {}
+});
 form.addEventListener("submit", async (evento) => {
   evento.preventDefault();
   const campo = form.querySelector("[name=pergunta]");
@@ -555,7 +604,7 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 <article class="cartao">
 <img class="avatar-stive" alt="Stive" src="/agente/stive.png" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'avatar-stive',textContent:'S'}}))">
 <h2>Stive</h2>
-<p>Agente de segurança. Pergunte sobre a base ou informe uma ocorrência.</p>
+<p>Agente de segurança. Pergunte sobre as informações do seu ambiente ou informe uma ocorrência.</p>
 <div id="pendencias-stive"></div>
 </article>
 <article class="cartao">
@@ -570,13 +619,13 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 </div>
 </main>
 {script}"""
-    return _moldura("Agente Stive · C4ISTAR MONITOR", miolo, "/painel/stive", perfil=sessao.get("perfil") or "")
+    return _moldura("Agente Stive · C4ISTAR MONITOR", miolo, "/painel/stive", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
-def _sem_analise(perfil: str = "") -> str:
+def _sem_analise(perfil: str = "", csrf: str = "") -> str:
     miolo = """<header class="topo"><div><h1>Painéis</h1>
 <p>As câmeras em análise nesta máquina pertencem a outro CPF. O seu cadastro continua disponível.</p></div></header>"""
-    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=perfil)
+    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=perfil, csrf=csrf)
 
 
 def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool = False) -> str:
@@ -600,7 +649,10 @@ def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool =
         corrigir.append(f"<option value='{face}'>Corrigir {_html_seguro(pessoa.get('nome') or face)} ({face})</option>")
         rostos.append(
             "<figure><img alt='' src='/rosto/"
-            f"{face}.jpg'><figcaption>{_html_seguro(pessoa.get('nome') or face)} · {face}</figcaption></figure>"
+            f"{face}.jpg'><figcaption>{_html_seguro(pessoa.get('nome') or face)} · {face}</figcaption>"
+            "<form method='post' action='/cadastro/pessoas/remover'>"
+            f"{_csrf(sessao)}<input type='hidden' name='face_id' value='{face}'>"
+            "<button type='submit'>Excluir</button></form></figure>"
         )
     grade = f"<div class='rostos'>{''.join(rostos)}</div>" if rostos else "<p>Nenhuma pessoa de interesse nesta conta.</p>"
     miolo = f"""<header class="topo"><div><h1>Pessoas de interesse</h1>
@@ -636,7 +688,7 @@ classe.addEventListener("change", filtrarMotivo);
 filtrarMotivo();
 </script>
 </main>"""
-    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas", perfil=sessao.get("perfil") or "")
+    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
 def _aviso_html(texto: str, ok: bool = False) -> str:
@@ -756,7 +808,7 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
 </form>
 {novo}
 </main>"""
-    return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente", perfil=sessao.get("perfil") or "")
+    return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
 def _gestao(sessao: dict, portal, aviso: str = "", ok: bool = False) -> str:
@@ -807,7 +859,7 @@ def _gestao(sessao: dict, portal, aviso: str = "", ok: bool = False) -> str:
 <section class="cartoes">{cards}</section>
 {tabela}
 </main>"""
-    return _moldura("Gestão de ativos · C4ISTAR MONITOR", miolo, "/gestao", perfil="administrador")
+    return _moldura("Gestão de ativos · C4ISTAR MONITOR", miolo, "/gestao", perfil="administrador", csrf=sessao.get("csrf") or "")
 
 
 def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: str = "", ok: bool = False) -> str:
@@ -864,7 +916,7 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 <button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>
 </form>
 </main>"""
-    return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras", perfil=sessao.get("perfil") or "")
+    return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
 def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = False) -> str:
@@ -914,7 +966,7 @@ def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = 
 <button type="submit">{_svg(_ICONES["mais"])}Salvar aviso</button>
 </form>
 </main>"""
-    return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos", perfil=sessao.get("perfil") or "")
+    return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
 def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
@@ -946,7 +998,7 @@ def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 <button type="submit">{_svg(_ICONES["mais"])}Criar usuário</button>
 </form>
 </main>"""
-    return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta", perfil=sessao.get("perfil") or "")
+    return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
 
 
 def np_from(foto: bytes):
@@ -1111,6 +1163,9 @@ def _tratador(portal: Portal):
             if caminho == "/cadastro/avisos/remover":
                 self._remover_aviso(sessao, campos)
                 return
+            if caminho == "/cadastro/pessoas/remover":
+                self._remover_pessoa(sessao, campos)
+                return
             if caminho == "/conta/senha":
                 self._trocar_senha(sessao, campos)
                 return
@@ -1143,21 +1198,21 @@ def _tratador(portal: Portal):
                 return
             if caminho.startswith("/painel/"):
                 if not ver:
-                    self._html(_sem_analise(perfil), 200)
+                    self._html(_sem_analise(perfil, sessao.get("csrf") or ""), 200)
                     return
                 numero = caminho.removeprefix("/painel/")
                 if numero == "cameras":
-                    self._html(_ao_vivo(portal.cameras(), perfil), 200)
+                    self._html(_ao_vivo(portal.cameras(), perfil, sessao.get("csrf") or ""), 200)
                     return
                 if numero == "risco":
-                    self._html(_risco(perfil), 200)
+                    self._html(_risco(perfil, sessao.get("csrf") or ""), 200)
                     return
                 if numero == "stive":
                     self._html(_stive(sessao), 200)
                     return
                 for item, chave, titulo in PAINEIS:
                     if item == numero:
-                        self._html(_painel(item, titulo, chave, mapas=item == "4", perfil=perfil), 200)
+                        self._html(_painel(item, titulo, chave, mapas=item == "4", perfil=perfil, csrf=sessao.get("csrf") or ""), 200)
                         return
                 self.send_error(404)
                 return
@@ -1261,6 +1316,18 @@ def _tratador(portal: Portal):
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
                 return
             self._redirecionar("/cadastro/pessoas?ok=salvo")
+
+        def _remover_pessoa(self, sessao: dict, campos: dict):
+            documento = sessao.get("documento") or ""
+            face_id = _um(campos, "face_id").upper()
+            try:
+                cadastro.remover_pessoa(documento, face_id)
+                if portal._faces is not None:
+                    portal._faces.remover_foto(face_id)
+            except ValueError as exc:
+                self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
+                return
+            self._redirecionar("/cadastro/pessoas?ok=removido")
 
         def _ler_multipart(self):
             tipo = self.headers.get("Content-Type") or ""
