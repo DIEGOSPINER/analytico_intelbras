@@ -253,6 +253,20 @@ def _somar(itens, chave):
     return sorted(totais.items(), key=lambda par: -par[1])[:8]
 
 
+def _contexto_audio(resumo: dict) -> str:
+    pacote = (resumo or {}).get("audio") or {}
+    alertas = pacote.get("alertas") or []
+    if not alertas:
+        return "Áudio: sem alerta verbal recente."
+    linhas = []
+    for item in alertas[:5]:
+        linhas.append(
+            f"{item.get('quando') or ''} {item.get('camera') or ''}: "
+            f"{item.get('categoria') or ''} · {(item.get('texto') or item.get('detalhe') or '')[:120]}"
+        )
+    return "Áudio de risco recente: " + " | ".join(linhas)
+
+
 def _contexto(resumo: dict) -> str:
     resumo = resumo or {}
     periodos = resumo.get("periodos") or {}
@@ -302,6 +316,7 @@ def _contexto(resumo: dict) -> str:
         f"Voz da tela: {resumo.get('voz') or ''}"[:500],
         "Skill: analista criminal / policial experiente — cruza pessoa, horário, dia, câmera e ocorrências.",
         "Regra: 1 passagem de risco = 1 chance de invasão; 20h–06h e fim de semana elevam o peso.",
+        _contexto_audio(resumo),
     ])
 
 
@@ -378,6 +393,25 @@ def _local(pergunta: str, resumo: dict, documento: str = "") -> dict:
             return _normalizar(resposta_chat(documento, pergunta, resumo))
         except Exception:
             pass
+    if any(trecho in baixo for trecho in ("áudio", "audio", "transcri", "xing", "socorro", "disparo", "nuvem")):
+        pacote = (resumo or {}).get("audio") or {}
+        alertas = pacote.get("alertas") or []
+        esteira = pacote.get("esteira") or []
+        if alertas:
+            itens = [{"rotulo": f"{a.get('camera')}: {a.get('categoria')}", "total": a.get("nivel") or 1} for a in alertas[:8]]
+            fala = "No áudio recente há risco. " + " ".join(
+                f"{a.get('camera')}: {(a.get('texto') or a.get('detalhe') or '')[:80]}." for a in alertas[:3]
+            )
+        elif esteira:
+            itens = [{"rotulo": e.get("camera") or "Camera", "total": 1} for e in esteira[:8]]
+            fala = f"Há {len(esteira)} trecho(s) na esteira de transcrição, ainda sem palavra de risco ranqueada."
+        else:
+            itens = [{"rotulo": "Sem áudio", "total": 0}]
+            fala = "Ainda não há transcrição de áudio registrada nesta sessão."
+        return _normalizar({
+            "fala": fala,
+            "visual": {"tipo": "barras", "titulo": "Áudio por câmera", "itens": itens},
+        })
     quer_grafico = any(trecho in baixo for trecho in ("gráf", "graf", "analis", "visual", "compar"))
     if "pessoa" in baixo:
         total = _total_base(resumo, "Pessoa")

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import shutil
 import subprocess
 import threading
@@ -22,24 +21,12 @@ from io import BytesIO
 import numpy as np
 
 from agente.modelo import carregar_env
+from audio_registro import classificar_texto, registrar as registrar_audio
 from cameras import destino_publico
 
 
 TAXA = 16000
 JANELA_SEGUNDOS = 6
-PALAVRAS_BRIGA = (
-    r"\bbrig(?:a|as|ando|aram|ou)\b",
-    r"\bagress\w*",
-    r"\bporrada\b",
-    r"\btapa\b",
-    r"\bempurra\w*",
-    r"\bcala a boca\b",
-    r"\bte mato\b",
-    r"\bvou te matar\b",
-    r"\barma\b",
-    r"\btiro\b",
-    r"\bdisparo\b",
-)
 FRASES_INVENTADAS = (
     "obrigado por assistir",
     "thanks for watching",
@@ -143,9 +130,8 @@ def _transcricao_confiavel(corpo: dict) -> str:
     return texto
 
 
-def _fala_de_briga(texto: str) -> bool:
-    baixo = (texto or "").lower()
-    return any(re.search(padrao, baixo) for padrao in PALAVRAS_BRIGA)
+def _risco_audio(texto: str) -> list[dict]:
+    return classificar_texto(texto)
 
 
 class EscutaAudio:
@@ -160,8 +146,6 @@ class EscutaAudio:
         self._thread = None
         self._ultimo_disparo = 0.0
         self._ultima_fala = 0.0
-        self.suspeito_ate = 0.0
-        self.suspeito_tipo = ""
         self.suspeito_ate = 0.0
         self.suspeito_tipo = ""
 
@@ -233,15 +217,31 @@ class EscutaAudio:
             self._ultimo_disparo = agora
             self.suspeito_ate = agora + 45
             self.suspeito_tipo = "disparo"
+            detalhe = "Pico curto de áudio compatível com disparo. Confirme o trecho; moto e porta também estouram."
+            conf = round(min(nivel, 1.0), 2)
+            registrar_audio(
+                self.nome,
+                "Possivel_Disparo",
+                texto="",
+                detalhe=detalhe,
+                confianca=conf,
+                categoria="disparo",
+                nivel=3,
+                palavras=["disparo"],
+            )
             self.eventos.put({
                 "classe": "Possivel_Disparo",
                 "risco": "Atencao",
-                "nivel": 2,
-                "confianca": round(min(nivel, 1.0), 2),
-                "detalhe": "Pico curto de áudio compatível com disparo. Confirme o trecho; moto e porta também estouram.",
+                "nivel": 3,
+                "confianca": conf,
+                "detalhe": detalhe,
+                "texto": "",
+                "categoria": "disparo",
+                "palavras": ["disparo"],
+                "stive": True,
             })
             return
-        if tipo != "voz" or agora - self._ultima_fala < 180:
+        if tipo != "voz" or agora - self._ultima_fala < 50:
             return
         if os.getenv("AUDIO_TRANSCRICAO", "1").strip().lower() in ("0", "false", "nao", "não"):
             return
@@ -255,15 +255,46 @@ class EscutaAudio:
             print(f"Transcrição de {self.nome} não concluída: {_sem_segredo(str(exc), self.url)[:180]}")
             return
         texto = _transcricao_confiavel(corpo)
-        if not texto or not _fala_de_briga(texto):
+        if not texto:
             return
         trecho = " ".join(texto.split())[:240]
-        self.suspeito_ate = time.time() + 45
-        self.suspeito_tipo = "voz"
+        achados = _risco_audio(trecho)
+        categorias = sorted({item["categoria"] for item in achados})
+        palavras = [item["palavra"] for item in achados]
+        nivel = max((int(item["nivel"]) for item in achados), default=0)
+        classe = "Transcricao_Audio"
+        risco_nome = "Informativo"
+        avisar = False
+        if achados:
+            if "disparo" in categorias or "briga" in categorias or "socorro" in categorias:
+                classe = "Audio_Risco"
+                risco_nome = "Prioritario"
+                avisar = True
+            else:
+                classe = "Audio_Atencao"
+                risco_nome = "Atencao"
+                avisar = True
+        registrar_audio(
+            self.nome,
+            classe,
+            texto=trecho,
+            detalhe=("Risco verbal: " + ", ".join(categorias)) if categorias else "Transcrição de áudio da câmera.",
+            confianca=0.7 if achados else 0.5,
+            categoria=",".join(categorias) if categorias else "transcricao",
+            nivel=nivel,
+            palavras=palavras,
+        )
+        if avisar:
+            self.suspeito_ate = time.time() + 45
+            self.suspeito_tipo = "voz"
         self.eventos.put({
-            "classe": "Possivel_Briga",
-            "risco": "Prioritario",
-            "nivel": 3,
-            "confianca": 0.7,
-            "detalhe": f"Fala com sinal de briga: {trecho}",
+            "classe": classe,
+            "risco": risco_nome,
+            "nivel": nivel or 1,
+            "confianca": 0.7 if achados else 0.5,
+            "detalhe": (f"Áudio com sinal de {', '.join(categorias)}: {trecho}" if categorias else f"Transcrição: {trecho}"),
+            "texto": trecho,
+            "categoria": ",".join(categorias) if categorias else "transcricao",
+            "palavras": palavras,
+            "stive": avisar,
         })

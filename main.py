@@ -1823,6 +1823,44 @@ def _pendencias_vivas(cameras):
     return vivos[:6]
 
 
+def _pacote_audio():
+    from audio_registro import carregar_historico, resumo_audio, tokens_nuvem
+
+    pacote = resumo_audio()
+    if pacote.get("esteira"):
+        return pacote
+    historico = carregar_historico(80)
+    if not historico:
+        return pacote
+    nuvem = {}
+    ranking = {}
+    for item in historico:
+        camera = item.get("camera") or "Camera"
+        nuvem.setdefault(camera, {})
+        ranking.setdefault(camera, {})
+        for token in tokens_nuvem(item.get("texto") or ""):
+            nuvem[camera][token] = nuvem[camera].get(token, 0) + 1
+        categorias = [c.strip() for c in str(item.get("categoria") or "risco").split(",") if c.strip()]
+        for palavra in item.get("palavras") or []:
+            cat = categorias[0] if categorias else "risco"
+            chave = f"{cat}:{palavra}"
+            ranking[camera][chave] = ranking[camera].get(chave, 0) + 1
+    pacote["esteira"] = historico
+    pacote["cameras"] = {
+        nome: {
+            "nuvem": [{"rotulo": k, "total": v} for k, v in sorted(vals.items(), key=lambda p: -p[1])[:24]],
+            "ranking_risco": [
+                {"rotulo": k, "total": v}
+                for k, v in sorted(ranking.get(nome, {}).items(), key=lambda p: -p[1])[:12]
+            ],
+        }
+        for nome, vals in nuvem.items()
+    }
+    pacote["alertas"] = [item for item in historico if item.get("risco")][:20]
+    pacote["risco_aberto"] = len(pacote["alertas"])
+    return pacote
+
+
 def _montar_voz(cameras, match, narracao, narracao_ia):
     partes = []
     for camera in cameras or []:
@@ -1840,6 +1878,16 @@ def _montar_voz(cameras, match, narracao, narracao_ia):
         )
     elif match and match.get("tipo") == "PLACA":
         partes.append(f"Veículo de interesse {match.get('id') or ''} na {match.get('camera') or 'câmera'}.")
+    try:
+        from audio_registro import resumo_audio
+
+        for alerta in (resumo_audio().get("alertas") or [])[:2]:
+            trecho = alerta.get("texto") or alerta.get("detalhe") or alerta.get("categoria") or "áudio de risco"
+            partes.append(
+                f"Áudio na {alerta.get('camera') or 'câmera'}: {trecho}"
+            )
+    except Exception:
+        pass
     if not partes:
         return "A área está em observação. Nenhum risco acima de informe neste momento."
     return " ".join(parte.strip() for parte in partes if str(parte).strip())
@@ -2219,14 +2267,19 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "aprendizado": str(pacote.get("aprendizado") or ""),
         "relatorio": _linha_relatorio(pacote),
         "voz": _montar_voz(cameras, match_vivo, narracao, narracao_ia),
+        "audio": _pacote_audio(),
     })
 
 
+
 def main():
+    from audio_registro import inicializar_csv_audio
+
     inicializar_csv()
     inicializar_csv_ocorrencias()
     inicializar_csv_faces()
     inicializar_csv_placas()
+    inicializar_csv_audio()
     garantir_arquivo_cameras()
 
     print("Carregando modelos YOLO + Pose + Faces/Placas...")
@@ -2365,6 +2418,8 @@ def main():
             for item in list(estado.values()):
                 cam = item["analitica"]
                 for som in item.get("audio").drenar() if item.get("audio") else []:
+                    if int(som.get("nivel") or 0) < 2 and not som.get("stive"):
+                        continue
                     salvar_ocorrencia(
                         cam.nome,
                         "Audio",

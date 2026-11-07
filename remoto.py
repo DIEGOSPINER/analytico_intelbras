@@ -226,6 +226,20 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .caixa-rf { display: grid; gap: 8px; margin: 10px 0 14px; padding: 12px; border: 1px solid var(--linha); border-radius: 14px; background: rgba(8,12,24,.35); }
 .caixa-rf select { min-height: 110px; }
 .caixa-rf.oculta { display: none; }
+.esteira-audio { display: grid; gap: 10px; max-height: 420px; overflow: auto; padding-right: 4px; }
+.linha-audio { display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(8,12,24,.42); border-left: 4px solid #4c8dff; }
+.linha-audio.risco { border-left-color: #ff5a5a; background: rgba(255,60,60,.12); }
+.linha-audio.atencao { border-left-color: #ffb020; background: rgba(255,176,32,.10); }
+.linha-audio .meta { color: var(--mudo); font-size: 12px; }
+.linha-audio .texto { margin: 4px 0 0; line-height: 1.4; }
+.selo-audio-cat { display: inline-block; margin: 2px 6px 0 0; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,.08); }
+.nuvem-audio { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-height: 120px; }
+.nuvem-audio span { line-height: 1.1; color: #d7e6ff; }
+.nuvem-audio span.risco { color: #ff8f8f; font-weight: 700; }
+.rank-audio { display: grid; gap: 8px; margin-top: 10px; }
+.rank-audio .barra { display: grid; grid-template-columns: 1fr 48px; gap: 8px; align-items: center; font-size: 13px; }
+.rank-audio .trilha { height: 10px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; }
+.rank-audio .trilha i { display: block; height: 100%; background: linear-gradient(90deg, #ffb020, #ff5a5a); }
 @media (max-width: 1100px) {
   aside { width: 84px; } .marca div, nav a span, .grupo { display: none; }
   .cartoes, .coluna, .grade, .grade.tres, .stive, .stive-topo { grid-template-columns: 1fr; }
@@ -389,6 +403,7 @@ _ICONES = {
     "sair": "<path d='M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2'/><path d='M15 12H3m0 0 3-3m-3 3 3 3'/>",
     "mais": "<path d='M12 5v14M5 12h14'/>",
     "stive": "<circle cx='12' cy='8' r='3'/><path d='M6 19c1-3 3-4.5 6-4.5s5 1.5 6 4.5'/><path d='M18 5c1.5 1.2 2 2.6 2 4'/>",
+    "audio": "<path d='M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4'/>",
 }
 
 
@@ -400,6 +415,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
         ("/painel/3", "Alertas de RF e LPR", "alerta"),
         ("/painel/4", "Mapas", "mapa"),
         ("/painel/risco", "Detector de risco", "alerta"),
+        ("/painel/audio", "Áudio e transcrição", "audio"),
         ("/painel/cameras", "Ao vivo", "camera"),
         ("/painel/stive", "Agente Stive", "stive"),
         ("/gestao", "Gestão de ativos", "cliente"),
@@ -421,6 +437,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
             "/painel/stive": "<i id='selo-stive' class='selo' hidden></i>",
             "/painel/3": "<i id='selo-alertas' class='selo' hidden></i>",
             "/painel/risco": "<i id='selo-risco' class='selo' hidden></i>",
+            "/painel/audio": "<i id='selo-audio' class='selo' hidden></i>",
         }
         selo = selos.get(href, "")
         partes.append(
@@ -541,6 +558,17 @@ def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "",
 def _risco(perfil: str = "", csrf: str = "") -> str:
     miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
     return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco", perfil=perfil, csrf=csrf)
+
+
+def _audio(perfil: str = "", csrf: str = "") -> str:
+    miolo = (
+        _cabeca(
+            "Áudio e transcrição",
+            "Esteira de falas por câmera, nuvem de palavras e ranking de risco sonoro.",
+        )
+        + "<main id='tela' data-tela='audio'></main>"
+    )
+    return _moldura("C4ISTAR MONITOR · Áudio e transcrição", miolo, "/painel/audio", perfil=perfil, csrf=csrf)
 
 
 def _ao_vivo(cameras, perfil: str = "", csrf: str = "") -> str:
@@ -1335,6 +1363,9 @@ def _tratador(portal: Portal):
                     return
                 if numero == "risco":
                     self._html(_risco(perfil, sessao.get("csrf") or ""), 200)
+                    return
+                if numero == "audio":
+                    self._html(_audio(perfil, sessao.get("csrf") or ""), 200)
                     return
                 if numero == "stive":
                     self._html(_stive(sessao), 200)

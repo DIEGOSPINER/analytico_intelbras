@@ -1408,7 +1408,75 @@ function legendaBarras(itens) {
   return `<div class="legenda-linha">${visiveis.map((item) => `<span><b style="background:${item.cor || "#4c8dff"}"></b>${escapar(item.rotulo || item.nome || "")}</span>`).join("")}</div>`;
 }
 
-const render = { inicio, contagens, comportamento, alertas, mapas, risco, vivo };
+function nivelAudioClasse(item) {
+  const nivel = Number(item.nivel || 0);
+  if (nivel >= 3 || item.risco) return "risco";
+  if (nivel >= 2) return "atencao";
+  return "";
+}
+
+function nuvemHtml(itens, ranking) {
+  const risco = new Set((ranking || []).map((item) => String(item.rotulo || "").split(":").pop()));
+  const lista = itens || [];
+  if (!lista.length) return "<p>Sem palavras ainda nesta câmera.</p>";
+  const maior = Math.max(1, ...lista.map((item) => Number(item.total) || 0));
+  return `<div class="nuvem-audio">${lista.map((item) => {
+    const total = Number(item.total) || 0;
+    const tamanho = 12 + Math.round((total / maior) * 22);
+    const classe = risco.has(String(item.rotulo || "")) ? "risco" : "";
+    return `<span class="${classe}" style="font-size:${tamanho}px">${escapar(item.rotulo)} <small>${total}</small></span>`;
+  }).join("")}</div>`;
+}
+
+function rankingAudioHtml(itens) {
+  const lista = itens || [];
+  if (!lista.length) return "<p>Nenhuma palavra de risco ranqueada.</p>";
+  const maior = Math.max(1, ...lista.map((item) => Number(item.total) || 0));
+  return `<div class="rank-audio">${lista.map((item) => {
+    const total = Number(item.total) || 0;
+    const pct = Math.max(8, Math.round((total / maior) * 100));
+    const rotulo = String(item.rotulo || "").replace(":", " · ");
+    return `<div class="barra"><div><strong>${escapar(rotulo)}</strong><div class="trilha"><i style="width:${pct}%"></i></div></div><span>${total}</span></div>`;
+  }).join("")}</div>`;
+}
+
+function audio(tela, dados) {
+  const pacote = dados.audio || {};
+  if (!tela.dataset.pronto) {
+    tela.innerHTML = `<article class="cartao"><h2>Esteira de transcrição</h2><div id="esteira-audio" class="esteira-audio"></div></article>
+      <article class="cartao"><h2>Nuvem e ranking de risco por câmera</h2><div id="nuvens-audio"></div></article>`;
+    tela.dataset.pronto = "1";
+  }
+  const esteira = pacote.esteira || [];
+  const caixa = document.getElementById("esteira-audio");
+  if (caixa) {
+    caixa.innerHTML = esteira.map((item) => {
+      const cats = String(item.categoria || "").split(",").filter(Boolean)
+        .map((cat) => `<span class="selo-audio-cat">${escapar(cat)}</span>`).join("");
+      return `<div class="linha-audio ${nivelAudioClasse(item)}">
+        <div class="meta"><strong>${escapar(item.camera || "")}</strong><br>${escapar(item.quando || "")}<br>${cats || "<span class='selo-audio-cat'>transcrição</span>"}</div>
+        <div><p class="texto">${escapar(item.texto || item.detalhe || "Evento de áudio")}</p>
+        ${(item.palavras || []).length ? `<p class="meta">Risco: ${escapar((item.palavras || []).join(", "))}</p>` : ""}</div>
+      </div>`;
+    }).join("") || "<p>Aguardando áudio das câmeras. A esteira sobe conforme a escuta e a transcrição.</p>";
+  }
+  const nuvens = document.getElementById("nuvens-audio");
+  if (nuvens) {
+    const cameras = pacote.cameras || {};
+    const nomes = Object.keys(cameras);
+    nuvens.innerHTML = nomes.map((nome) => {
+      const bloco = cameras[nome] || {};
+      return `<section style="margin-top:18px">
+        <h3 style="margin:0 0 8px">${escapar(nome)}</h3>
+        ${nuvemHtml(bloco.nuvem || [], bloco.ranking_risco || [])}
+        <h4 style="margin:14px 0 6px;font-size:14px;color:var(--mudo)">Ranking de risco</h4>
+        ${rankingAudioHtml(bloco.ranking_risco || [])}
+      </section>`;
+    }).join("") || "<p>Sem nuvem ainda. Quando houver fala nas câmeras, as palavras aparecem aqui.</p>";
+  }
+}
+
+const render = { inicio, contagens, comportamento, alertas, mapas, risco, vivo, audio };
 
 function pulsar() {
   document.querySelectorAll("[data-agulha]").forEach((artigo) => {
@@ -1443,6 +1511,12 @@ async function ciclo() {
     const total = (dados.match ? 1 : 0) + ((dados.historico || []).length);
     seloAlertas.hidden = !total;
     seloAlertas.textContent = total ? String(total) : "";
+  }
+  const seloAudio = document.getElementById("selo-audio");
+  if (seloAudio) {
+    const total = Number((dados.audio || {}).risco_aberto || 0) || ((dados.audio || {}).alertas || []).length;
+    seloAudio.hidden = !total;
+    seloAudio.textContent = total ? String(total) : "";
   }
   const seloRisco = document.getElementById("selo-risco");
   if (seloRisco) {
@@ -1569,6 +1643,10 @@ function chavesFalaBase(dados) {
   });
   (dados.pendencias || []).forEach((item) => chaves.push(`pend:${item.id}`));
   if (dados.match) chaves.push(`match:${dados.match.id}|${dados.match.taxa}|${dados.match.risco}`);
+  ((dados.audio || {}).alertas || []).forEach((item) => {
+    const trecho = String(item.texto || item.detalhe || item.categoria || "").trim();
+    if (trecho) chaves.push(`audio:${item.quando}|${item.camera}|${trecho}`);
+  });
   return chaves;
 }
 
@@ -1633,6 +1711,18 @@ function atualizarFalaStive(dados) {
     );
   }
   falarVozStive(dados);
+  ((dados.audio || {}).alertas || []).slice(0, 4).forEach((item) => {
+    const trecho = String(item.texto || item.detalhe || item.categoria || "").trim();
+    if (!trecho) return;
+    const nivel = Number(item.nivel || 0);
+    if (nivel < 2 && !item.risco) return;
+    enfileirarFalaStive(
+      `audio:${item.quando}|${item.camera}|${trecho}`,
+      "Áudio de risco",
+      `Escutei na ${item.camera || "câmera"}: ${trecho}`,
+      { classe: nivel >= 3 ? "risco" : "info", tipo: "audio" },
+    );
+  });
   (dados.informes || []).slice(0, 4).forEach((item) => {
     const textoBase = String(item.descricao || item.tipo || "").trim();
     if (!textoBase) return;
