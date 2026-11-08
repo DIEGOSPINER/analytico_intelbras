@@ -252,51 +252,19 @@ function legendaCameras(cameras) {
 
 function rosca(canvas, riscos) {
   if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const largura = canvas.clientWidth || 320;
-  const altura = canvas.clientHeight || 280;
-  const dpr = 2;
-  canvas.width = largura * dpr;
-  canvas.height = altura * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, largura, altura);
   const ordem = ["Informativo", "Atencao", "Prioritario", "Critico"];
-  const valores = ordem.map((nome) => Number(riscos[nome] || 0));
-  const total = valores.reduce((soma, valor) => soma + valor, 0);
-  const cx = largura * 0.42;
-  const cy = altura * 0.48;
-  const raio = Math.min(largura, altura) * 0.30;
-  let angulo = -Math.PI / 2;
-  ordem.forEach((nome, indice) => {
-    const fatia = total ? (valores[indice] / total) * Math.PI * 2 : 0;
-    if (fatia <= 0) return;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.fillStyle = CORES_RISCO[nome];
-    ctx.arc(cx, cy, raio, angulo, angulo + fatia);
-    ctx.closePath();
-    ctx.fill();
-    const meio = angulo + fatia / 2;
-    const pct = total ? Math.round((1000 * valores[indice]) / total) / 10 : 0;
-    ctx.fillStyle = CORES_RISCO[nome];
-    ctx.font = "13px Segoe UI";
-    ctx.fillText(`${NOME_RISCO[nome]} ${pct}%`, cx + Math.cos(meio) * (raio + 8), cy + Math.sin(meio) * (raio + 8));
-    angulo += fatia;
+  const fatias = ordem
+    .map((nome) => ({
+      nome: NOME_RISCO[nome],
+      rotulo: NOME_RISCO[nome],
+      total: Number(riscos[nome] || 0),
+      cor: CORES_RISCO[nome],
+    }))
+    .filter((item) => item.total > 0);
+  roscaLivre(canvas, fatias.length ? fatias : [{ nome: "Sem prioridade", rotulo: "Sem prioridade", total: 0, cor: "#93a0b8" }], {
+    rotulosExternos: true,
+    vazio: "Sem prioridade hoje",
   });
-  ctx.beginPath();
-  ctx.fillStyle = "#12182a";
-  ctx.arc(cx, cy, raio * 0.58, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#f4f7fb";
-  ctx.font = "22px Segoe UI";
-  ctx.textAlign = "center";
-  ctx.fillText(String(total), cx, cy + 6);
-  ctx.textAlign = "left";
-  if (!total) {
-    ctx.fillStyle = "#93a0b8";
-    ctx.font = "14px Segoe UI";
-    ctx.fillText("Sem prioridade hoje", 16, 24);
-  }
 }
 
 function tiposHtml(tipos) {
@@ -506,15 +474,16 @@ function roscaLivre(canvas, fatias, opcoes) {
   canvas.height = altura * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
-  const total = fatias.reduce((soma, item) => soma + item.total, 0);
-  const externos = !!(opcoes && opcoes.rotulosExternos);
-  const cx = externos ? largura * 0.5 : largura * 0.34;
-  const cy = externos ? altura * 0.5 : altura * 0.52;
-  const raio = externos ? Math.min(largura, altura) * 0.32 : Math.min(largura, altura) * 0.32;
+  const total = fatias.reduce((soma, item) => soma + Number(item.total || 0), 0);
+  // Padrão: rótulos fora da rosca, com linha guia (não sobrepostos).
+  const externos = !(opcoes && opcoes.rotulosExternos === false);
+  const cx = largura * 0.5;
+  const cy = altura * 0.5;
+  const raio = Math.min(largura, altura) * (externos ? 0.28 : 0.32);
   let angulo = -Math.PI / 2;
   const fatiasDesenhadas = [];
   fatias.forEach((item) => {
-    const fatia = total ? (item.total / total) * Math.PI * 2 : 0;
+    const fatia = total ? (Number(item.total || 0) / total) * Math.PI * 2 : 0;
     if (fatia <= 0) return;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
@@ -525,7 +494,7 @@ function roscaLivre(canvas, fatias, opcoes) {
     fatiasDesenhadas.push({
       ...item,
       meio: angulo + fatia / 2,
-      pct: total ? Math.round((1000 * item.total) / total) / 10 : 0,
+      pct: total ? Math.round((1000 * Number(item.total || 0)) / total) / 10 : 0,
     });
     angulo += fatia;
   });
@@ -536,10 +505,11 @@ function roscaLivre(canvas, fatias, opcoes) {
   ctx.fillStyle = "#f4f7fb";
   ctx.font = "22px Segoe UI";
   ctx.textAlign = "center";
-  ctx.fillText(String(total), cx, cy + 6);
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(total), cx, cy);
   if (externos) {
-    const raioLinha = raio + 14;
-    const raioTexto = raio + 48;
+    const raioLinha = raio + 12;
+    const raioTexto = raio + Math.max(42, Math.min(largura, altura) * 0.18);
     fatiasDesenhadas.forEach((item) => {
       const cos = Math.cos(item.meio);
       const sin = Math.sin(item.meio);
@@ -558,35 +528,35 @@ function roscaLivre(canvas, fatias, opcoes) {
       ctx.lineTo(x3 + (direita ? 10 : -10), y3);
       ctx.stroke();
       const nome = String(item.nome || item.rotulo || "Natureza");
-      const curto = nome.length > 26 ? `${nome.slice(0, 24)}…` : nome;
+      const curto = nome.length > 22 ? `${nome.slice(0, 20)}…` : nome;
       const texto = `${curto} · ${item.pct}% · ${item.total}`;
       ctx.fillStyle = "#f4f7fb";
-      ctx.font = "600 15px Segoe UI";
+      ctx.font = "600 14px Segoe UI";
       ctx.textAlign = direita ? "left" : "right";
       ctx.textBaseline = "middle";
-      const tx = Math.max(10, Math.min(largura - 10, x3 + (direita ? 12 : -12)));
-      const ty = Math.max(16, Math.min(altura - 12, y3));
+      const tx = Math.max(8, Math.min(largura - 8, x3 + (direita ? 12 : -12)));
+      const ty = Math.max(14, Math.min(altura - 14, y3));
       ctx.fillText(texto, tx, ty);
     });
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
   } else {
     ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     ctx.font = "14px Segoe UI";
     fatias.slice(0, 8).forEach((item, indice) => {
-      const pct = total ? Math.round((1000 * item.total) / total) / 10 : 0;
+      const pct = total ? Math.round((1000 * Number(item.total || 0)) / total) / 10 : 0;
       const y = 28 + indice * 22;
       ctx.fillStyle = item.cor;
-      ctx.fillRect(largura * 0.62, y - 10, 10, 10);
+      ctx.fillRect(8, y - 10, 10, 10);
       ctx.fillStyle = "#f4f7fb";
-      ctx.fillText(`${item.nome || item.rotulo || ""}  ${pct}%  (${item.total})`, largura * 0.62 + 16, y);
+      ctx.fillText(`${item.nome || item.rotulo || ""}  ${pct}%  (${item.total})`, 24, y);
     });
   }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
   if (!total) {
     ctx.fillStyle = "#93a0b8";
-    ctx.textAlign = "left";
     ctx.font = "14px Segoe UI";
-    ctx.fillText("Sem ocorrência neste período.", 16, 28);
+    ctx.fillText((opcoes && opcoes.vazio) || "Sem ocorrência neste período.", 16, 28);
   }
 }
 
@@ -963,7 +933,7 @@ function comportamento(tela, dados) {
     </section>
     <section class="grade">
       <article class="cartao"><h2>Tipo de comportamento</h2><div id="tipos"></div></article>
-      <article class="cartao"><h2>Prioridade</h2><canvas class="grafico" id="rosca"></canvas><div id="legenda-risco"></div></article>
+      <article class="cartao"><h2>Prioridade</h2><canvas class="grafico grafico-rosca" id="rosca"></canvas><div id="legenda-risco"></div></article>
     </section>
     <article class="cartao"><h2>Prioridade ao longo das horas</h2><canvas class="grafico" id="horas-prioridade"></canvas></article>
     <section class="grade">
@@ -1465,7 +1435,7 @@ function mapas(tela, dados) {
   barrasVerticais(document.getElementById("rua-app"), ruasGrafico);
   barrasVerticais(document.getElementById("bairro-app"), bairrosGrafico);
   barrasVerticais(document.getElementById("cidade-app"), cidadesGrafico);
-  roscaLivre(document.getElementById("rosca-app"), naturezasGrafico, { rotulosExternos: true });
+  roscaLivre(document.getElementById("rosca-app"), naturezasGrafico);
   const caixaHora = document.getElementById("legenda-hora");
   if (caixaHora) caixaHora.innerHTML = legendaCameras(nomesNatureza);
   const legendas = {
@@ -1913,13 +1883,7 @@ function iniciarFalaStive() {
     if (confirmar) {
       const dados = await confirmarPendencia(confirmar);
       const chat = document.getElementById("chat-balao") || document.getElementById("chat-stive");
-      if (chat) {
-        const dele = document.createElement("p");
-        dele.className = "bolha stive";
-        dele.textContent = dados.fala || "Confirmação registrada.";
-        chat.appendChild(dele);
-        chat.scrollTop = chat.scrollHeight;
-      }
+      if (chat) acrescentarBolhaChat(chat, "stive", dados.fala || "Confirmação registrada.");
       fecharFalaStive();
       return;
     }
@@ -1935,6 +1899,46 @@ function iniciarFalaStive() {
       fecharFalaStive();
     }
   });
+}
+
+const CHAVE_CHAT_STIVE = "stive-chat";
+
+function lerChatStive() {
+  try {
+    const bruto = JSON.parse(sessionStorage.getItem(CHAVE_CHAT_STIVE) || "[]");
+    return Array.isArray(bruto) ? bruto.filter((item) => item && item.papel && item.texto).slice(-80) : [];
+  } catch (erro) {
+    return [];
+  }
+}
+
+function gravarChatStive(lista) {
+  try {
+    sessionStorage.setItem(CHAVE_CHAT_STIVE, JSON.stringify((lista || []).slice(-80)));
+  } catch (erro) {}
+}
+
+function acrescentarBolhaChat(chat, papel, texto, gravar) {
+  if (!chat) return;
+  const p = document.createElement("p");
+  p.className = `bolha ${papel}`;
+  p.textContent = texto;
+  chat.appendChild(p);
+  chat.scrollTop = chat.scrollHeight;
+  if (gravar === false) return;
+  const lista = lerChatStive();
+  lista.push({ papel, texto: String(texto || "").slice(0, 4000) });
+  gravarChatStive(lista);
+}
+
+function restaurarChatStive(chat) {
+  if (!chat || chat.dataset.restaurado) return;
+  chat.dataset.restaurado = "1";
+  const lista = lerChatStive();
+  if (!lista.length) return;
+  chat.innerHTML = "";
+  lista.forEach((item) => acrescentarBolhaChat(chat, item.papel, item.texto, false));
+  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
 }
 
 function iniciarBalao() {
@@ -1989,15 +1993,13 @@ function iniciarBalao() {
   });
   const form = document.getElementById("form-balao");
   const chat = document.getElementById("chat-balao");
+  restaurarChatStive(chat);
   form.addEventListener("submit", async (evento) => {
     evento.preventDefault();
     const campo = form.querySelector("[name=pergunta]");
     const texto = campo.value.trim();
     if (!texto) return;
-    const eu = document.createElement("p");
-    eu.className = "bolha eu";
-    eu.textContent = texto;
-    chat.appendChild(eu);
+    acrescentarBolhaChat(chat, "eu", texto);
     campo.value = "";
     const corpo = new URLSearchParams(new FormData(form));
     corpo.set("pergunta", texto);
@@ -2009,14 +2011,11 @@ function iniciarBalao() {
     const dados = await resposta.json().catch(() => ({}));
     const visual = dados.visual || {};
     const grafico = visual.tipo === "barras" || visual.tipo === "linha" || visual.tipo === "rosca";
-    if (grafico) {
+    if (grafico || visual.itens) {
       try { sessionStorage.setItem("stive-visual", JSON.stringify(visual)); } catch (erro) {}
     }
-    const dele = document.createElement("p");
-    dele.className = "bolha stive";
-    dele.textContent = `${dados.fala || "Não consegui consultar a base agora."}${grafico ? " Para ver o gráfico, abra a página do Agente Stive." : ""}`;
-    chat.appendChild(dele);
-    chat.scrollTop = chat.scrollHeight;
+    const fala = `${dados.fala || "Não consegui consultar a base agora."}${grafico ? " Para ver o gráfico, abra a página do Agente Stive." : ""}`;
+    acrescentarBolhaChat(chat, "stive", fala);
   });
 }
 iniciarFalaStive();

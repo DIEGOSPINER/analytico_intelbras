@@ -177,15 +177,16 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .selo { min-width: 18px; height: 18px; margin-left: auto; border-radius: 99px; background: #ff3b3b; color: white;
   font-style: normal; font-size: 11px; display: grid; place-items: center; padding: 0 5px; }
 .stive { display: grid; grid-template-columns: 240px minmax(0, 1fr) minmax(240px, .8fr); gap: 22px; align-items: start; }
-.stive-pagina { display: grid; grid-template-rows: auto 1fr; gap: 18px; min-height: calc(100vh - 110px); }
+.stive-pagina { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 18px; min-height: calc(100vh - 110px); }
 .stive-topo { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 22px; align-items: start; }
-.stive-chat-area { display: flex; flex-direction: column; justify-content: flex-end; width: min(760px, 100%); margin: 0 auto; gap: 12px; }
+.stive-chat-area { display: flex; flex-direction: column; width: min(760px, 100%); margin: 0 auto; gap: 12px; min-height: 0; max-height: min(58vh, 560px); }
 .avatar-stive { width: 180px; height: 220px; border-radius: 24px; object-fit: cover; background: linear-gradient(160deg, #4c8dff, #3ee0ff);
   display: grid; place-items: center; color: #041018; font-size: 72px; font-weight: 700; }
-.chat { display: flex; flex-direction: column; gap: 10px; min-height: 360px; max-height: 62vh; overflow: auto; }
-.stive-chat-area .chat { min-height: 280px; max-height: 52vh; justify-content: flex-end; }
-.stive-chat-area form { margin: 0; }
-.bolha { max-width: 92%; padding: 12px 14px; border-radius: 16px; line-height: 1.4; }
+.chat { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1 1 auto; max-height: none; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+.stive-chat-area .chat { min-height: 180px; }
+.stive-chat-area .chat::before { content: ""; flex: 1 0 0; min-height: 0; }
+.stive-chat-area form { margin: 0; flex: 0 0 auto; }
+.bolha { max-width: 92%; padding: 12px 14px; border-radius: 16px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .bolha.stive { background: rgba(76,141,255,.16); }
 .bolha.eu { margin-left: auto; background: rgba(255,255,255,.06); }
 .quadro-stive { min-height: 220px; }
@@ -214,7 +215,8 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .nome-balao-stive { display: block; margin-top: 6px; color: #f4f7fb; font-size: 13px; font-weight: 650; text-align: center; max-width: 140px; line-height: 1.25; text-shadow: 0 1px 8px #041018; }
 .balao-stive.fechado form { display: none; }
 .balao-stive form { width: 100%; background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); }
-.chat-balao { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.chat-balao { max-height: min(42vh, 360px); overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; overscroll-behavior: contain; scroll-behavior: smooth; }
+.chat-balao .bolha { max-width: 100%; }
 .fala-hq { position: absolute; right: calc(100% + 8px); bottom: 72px; width: min(280px, 62vw); background: #fff; color: #141820; border-radius: 22px; padding: 12px 14px 14px; line-height: 1.35; font-size: 14px; font-weight: 550; box-shadow: 0 14px 32px rgba(0,0,0,.35); z-index: 2; animation: sobe .55s ease; }
 .fala-hq::after { content: ""; position: absolute; right: -12px; bottom: 28px; width: 0; height: 0; border: 12px solid transparent; border-left-color: #fff; border-right: 0; }
 .fala-hq strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #4c6fff; margin-bottom: 4px; }
@@ -626,15 +628,41 @@ def _ao_vivo(cameras, perfil: str = "", csrf: str = "") -> str:
 def _stive(sessao: dict) -> str:
     script = """
 <script>
+const CHAVE_CHAT = "stive-chat";
 const chat = document.getElementById("chat-stive");
 const quadro = document.getElementById("quadro-stive");
 const form = document.getElementById("form-stive");
-function bolha(papel, texto) {
+const SAUDACAO = "Posso cruzar pessoa, horário e local como analista criminal. Pergunte a chance de invasão, padrões de madrugada, ou me conte uma ocorrência.";
+function lerHistorico() {
+  try {
+    const bruto = JSON.parse(sessionStorage.getItem(CHAVE_CHAT) || "[]");
+    return Array.isArray(bruto) ? bruto.filter((item) => item && item.papel && item.texto).slice(-80) : [];
+  } catch (erro) { return []; }
+}
+function gravarHistorico(lista) {
+  try { sessionStorage.setItem(CHAVE_CHAT, JSON.stringify((lista || []).slice(-80))); } catch (erro) {}
+}
+function bolha(papel, texto, gravar) {
   const p = document.createElement("p");
   p.className = "bolha " + papel;
   p.textContent = texto;
   chat.appendChild(p);
   chat.scrollTop = chat.scrollHeight;
+  if (gravar !== false) {
+    const lista = lerHistorico();
+    lista.push({ papel, texto: String(texto || "").slice(0, 4000) });
+    gravarHistorico(lista);
+  }
+}
+function restaurarChat() {
+  const lista = lerHistorico();
+  chat.innerHTML = "";
+  if (!lista.length) {
+    bolha("stive", SAUDACAO, false);
+    return;
+  }
+  lista.forEach((item) => bolha(item.papel, item.texto, false));
+  requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
 }
 function desenharVisual(visual) {
   if (!quadro) return;
@@ -642,7 +670,7 @@ function desenharVisual(visual) {
   const titulo = (visual && visual.titulo) || "Quadro do Stive";
   const tipo = (visual && visual.tipo) || "texto";
   if ((tipo === "barras" || tipo === "linha" || tipo === "rosca") && itens.length) {
-    quadro.innerHTML = "<h2></h2><canvas class='grafico' id='grafico-stive' width='640' height='280'></canvas>";
+    quadro.innerHTML = "<h2></h2><canvas class='grafico grafico-rosca' id='grafico-stive' width='640' height='280'></canvas>";
     quadro.querySelector("h2").textContent = titulo;
     const canvas = document.getElementById("grafico-stive");
     const serie = itens.map((item, indice) => ({
@@ -653,13 +681,16 @@ function desenharVisual(visual) {
     }));
     if (tipo === "rosca" && typeof roscaLivre === "function") roscaLivre(canvas, serie);
     else if (typeof barrasVerticais === "function") barrasVerticais(canvas, serie);
+    try { sessionStorage.setItem("stive-visual", JSON.stringify(visual)); } catch (erro) {}
     return;
   }
   quadro.innerHTML = "<h2>" + titulo.replace(/[&<>]/g, "") + "</h2>" + (itens.map((item) =>
     "<div class='linha-face'><span>" + String(item.rotulo || "") + "</span><strong>" + String(item.total ?? "") + "</strong></div>"
   ).join("") || "<p>O quadro acompanha o que você pedir na conversa.</p>");
+  try { sessionStorage.setItem("stive-visual", JSON.stringify(visual || {})); } catch (erro) {}
 }
 window.addEventListener("load", () => {
+  restaurarChat();
   try {
     const salvo = sessionStorage.getItem("stive-visual");
     if (salvo) desenharVisual(JSON.parse(salvo));
@@ -678,6 +709,7 @@ form.addEventListener("submit", async (evento) => {
   const dados = await resposta.json().catch(() => ({}));
   bolha("stive", dados.fala || "Não consegui consultar a base agora.");
   desenharVisual(dados.visual);
+  chat.scrollTop = chat.scrollHeight;
 });
 window.atualizarStive = (dados) => {
   const caixa = document.getElementById("pendencias-stive");
@@ -721,7 +753,7 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 <article class="cartao quadro-stive" id="quadro-stive"><h2>Quadro do Stive</h2><p>O que você pedir na conversa aparece aqui.</p></article>
 </section>
 <section class="stive-chat-area cartao">
-<div class="chat" id="chat-stive"><p class="bolha stive">Posso cruzar pessoa, horário e local como analista criminal. Pergunte a chance de invasão, padrões de madrugada, ou me conte uma ocorrência.</p></div>
+<div class="chat" id="chat-stive"></div>
 <form id="form-stive">
 {_csrf(sessao)}
 <label>Mensagem<input name="pergunta" autocomplete="off" placeholder="Fale com o Stive"></label>
