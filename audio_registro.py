@@ -19,6 +19,7 @@ _ESTEIRA = deque(maxlen=240)
 _NUVEM = defaultdict(Counter)
 _RANK = defaultdict(Counter)
 _ALERTAS = deque(maxlen=80)
+_PENDENTES = {}
 _HIDRATADO = False
 
 STOP = {
@@ -115,6 +116,36 @@ def tokens_nuvem(texto: str) -> list[str]:
 def _agora_partes():
     agora = datetime.now()
     return agora.strftime("%Y-%m-%d"), agora.strftime("%H:%M:%S")
+
+
+def guardar_pendente(chave: str, payload: dict):
+    """Guarda evento de áudio de risco até o operador confirmar no Stive."""
+    with _TRAVA:
+        _PENDENTES[str(chave)] = dict(payload or {})
+
+
+def confirmar_pendente(chave: str) -> bool:
+    """Grava na base o áudio pendente. Devolve True se havia algo a gravar."""
+    with _TRAVA:
+        payload = _PENDENTES.pop(str(chave), None)
+    if not payload:
+        return False
+    registrar(
+        payload.get("camera") or "",
+        payload.get("tipo") or "Audio",
+        texto=payload.get("texto") or "",
+        detalhe=payload.get("detalhe") or "",
+        confianca=float(payload.get("confianca") or 0),
+        categoria=payload.get("categoria") or "",
+        nivel=int(payload.get("nivel") or 0),
+        palavras=list(payload.get("palavras") or []),
+    )
+    return True
+
+
+def rejeitar_pendente(chave: str) -> bool:
+    with _TRAVA:
+        return _PENDENTES.pop(str(chave), None) is not None
 
 
 def registrar(

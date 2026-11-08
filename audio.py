@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -85,11 +86,17 @@ def classificar_pcm(pcm: bytes):
 def _transcrever(wav: bytes, api_key: str) -> dict:
     limite = "----audioanalitico"
     partes = []
+    prompt = (
+        "Transcreva somente falas humanas claras em português brasileiro. "
+        "Se não houver fala inteligível, devolva texto vazio. "
+        "Não invente palavras, música, legendas ou comentários."
+    )
     campos = (
         ("model", "whisper-1"),
         ("language", "pt"),
         ("temperature", "0"),
         ("response_format", "verbose_json"),
+        ("prompt", prompt),
     )
     for nome, valor in campos:
         partes.append(
@@ -117,16 +124,28 @@ def _transcrever(wav: bytes, api_key: str) -> dict:
 
 
 def _transcricao_confiavel(corpo: dict) -> str:
+    """Aceita só trechos com evidência forte de fala; rejeita alucinações do Whisper."""
     texto = str(corpo.get("text") or "").strip()
     baixo = texto.lower()
-    if len(texto) < 12 or any(frase in baixo for frase in FRASES_INVENTADAS):
+    if len(texto) < 8 or any(frase in baixo for frase in FRASES_INVENTADAS):
+        return ""
+    # Poucas letras / repetição típica de alucinação
+    letras = sum(1 for c in texto if c.isalpha())
+    if letras < 6:
+        return ""
+    palavras = [p for p in re.findall(r"\w+", baixo) if len(p) > 1]
+    if len(palavras) >= 4 and len(set(palavras)) <= 2:
         return ""
     segmentos = corpo.get("segments") or []
-    if segmentos:
-        silencio = sum(float(item.get("no_speech_prob") or 0) for item in segmentos) / len(segmentos)
-        confianca = sum(float(item.get("avg_logprob") or -10) for item in segmentos) / len(segmentos)
-        if silencio > 0.45 or confianca < -1.0:
-            return ""
+    if not segmentos:
+        # Sem segmentos verbose: só aceita se o modelo reportou duração plausível
+        return ""
+    silencio = sum(float(item.get("no_speech_prob") or 0) for item in segmentos) / len(segmentos)
+    confianca = sum(float(item.get("avg_logprob") or -10) for item in segmentos) / len(segmentos)
+    compressao = sum(float(item.get("compression_ratio") or 1) for item in segmentos) / len(segmentos)
+    # Mais rigoroso: silêncio alto ou logprob ruim = ruído/alucinação
+    if silencio > 0.32 or confianca < -0.75 or compressao > 2.4:
+        return ""
     return texto
 
 
@@ -219,16 +238,7 @@ class EscutaAudio:
             self.suspeito_tipo = "disparo"
             detalhe = "Pico curto de áudio compatível com disparo. Confirme o trecho; moto e porta também estouram."
             conf = round(min(nivel, 1.0), 2)
-            registrar_audio(
-                self.nome,
-                "Possivel_Disparo",
-                texto="",
-                detalhe=detalhe,
-                confianca=conf,
-                categoria="disparo",
-                nivel=3,
-                palavras=["disparo"],
-            )
+            # Não grava na base até o operador confirmar no Stive.
             self.eventos.put({
                 "classe": "Possivel_Disparo",
                 "risco": "Atencao",
@@ -239,6 +249,8 @@ class EscutaAudio:
                 "categoria": "disparo",
                 "palavras": ["disparo"],
                 "stive": True,
+                "confirmar": True,
+                "pergunta": f"Houve disparo na {self.nome}? Confirme se foi de fato para gravar na base.",
             })
             return
         if tipo != "voz" or agora - self._ultima_fala < 50:
@@ -274,27 +286,35 @@ class EscutaAudio:
                 classe = "Audio_Atencao"
                 risco_nome = "Atencao"
                 avisar = True
-        registrar_audio(
-            self.nome,
-            classe,
-            texto=trecho,
-            detalhe=("Risco verbal: " + ", ".join(categorias)) if categorias else "Transcrição de áudio da câmera.",
-            confianca=0.7 if achados else 0.5,
-            categoria=",".join(categorias) if categorias else "transcricao",
-            nivel=nivel,
-            palavras=palavras,
+        # Fala limpa (sem risco) pode ir direto à esteira; risco só após Sim no Stive.
+        if not avisar:
+            registrar_audio(
+                self.nome,
+                classe,
+                texto=trecho,
+                detalhe="Transcrição de áudio da câmera.",
+                confianca=0.55,
+                categoria="transcricao",
+                nivel=0,
+                palavras=[],
+            )
+            return
+        self.suspeito_ate = time.time() + 45
+        self.suspeito_tipo = "voz"
+        pergunta = (
+            f"Na {self.nome} parece ter havido {', '.join(categorias)}. "
+            f'Ouvi: "{trecho}". Isso aconteceu de fato? Confirme para gravar na base.'
         )
-        if avisar:
-            self.suspeito_ate = time.time() + 45
-            self.suspeito_tipo = "voz"
         self.eventos.put({
             "classe": classe,
             "risco": risco_nome,
             "nivel": nivel or 1,
-            "confianca": 0.7 if achados else 0.5,
-            "detalhe": (f"Áudio com sinal de {', '.join(categorias)}: {trecho}" if categorias else f"Transcrição: {trecho}"),
+            "confianca": 0.7,
+            "detalhe": f"Áudio com sinal de {', '.join(categorias)}: {trecho}",
             "texto": trecho,
-            "categoria": ",".join(categorias) if categorias else "transcricao",
+            "categoria": ",".join(categorias),
             "palavras": palavras,
-            "stive": avisar,
+            "stive": True,
+            "confirmar": True,
+            "pergunta": pergunta,
         })

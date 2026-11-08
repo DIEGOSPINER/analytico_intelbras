@@ -115,6 +115,7 @@ a.texto { color: var(--ciano); }
 .led.preto { background: #05070c; box-shadow: 0 0 0 6px #ff3b3b, 0 0 32px #ff3b3b; animation: pisca 0.28s infinite; }
 @keyframes pisca { 50% { opacity: 0.28; } }
 .grafico, .mapa { width: 100%; height: 280px; border-radius: 12px; background: #101624; }
+.grafico.grafico-rosca { height: 360px; }
 iframe.mapa, iframe.mapa-folium { display: block; width: 100%; height: 280px; border: 0; border-radius: 12px; background: #d5e2ef; }
 iframe#mapa { height: 520px; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
@@ -188,9 +189,11 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .bolha.stive { background: rgba(76,141,255,.16); }
 .bolha.eu { margin-left: auto; background: rgba(255,255,255,.06); }
 .quadro-stive { min-height: 220px; }
-.acoes-fala { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.acoes-fala { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
 .acoes-fala button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; padding: 8px 12px; border-radius: 10px; font-size: 13px; }
-.acoes-fala button[data-reacao="-1"] { background: #ffecec; border-color: #ffb3b3; }
+.acoes-fala button.btn-icone { width: 42px; height: 42px; padding: 0; display: grid; place-items: center; border-radius: 50%; }
+.acoes-fala button[data-reacao="1"] { color: #1a7f4b; }
+.acoes-fala button[data-reacao="-1"] { background: #ffecec; border-color: #ffb3b3; color: #b42318; }
 .acoes-fala button[data-fechar] { background: #f4f7fb; border-color: #d5deea; }
 .satisfacao-stive { margin-top: 28px; }
 .satisfacao-stive .cartoes { margin-top: 12px; }
@@ -220,6 +223,23 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .fala-hq.pergunta { border: 2px solid #4c8dff; }
 .fala-hq.risco { border: 2px solid #ff5c7a; }
 .fala-hq.info { border: 2px solid #3ddc97; }
+/* Lâmina RF: mesmo vidro do chat Stive, ao lado/acima do balão HQ branco */
+.alerta-rf-flutuante { position: absolute; right: calc(100% + 8px); bottom: 210px; width: min(300px, 70vw); background: var(--vidro); color: var(--texto); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); backdrop-filter: blur(16px); z-index: 5; cursor: pointer; animation: sobe-rf .55s ease; }
+.alerta-rf-flutuante.risco { border-color: rgba(255,92,122,.65); box-shadow: 0 18px 40px rgba(255,60,90,.18); }
+.alerta-rf-flutuante.info { border-color: rgba(61,220,151,.45); }
+.alerta-rf-flutuante.descendo { animation: desce-rf .55s ease forwards; pointer-events: none; }
+.alerta-rf-flutuante strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ciano); margin-bottom: 6px; }
+.alerta-rf-flutuante .rf-fotos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.alerta-rf-flutuante .rf-fotos figure { margin: 0; text-align: center; }
+.alerta-rf-flutuante .rf-fotos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; background: rgba(8,12,24,.65); border: 1px solid var(--linha); }
+.alerta-rf-flutuante .rf-fotos figcaption { font-size: 11px; color: var(--mudo); margin-top: 4px; }
+.alerta-rf-flutuante .rf-meta { font-size: 13px; line-height: 1.35; margin: 0; color: var(--texto); }
+.alerta-rf-flutuante .rf-link { display: block; margin-top: 10px; font-size: 12px; color: var(--ciano); font-weight: 700; }
+@keyframes sobe-rf { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes desce-rf { from { transform: none; opacity: 1; } to { transform: translateY(36px); opacity: 0; } }
+@media (max-width: 720px) {
+  .alerta-rf-flutuante { position: fixed; right: 12px; bottom: 170px; width: min(280px, calc(100vw - 24px)); }
+}
 .stage-stive { position: relative; display: inline-block; }
 .stage-stive .fala-hq { right: auto; left: calc(100% + 10px); bottom: 120px; }
 .stage-stive .fala-hq::after { right: auto; left: -12px; border-left-color: transparent; border-right-color: #fff; }
@@ -470,6 +490,7 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
             "<a class='texto' href='/painel/stive'>Abrir o Agente Stive</a>"
             "</form>"
             "<div class='grupo-puxador' id='grupo-stive'>"
+            "<div id='alerta-rf-flutuante' class='alerta-rf-flutuante' hidden></div>"
             "<div id='fala-hq' class='fala-hq' hidden></div>"
             "<button type='button' class='puxador-stive' id='abrir-stive' title='Fale com o Agente Stive'>"
             "<img alt='Stive' src='/agente/stive.png'></button>"
@@ -1204,7 +1225,11 @@ def _rastros_rf_lpr(nomes: dict) -> list[dict]:
     return rastros[-240:]
 
 
+_CACHE_DADOS = {"quando": 0.0, "extra": None, "nomes_chave": ""}
+
+
 def _dados_json(portal) -> dict:
+    import time
     from identidade import contar_passagens_faces
 
     nomes = {}
@@ -1220,31 +1245,107 @@ def _dados_json(portal) -> dict:
         nomes[ident] = str(pessoa.get("nome") or "")
         classes[ident] = cadastro.classe_pessoa(pessoa)
 
-    historico_matches = None
-    audio_esteira = None
-    contagem_faces = None
-    try:
-        from db.leitura import audio_esteira as _audio_esteira
-        from db.leitura import contagem_faces as _contagem_faces
-        from db.leitura import historico_matches as _historico_matches
-
-        historico_matches = _historico_matches
-        audio_esteira = _audio_esteira
-        contagem_faces = _contagem_faces
-    except Exception:
-        pass
-
-    linhas = []
-    try:
-        if contagem_faces:
-            linhas = contagem_faces(set(nomes))
-        if not linhas:
-            linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
-    except Exception:
-        linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
-
-    contagem = {ident: total for ident, total in linhas}
     resumo = dict(portal.resumo())
+    agora = time.time()
+    chave_nomes = ",".join(sorted(nomes))
+    # Cache 2s das leituras pesadas (Postgres/CSV): o poll do portal é 1s.
+    extra = _CACHE_DADOS.get("extra")
+    if (
+        not extra
+        or agora - float(_CACHE_DADOS.get("quando") or 0) > 2.0
+        or _CACHE_DADOS.get("nomes_chave") != chave_nomes
+    ):
+        historico_matches = None
+        audio_esteira = None
+        contagem_faces = None
+        try:
+            from db.leitura import audio_esteira as _audio_esteira
+            from db.leitura import contagem_faces as _contagem_faces
+            from db.leitura import historico_matches as _historico_matches
+
+            historico_matches = _historico_matches
+            audio_esteira = _audio_esteira
+            contagem_faces = _contagem_faces
+        except Exception:
+            pass
+
+        linhas = []
+        try:
+            if contagem_faces:
+                linhas = contagem_faces(set(nomes))
+            if not linhas:
+                linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
+        except Exception:
+            linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
+
+        contagem = {ident: total for ident, total in linhas}
+        hist_db = []
+        try:
+            if historico_matches:
+                hist_db = historico_matches(set(nomes), limite=40)
+            for item in hist_db:
+                if item.get("tipo") == "FACE":
+                    item["nome"] = nomes.get(item.get("id") or "", item.get("nome") or "")
+        except Exception:
+            hist_db = []
+
+        audio_extra = None
+        try:
+            from audio_registro import tokens_nuvem
+
+            if audio_esteira:
+                esteira = audio_esteira(limite=80)
+                if esteira:
+                    audio_extra = {"esteira": esteira}
+                    cameras = {}
+                    for item in esteira:
+                        cam = item.get("camera") or "Camera"
+                        slot = cameras.setdefault(cam, {"nuvem": {}, "ranking_risco": {}})
+                        for token in tokens_nuvem(item.get("texto") or ""):
+                            slot["nuvem"][token] = slot["nuvem"].get(token, 0) + 1
+                        cats = [c.strip() for c in str(item.get("categoria") or "risco").split(",") if c.strip()]
+                        for palavra in item.get("palavras") or []:
+                            cat = cats[0] if cats else "risco"
+                            chave = f"{cat}:{palavra}"
+                            slot["ranking_risco"][chave] = slot["ranking_risco"].get(chave, 0) + 1
+                    audio_extra["alertas"] = [item for item in esteira if item.get("risco")][:20]
+                    audio_extra["risco_aberto"] = len(audio_extra["alertas"])
+                    audio_extra["cameras"] = {
+                        nome: {
+                            "nuvem": [{"rotulo": k, "total": v} for k, v in sorted(vals["nuvem"].items(), key=lambda p: -p[1])[:24]],
+                            "ranking_risco": [{"rotulo": k, "total": v} for k, v in sorted(vals["ranking_risco"].items(), key=lambda p: -p[1])[:12]],
+                        }
+                        for nome, vals in cameras.items()
+                    }
+        except Exception:
+            audio_extra = None
+
+        pessoas = [
+            {
+                "id": ident,
+                "nome": nomes.get(ident, ""),
+                "classe": classes.get(ident, ""),
+                "foto": f"/rosto/{ident}.jpg",
+                "total": contagem.get(ident, 0),
+            }
+            for ident in nomes
+        ]
+        pessoas.sort(key=lambda item: (-int(item.get("total") or 0), item.get("nome") or item.get("id")))
+        extra = {
+            "linhas": linhas,
+            "contagem": contagem,
+            "hist_db": hist_db,
+            "audio_extra": audio_extra,
+            "pessoas": pessoas,
+            "rastros_rf": _rastros_rf_lpr(nomes),
+            "fonte_dados": "postgres" if contagem_faces else "csv",
+        }
+        _CACHE_DADOS["quando"] = agora
+        _CACHE_DADOS["extra"] = extra
+        _CACHE_DADOS["nomes_chave"] = chave_nomes
+
+    contagem = extra["contagem"]
+    linhas = extra["linhas"]
     match = resumo.get("match")
     if isinstance(match, dict):
         match = dict(match)
@@ -1253,64 +1354,14 @@ def _dados_json(portal) -> dict:
             match["nome"] = nomes.get(str(match.get("id") or "").upper(), match.get("nome") or "")
         resumo["match"] = match
 
-    # Histórico da tela de alertas: preferir Postgres
-    try:
-        if historico_matches:
-            hist_db = historico_matches(set(nomes), limite=40)
-        else:
-            hist_db = []
-        for item in hist_db:
-            if item.get("tipo") == "FACE":
-                item["nome"] = nomes.get(item.get("id") or "", item.get("nome") or "")
-        if hist_db:
-            resumo["historico"] = hist_db
-    except Exception:
-        pass
+    if extra.get("hist_db"):
+        resumo["historico"] = extra["hist_db"]
 
-    # Áudio: completar esteira a partir do banco se a memória estiver vazia
-    try:
-        from audio_registro import tokens_nuvem
+    audio = dict(resumo.get("audio") or {})
+    if not audio.get("esteira") and extra.get("audio_extra"):
+        audio.update(extra["audio_extra"])
+        resumo["audio"] = audio
 
-        audio = dict(resumo.get("audio") or {})
-        if not audio.get("esteira") and audio_esteira:
-            esteira = audio_esteira(limite=80)
-            if esteira:
-                audio["esteira"] = esteira
-                audio["alertas"] = [item for item in esteira if item.get("risco")][:20]
-                audio["risco_aberto"] = len(audio["alertas"])
-                cameras = {}
-                for item in esteira:
-                    cam = item.get("camera") or "Camera"
-                    slot = cameras.setdefault(cam, {"nuvem": {}, "ranking_risco": {}})
-                    for token in tokens_nuvem(item.get("texto") or ""):
-                        slot["nuvem"][token] = slot["nuvem"].get(token, 0) + 1
-                    cats = [c.strip() for c in str(item.get("categoria") or "risco").split(",") if c.strip()]
-                    for palavra in item.get("palavras") or []:
-                        cat = cats[0] if cats else "risco"
-                        chave = f"{cat}:{palavra}"
-                        slot["ranking_risco"][chave] = slot["ranking_risco"].get(chave, 0) + 1
-                audio["cameras"] = {
-                    nome: {
-                        "nuvem": [{"rotulo": k, "total": v} for k, v in sorted(vals["nuvem"].items(), key=lambda p: -p[1])[:24]],
-                        "ranking_risco": [{"rotulo": k, "total": v} for k, v in sorted(vals["ranking_risco"].items(), key=lambda p: -p[1])[:12]],
-                    }
-                    for nome, vals in cameras.items()
-                }
-                resumo["audio"] = audio
-    except Exception:
-        pass
-
-    pessoas = [
-        {
-            "id": ident,
-            "nome": nomes.get(ident, ""),
-            "classe": classes.get(ident, ""),
-            "foto": f"/rosto/{ident}.jpg",
-            "total": contagem.get(ident, 0),
-        }
-        for ident in nomes
-    ]
-    pessoas.sort(key=lambda item: (-int(item.get("total") or 0), item.get("nome") or item.get("id")))
     resumo.update({
         "itens": int(resumo.get("itens") or 0),
         "faces": len(linhas),
@@ -1325,9 +1376,9 @@ def _dados_json(portal) -> dict:
             }
             for ident, total in linhas[:12]
         ],
-        "pessoas_interesse": pessoas,
-        "rastros_rf": _rastros_rf_lpr(nomes),
-        "fonte_dados": "postgres" if contagem_faces else (resumo.get("fonte_dados") or "csv"),
+        "pessoas_interesse": extra["pessoas"],
+        "rastros_rf": extra["rastros_rf"],
+        "fonte_dados": extra.get("fonte_dados") or (resumo.get("fonte_dados") or "csv"),
     })
     return resumo
 
@@ -1674,13 +1725,17 @@ def _tratador(portal: Portal):
 
         def _json_status(self, status: int, corpo: dict):
             dados = json.dumps(corpo, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(dados)))
-            self.send_header("Cache-Control", "no-store")
-            self._cors()
-            self.end_headers()
-            self.wfile.write(dados)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(dados)))
+                self.send_header("Cache-Control", "no-store")
+                self._cors()
+                self.end_headers()
+                self.wfile.write(dados)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+                # Cliente fechou o poll (F5 / aba) — normal, não deve poluir o console.
+                return
 
         def _api_mobile_sessao(self):
             return portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))

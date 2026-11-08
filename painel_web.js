@@ -496,7 +496,7 @@ function barrasVerticais(canvas, itens) {
   });
 }
 
-function roscaLivre(canvas, fatias) {
+function roscaLivre(canvas, fatias, opcoes) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const largura = canvas.clientWidth || 320;
@@ -507,10 +507,12 @@ function roscaLivre(canvas, fatias) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
   const total = fatias.reduce((soma, item) => soma + item.total, 0);
-  const cx = largura * 0.34;
-  const cy = altura * 0.52;
-  const raio = Math.min(largura, altura) * 0.32;
+  const externos = !!(opcoes && opcoes.rotulosExternos);
+  const cx = externos ? largura * 0.5 : largura * 0.34;
+  const cy = externos ? altura * 0.5 : altura * 0.52;
+  const raio = externos ? Math.min(largura, altura) * 0.32 : Math.min(largura, altura) * 0.32;
   let angulo = -Math.PI / 2;
+  const fatiasDesenhadas = [];
   fatias.forEach((item) => {
     const fatia = total ? (item.total / total) * Math.PI * 2 : 0;
     if (fatia <= 0) return;
@@ -520,6 +522,11 @@ function roscaLivre(canvas, fatias) {
     ctx.arc(cx, cy, raio, angulo, angulo + fatia);
     ctx.closePath();
     ctx.fill();
+    fatiasDesenhadas.push({
+      ...item,
+      meio: angulo + fatia / 2,
+      pct: total ? Math.round((1000 * item.total) / total) / 10 : 0,
+    });
     angulo += fatia;
   });
   ctx.beginPath();
@@ -530,18 +537,55 @@ function roscaLivre(canvas, fatias) {
   ctx.font = "22px Segoe UI";
   ctx.textAlign = "center";
   ctx.fillText(String(total), cx, cy + 6);
-  ctx.textAlign = "left";
-  ctx.font = "14px Segoe UI";
-  fatias.slice(0, 8).forEach((item, indice) => {
-    const pct = total ? Math.round((1000 * item.total) / total) / 10 : 0;
-    const y = 28 + indice * 22;
-    ctx.fillStyle = item.cor;
-    ctx.fillRect(largura * 0.62, y - 10, 10, 10);
-    ctx.fillStyle = "#f4f7fb";
-    ctx.fillText(`${item.nome || item.rotulo || ""}  ${pct}%  (${item.total})`, largura * 0.62 + 16, y);
-  });
+  if (externos) {
+    const raioLinha = raio + 14;
+    const raioTexto = raio + 48;
+    fatiasDesenhadas.forEach((item) => {
+      const cos = Math.cos(item.meio);
+      const sin = Math.sin(item.meio);
+      const x1 = cx + cos * raio;
+      const y1 = cy + sin * raio;
+      const x2 = cx + cos * raioLinha;
+      const y2 = cy + sin * raioLinha;
+      const x3 = cx + cos * raioTexto;
+      const y3 = cy + sin * raioTexto;
+      const direita = cos >= 0;
+      ctx.strokeStyle = item.cor || "#93a0b8";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x3 + (direita ? 10 : -10), y3);
+      ctx.stroke();
+      const nome = String(item.nome || item.rotulo || "Natureza");
+      const curto = nome.length > 26 ? `${nome.slice(0, 24)}…` : nome;
+      const texto = `${curto} · ${item.pct}% · ${item.total}`;
+      ctx.fillStyle = "#f4f7fb";
+      ctx.font = "600 15px Segoe UI";
+      ctx.textAlign = direita ? "left" : "right";
+      ctx.textBaseline = "middle";
+      const tx = Math.max(10, Math.min(largura - 10, x3 + (direita ? 12 : -12)));
+      const ty = Math.max(16, Math.min(altura - 12, y3));
+      ctx.fillText(texto, tx, ty);
+    });
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  } else {
+    ctx.textAlign = "left";
+    ctx.font = "14px Segoe UI";
+    fatias.slice(0, 8).forEach((item, indice) => {
+      const pct = total ? Math.round((1000 * item.total) / total) / 10 : 0;
+      const y = 28 + indice * 22;
+      ctx.fillStyle = item.cor;
+      ctx.fillRect(largura * 0.62, y - 10, 10, 10);
+      ctx.fillStyle = "#f4f7fb";
+      ctx.fillText(`${item.nome || item.rotulo || ""}  ${pct}%  (${item.total})`, largura * 0.62 + 16, y);
+    });
+  }
   if (!total) {
     ctx.fillStyle = "#93a0b8";
+    ctx.textAlign = "left";
+    ctx.font = "14px Segoe UI";
     ctx.fillText("Sem ocorrência neste período.", 16, 28);
   }
 }
@@ -999,8 +1043,8 @@ function alertas(tela, dados) {
       : (match ? `<p><span class="luz-info"></span> Presença informativa na área.</p>` : "");
     if (match) {
       comparacao.className = `cartao sobe${match.risco ? "" : " verde"}`;
-      comparacao.innerHTML = `${avisoRisco}<h2>${escapar(match.nome || match.id)} · ${escapar(match.id)}</h2>
-        <p>Similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes · ${escapar(match.camera || "")}</p>
+      comparacao.innerHTML = `${avisoRisco}<h2>${escapar(match.nome || match.id)}</h2>
+        <p>Código ${escapar(match.id || "")} · similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes · ${escapar(match.camera || "")}</p>
         ${fotos(`/img/match-ref.jpg?t=${Date.now()}`, `/img/match-agora.jpg?t=${Date.now()}`)}
         <p>${escapar(match.narracao_ia || match.narracao || "")}</p>`;
     } else {
@@ -1009,15 +1053,19 @@ function alertas(tela, dados) {
     }
     comparacao.dataset.chave = chaveMatch;
   }
-  const historico = dados.historico || [];
+  const historico = (dados.historico || []).slice(0, 4);
   const chaveHist = historico.map((item) => `${item.quando}|${item.id}|${item.taxa}`).join(";");
   const caixaHist = document.getElementById("historico");
   if (caixaHist.dataset.chave !== chaveHist) {
-    caixaHist.innerHTML = historico.map((item) => `<div class="alerta-linha">
-      <div><strong class="titulo-alerta">${escapar(item.tipo)} ${escapar(item.id)}</strong><span class="nome-alerta">${escapar(item.nome || "")}</span>
-      <p>${escapar(item.quando)} · ${escapar(item.rotulo || "SIM")} ${Number(item.taxa || 0).toFixed(2)} · ${escapar(item.nome)} · ${escapar(item.camera)}</p></div>
+    caixaHist.innerHTML = historico.map((item) => {
+      const nome = item.nome || item.id || "";
+      const codigo = item.id || "";
+      return `<div class="alerta-linha">
+      <div><strong class="titulo-alerta">${escapar(item.tipo || "")} ${escapar(nome)}</strong><span class="nome-alerta">${escapar(codigo)}</span>
+      <p>${escapar(item.quando)} · ${escapar(item.rotulo || "SIM")} ${Number(item.taxa || 0).toFixed(2)} · ${escapar(codigo)} · ${escapar(item.camera || "")}</p></div>
       ${fotos(`${item.ref}?t=${encodeURIComponent(item.quando)}`, `${item.agora}?t=${encodeURIComponent(item.quando)}`)}
-    </div>`).join("") || "<p>Nenhum alerta de rosto ou placa ainda.</p>";
+    </div>`;
+    }).join("") || "<p>Nenhum alerta de rosto ou placa ainda.</p>";
     caixaHist.dataset.chave = chaveHist;
   }
   const selRf = document.getElementById("sel-rf-alertas");
@@ -1279,7 +1327,7 @@ function mapas(tela, dados) {
       <article class="cartao"><h2>Ocorrências por dia da semana</h2><canvas class="grafico" id="semana-app"></canvas><div id="legenda-semana"></div></article>
       <section class="grade">
         <article class="cartao"><h2>Por hora do dia</h2><canvas class="grafico" id="hora-app"></canvas><div id="legenda-hora"></div></article>
-        <article class="cartao"><h2>Por natureza</h2><canvas class="grafico" id="rosca-app"></canvas><div id="legenda-natureza"></div></article>
+        <article class="cartao"><h2>Por natureza</h2><canvas class="grafico grafico-rosca" id="rosca-app"></canvas></article>
       </section>
       <section class="grade">
         <article class="cartao"><h2>Por logradouro</h2><canvas class="grafico" id="rua-app"></canvas><div id="legenda-rua"></div></article>
@@ -1417,17 +1465,13 @@ function mapas(tela, dados) {
   barrasVerticais(document.getElementById("rua-app"), ruasGrafico);
   barrasVerticais(document.getElementById("bairro-app"), bairrosGrafico);
   barrasVerticais(document.getElementById("cidade-app"), cidadesGrafico);
-  roscaLivre(document.getElementById("rosca-app"), naturezasGrafico);
+  roscaLivre(document.getElementById("rosca-app"), naturezasGrafico, { rotulosExternos: true });
   const caixaHora = document.getElementById("legenda-hora");
   if (caixaHora) caixaHora.innerHTML = legendaCameras(nomesNatureza);
   const legendas = {
     "legenda-rua": ruasGrafico,
     "legenda-bairro": bairrosGrafico,
     "legenda-cidade": cidadesGrafico,
-    "legenda-natureza": naturezasGrafico.map((item) => ({
-      ...item,
-      rotulo: `${item.rotulo} · ${item.total}`,
-    })),
   };
   Object.entries(legendas).forEach(([id, itens]) => {
     const caixa = document.getElementById(id);
@@ -1559,6 +1603,7 @@ async function ciclo() {
   }
   if (window.atualizarStive) window.atualizarStive(dados);
   atualizarFalaStive(dados);
+  atualizarAlertaRfFlutuante(dados);
   if (led) led.className = "led " + (dados.led || "branco");
   const tela = document.getElementById("tela");
   if (tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, dados);
@@ -1569,7 +1614,7 @@ async function ciclo() {
 }
 
 ciclo();
-setInterval(ciclo, 1000);
+setInterval(ciclo, 1500);
 
 function csrfDoBalao() {
   const form = document.getElementById("form-balao") || document.getElementById("form-stive");
@@ -1608,9 +1653,11 @@ function piscarStive() {
 
 function acoesFalaHtml(item) {
   const extra = item.html || "";
+  const like = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M2 20h4V9H2v11zm20-9c0-1.1-.9-2-2-2h-6.3l.9-4.4.1-.9c0-.4-.2-.8-.4-1.1L13.2 1 6.6 7.6C6.2 8 6 8.5 6 9v9c0 1.1.9 2 2 2h8c.8 0 1.5-.5 1.8-1.2l3-7c.1-.3.2-.5.2-.8v-2z"/></svg>`;
+  const dislike = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22 4h-4v11h4V4zM2 13c0 1.1.9 2 2 2h6.3l-.9 4.4-.1.9c0 .4.2.8.4 1.1L10.8 23l6.6-6.6c.4-.4.6-.9.6-1.4V6c0-1.1-.9-2-2-2H8c-.8 0-1.5.5-1.8 1.2l-3 7c-.1.3-.2.5-.2.8v2z"/></svg>`;
   return `${extra}<div class="acoes-fala">
-    <button type="button" data-reacao="1" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">Legal</button>
-    <button type="button" data-reacao="-1" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">Não legal</button>
+    <button type="button" class="btn-icone" data-reacao="1" title="Gostei" aria-label="Gostei" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">${like}</button>
+    <button type="button" class="btn-icone" data-reacao="-1" title="Não gostei" aria-label="Não gostei" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">${dislike}</button>
     <button type="button" data-fechar="1" data-chave="${escapar(item.chave || "")}" data-titulo="${escapar(item.titulo || "")}" data-texto="${escapar(item.texto || "")}" data-tipo="${escapar(item.tipo || "")}">Fechar</button>
   </div>`;
 }
@@ -1627,7 +1674,9 @@ function mostrarFalaHq(item) {
 }
 
 function enfileirarFalaStive(chave, titulo, texto, opcoes) {
-  if (!chave || !texto || falasVistas.has(chave)) return;
+  if (!chave || !texto || falasVistas.has(chave)) return false;
+  // Um assunto por vez: não empilha informe + disparo + confirmação juntos.
+  if (falandoStive || filaFalaStive.length) return false;
   falasVistas.add(chave);
   if (falasVistas.size > 80) {
     const antigo = falasVistas.values().next().value;
@@ -1642,6 +1691,7 @@ function enfileirarFalaStive(chave, titulo, texto, opcoes) {
     html: (opcoes && opcoes.html) || "",
   });
   processarFilaFalaStive();
+  return true;
 }
 
 function processarFilaFalaStive() {
@@ -1711,9 +1761,11 @@ function atualizarFalaStive(dados) {
   if (!window._stiveBasePronto) {
     chavesFalaBase(dados).forEach((chave) => falasVistas.add(chave));
     window._stiveBasePronto = true;
-    falarVozStive(dados);
     return;
   }
+  // Já há um balão ativo ou na fila: não mistura assuntos (alerta + disparo etc.).
+  if (falandoStive || filaFalaStive.length) return;
+
   const pendencias = dados.pendencias || [];
   if (pendencias[0]) {
     const item = pendencias[0];
@@ -1730,35 +1782,12 @@ function atualizarFalaStive(dados) {
         </span></div>`,
       },
     );
+    return;
   }
-  const match = dados.match;
-  if (match) {
-    const risco = !!match.risco;
-    enfileirarFalaStive(
-      `match:${match.id}|${match.taxa}|${match.risco}`,
-      risco ? "Match RF/LPR" : "Presença informativa",
-      risco
-        ? `${match.nome || match.id} na ${match.camera || "câmera"}. ${match.narracao_ia || match.narracao || "Pessoa de risco na área."}`
-        : `${match.nome || match.id} na ${match.camera || "câmera"}. Morador ou pessoa sem classificação de risco.`,
-      { classe: risco ? "risco" : "info" },
-    );
-  }
-  falarVozStive(dados);
-  ((dados.audio || {}).alertas || []).slice(0, 4).forEach((item) => {
-    const trecho = String(item.texto || item.detalhe || item.categoria || "").trim();
-    if (!trecho) return;
-    const nivel = Number(item.nivel || 0);
-    if (nivel < 2 && !item.risco) return;
-    enfileirarFalaStive(
-      `audio:${item.quando}|${item.camera}|${trecho}`,
-      "Áudio de risco",
-      `Escutei na ${item.camera || "câmera"}: ${trecho}`,
-      { classe: nivel >= 3 ? "risco" : "info", tipo: "audio" },
-    );
-  });
-  (dados.informes || []).slice(0, 4).forEach((item) => {
+
+  for (const item of (dados.informes || []).slice(0, 6)) {
     const textoBase = String(item.descricao || item.tipo || "").trim();
-    if (!textoBase) return;
+    if (!textoBase) continue;
     const baixo = textoBase.toLowerCase();
     const camera = item.camera ? ` na ${item.camera}` : "";
     let fala = `Atenção a ${textoBase}${camera}.`;
@@ -1769,22 +1798,27 @@ function atualizarFalaStive(dados) {
     } else if (/disparo|tiro/.test(baixo)) {
       fala = `Atenção a disparo${camera}. ${textoBase}`;
     }
-    enfileirarFalaStive(`inf:${item.quando}|${textoBase}`, "Informe", fala, { classe: "risco" });
-  });
-  (dados.app || []).slice(0, 3).forEach((item) => {
+    if (enfileirarFalaStive(`inf:${item.quando}|${textoBase}`, "Informe", fala, { classe: "risco" })) return;
+  }
+
+  for (const item of (dados.app || []).slice(0, 3)) {
     const titulo = String(item.titulo || "Ocorrência").trim();
-    enfileirarFalaStive(
+    if (enfileirarFalaStive(
       `app:${item.quando}|${titulo}|${item.lugar || ""}`,
       "Aplicativo",
       `Ocorrência nova lançada no app: ${titulo}${item.lugar ? ` em ${item.lugar}` : ""}.`,
       { classe: "info" },
-    );
-  });
-  (dados.insights || []).slice(0, 3).forEach((item) => {
+    )) return;
+  }
+
+  for (const item of (dados.insights || []).slice(0, 3)) {
     const texto = String(item.descricao || item.nome || "").trim();
-    if (!texto) return;
-    enfileirarFalaStive(`ins:${item.quando}|${texto}`, "Insight", texto, { classe: "info" });
-  });
+    if (!texto) continue;
+    if (enfileirarFalaStive(`ins:${item.quando}|${texto}`, "Insight", texto, { classe: "info" })) return;
+  }
+
+  // Match RF sobe na lâmina; voz só se não houver outro assunto pendente.
+  falarVozStive(dados);
 }
 
 async function enviarReacaoStive(botao, nota) {
@@ -1811,6 +1845,63 @@ function fecharFalaStive() {
   }
   falandoStive = false;
   processarFilaFalaStive();
+}
+
+let ultimoMatchRfToast = "";
+let timerRfToast = null;
+
+function caixaAlertaRf() {
+  let caixa = document.getElementById("alerta-rf-flutuante");
+  if (caixa) return caixa;
+  const grupo = document.getElementById("grupo-stive") || document.getElementById("balao-stive");
+  if (!grupo) return null;
+  caixa = document.createElement("div");
+  caixa.id = "alerta-rf-flutuante";
+  caixa.className = "alerta-rf-flutuante";
+  caixa.hidden = true;
+  const fala = document.getElementById("fala-hq");
+  if (fala && fala.parentElement === grupo) grupo.insertBefore(caixa, fala);
+  else grupo.prepend(caixa);
+  return caixa;
+}
+
+function atualizarAlertaRfFlutuante(dados) {
+  const caixa = caixaAlertaRf();
+  if (!caixa) return;
+  const match = dados.match;
+  if (!match || !match.id) return;
+  const chave = `${match.id}|${Number(match.taxa || 0).toFixed(2)}|${match.risco ? 1 : 0}|${match.camera || ""}`;
+  if (chave === ultimoMatchRfToast) return;
+  // Não engole o primeiro match: marca pronto e sobe a lâmina nesta mesma vez.
+  window._rfToastPronto = true;
+  ultimoMatchRfToast = chave;
+  const risco = !!match.risco;
+  const t = Date.now();
+  if (timerRfToast) clearTimeout(timerRfToast);
+  caixa.hidden = false;
+  caixa.classList.remove("descendo", "risco", "info");
+  void caixa.offsetWidth;
+  caixa.className = `alerta-rf-flutuante${risco ? " risco" : " info"}`;
+  caixa.innerHTML = `
+    <strong>${risco ? "Alerta RF" : "Presença informativa"}</strong>
+    <div class="rf-fotos">
+      <figure><img alt="Referência" src="/img/match-ref.jpg?t=${t}" onerror="this.style.opacity=.35"><figcaption>Referência</figcaption></figure>
+      <figure><img alt="Detectada" src="/img/match-agora.jpg?t=${t}" onerror="this.style.opacity=.35"><figcaption>Detectada</figcaption></figure>
+    </div>
+    <p class="rf-meta"><b>${escapar(match.nome || "Sem nome")}</b> · código ${escapar(match.id || "")}<br>
+    Similaridade ${Number(match.taxa || 0).toFixed(2)} · ${escapar(match.camera || "")}</p>
+    <span class="rf-link">Abrir Alertas de RF e LPR →</span>`;
+  caixa.onclick = () => { window.location.href = "/painel/3"; };
+  timerRfToast = setTimeout(() => {
+    caixa.classList.add("descendo");
+    setTimeout(() => {
+      if (!caixa.classList.contains("descendo")) return;
+      caixa.hidden = true;
+      caixa.classList.remove("descendo");
+      caixa.innerHTML = "";
+      caixa.onclick = null;
+    }, 560);
+  }, 8000);
 }
 
 function iniciarFalaStive() {

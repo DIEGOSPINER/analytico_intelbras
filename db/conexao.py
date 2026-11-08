@@ -1,10 +1,13 @@
-"""Conexão Postgres do C4ISTAR (borda e nuvem)."""
+"""Conexão Postgres do C4ISTAR (borda e nuvem) com pool leve."""
 
 from __future__ import annotations
 
 import os
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
+
 
 def _carregar_env(caminho: str = ".env"):
     env_path = Path(caminho)
@@ -20,6 +23,11 @@ def _carregar_env(caminho: str = ".env"):
 
 _carregar_env()
 
+_POOL: list = []
+_POOL_MAX = 4
+_TRAVA = threading.Lock()
+_DISPONIVEL_CACHE = (False, 0.0)
+
 
 def database_url() -> str:
     url = (os.getenv("DATABASE_URL") or "").strip()
@@ -33,33 +41,94 @@ def database_url() -> str:
     return f"postgresql://{user}:{senha}@{host}:{porta}/{base}"
 
 
-def disponivel() -> bool:
+def _nova_conexao():
+    import psycopg
+
+    return psycopg.connect(database_url(), autocommit=False)
+
+
+def _pegar_conexao():
+    with _TRAVA:
+        while _POOL:
+            conn = _POOL.pop()
+            try:
+                if conn.closed:
+                    continue
+                return conn
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return _nova_conexao()
+
+
+def _devolver_conexao(conn):
+    if conn is None:
+        return
     try:
-        import psycopg
+        if conn.closed:
+            return
+        with _TRAVA:
+            if len(_POOL) < _POOL_MAX:
+                _POOL.append(conn)
+                return
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def disponivel() -> bool:
+    """Cache curto: evita SELECT 1 a cada insert/poll."""
+    global _DISPONIVEL_CACHE
+    ok, quando = _DISPONIVEL_CACHE
+    agora = time.time()
+    if agora - quando < 8.0:
+        return ok
+    try:
+        import psycopg  # noqa: F401
     except ImportError:
+        _DISPONIVEL_CACHE = (False, agora)
         return False
     try:
         with conectar() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
+        _DISPONIVEL_CACHE = (True, agora)
         return True
     except Exception:
+        _DISPONIVEL_CACHE = (False, agora)
         return False
 
 
 @contextmanager
 def conectar():
-    import psycopg
-
-    conn = psycopg.connect(database_url(), autocommit=False)
+    conn = _pegar_conexao()
     try:
         yield conn
         conn.commit()
+        _devolver_conexao(conn)
+        conn = None
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        conn = None
         raise
     finally:
-        conn.close()
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def aplicar_schema(caminho: Path | None = None):

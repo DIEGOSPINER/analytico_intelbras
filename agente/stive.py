@@ -103,12 +103,27 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         bruto["respostas"] = bruto["respostas"][-200:]
         _gravar(bruto)
     if not sim:
+        try:
+            from audio_registro import rejeitar_pendente
+
+            rejeitar_pendente(ident)
+        except Exception:
+            pass
         return "Anotado. Essa situação não entra na base."
     natureza = {
         "disparo": "Disparo",
+        "audio": "Áudio de risco",
         "veiculo": "Permanência de veículo",
         "pessoa": "Permanência de pessoa",
     }.get(tipo, "Confirmação de campo")
+    audio_gravado = False
+    if tipo in ("disparo", "audio", "briga", "socorro"):
+        try:
+            from audio_registro import confirmar_pendente
+
+            audio_gravado = confirmar_pendente(ident)
+        except Exception:
+            audio_gravado = False
     from ocorrencias import informar_ocorrencia
 
     informar_ocorrencia(documento, {
@@ -118,6 +133,8 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         "descricao": (texto or natureza) + " Confirmado pelo operador com o Agente Stive.",
         "endereco": camera or "",
     }, usar_modelo=False)
+    if audio_gravado:
+        return "Confirmado. Áudio e ocorrência gravados na base."
     return "Confirmação gravada na base de ocorrências."
 
 

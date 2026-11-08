@@ -1802,7 +1802,7 @@ def _ids_respondidos():
     return ids_respondidos()
 
 
-def _lembrar_pendencia(camera, tipo, texto, agora):
+def _lembrar_pendencia(camera, tipo, texto, agora, audio_payload=None):
     bloco = int(agora // 1800)
     chave = f"{camera}|{tipo}|{bloco}"
     if chave in _ids_respondidos():
@@ -1813,6 +1813,10 @@ def _lembrar_pendencia(camera, tipo, texto, agora):
     else:
         atual["texto"] = texto
         atual["expira"] = agora + 1200
+    if audio_payload:
+        from audio_registro import guardar_pendente
+
+        guardar_pendente(chave, audio_payload)
 
 
 def _pendencias_vivas(cameras):
@@ -2442,23 +2446,30 @@ def main():
             for item in list(estado.values()):
                 cam = item["analitica"]
                 for som in item.get("audio").drenar() if item.get("audio") else []:
-                    if int(som.get("nivel") or 0) < 2 and not som.get("stive"):
+                    if som.get("confirmar"):
+                        tipo_pend = "disparo" if "disparo" in str(som.get("categoria") or "").lower() else "audio"
+                        pergunta = som.get("pergunta") or (
+                            f"Confirma o áudio de risco na {cam.nome} para gravar na base?"
+                        )
+                        _lembrar_pendencia(
+                            cam.nome,
+                            tipo_pend,
+                            pergunta,
+                            time.time(),
+                            audio_payload={
+                                "camera": cam.nome,
+                                "tipo": som.get("classe") or "Audio",
+                                "texto": som.get("texto") or "",
+                                "detalhe": som.get("detalhe") or "",
+                                "confianca": som.get("confianca", 0),
+                                "categoria": som.get("categoria") or "",
+                                "nivel": som.get("nivel") or 0,
+                                "palavras": list(som.get("palavras") or []),
+                                "risco": som.get("risco") or "Atencao",
+                            },
+                        )
                         continue
-                    salvar_ocorrencia(
-                        cam.nome,
-                        "Audio",
-                        som["classe"],
-                        "",
-                        0,
-                        0,
-                        duracao=6,
-                        confianca=som.get("confianca", 0),
-                        status=som["risco"],
-                        pessoas_envolvidas=0,
-                        detalhe=som.get("detalhe", ""),
-                        risco=som["risco"],
-                        nivel_risco=som["nivel"],
-                    )
+                    # Sem confirmação prévia: não grava risco sonoro automaticamente.
                 pacotes, visao = cam.retirar_resultados()
                 match = visao.get("match")
                 if match and time.time() <= float(match.get("ate") or 0):
