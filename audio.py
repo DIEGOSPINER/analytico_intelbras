@@ -75,7 +75,14 @@ def classificar_pcm(pcm: bytes):
     pico = float(serie.max())
     base = float(np.median(serie))
     altos = int(np.sum(serie > max(0.08, base * 8)))
-    if pico > 0.45 and altos <= 3 and pico > base * 20:
+    pico_min, mult, _cooldown = 0.45, 20.0, 90.0
+    try:
+        from agente.aprendizado_feedback import limiar_audio_disparo
+
+        pico_min, mult, _cooldown = limiar_audio_disparo()
+    except Exception:
+        pass
+    if pico > pico_min and altos <= 3 and pico > base * mult:
         return "disparo", pico
     voz = int(np.sum(serie > 0.015))
     if voz >= 40:
@@ -233,7 +240,14 @@ class EscutaAudio:
             return
         tipo, nivel = classe
         agora = time.time()
-        if tipo == "disparo" and agora - self._ultimo_disparo >= 90:
+        cooldown = 90.0
+        try:
+            from agente.aprendizado_feedback import limiar_audio_disparo
+
+            _pico, _mult, cooldown = limiar_audio_disparo()
+        except Exception:
+            pass
+        if tipo == "disparo" and agora - self._ultimo_disparo >= cooldown:
             self._ultimo_disparo = agora
             self.suspeito_ate = agora + 45
             self.suspeito_tipo = "disparo"

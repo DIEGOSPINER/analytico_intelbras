@@ -135,6 +135,19 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         })
         bruto["respostas"] = bruto["respostas"][-200:]
         _gravar(bruto)
+    try:
+        from agente.aprendizado_feedback import aplicar_feedback
+
+        aplicar_feedback(
+            1 if sim else -1,
+            texto=texto or "",
+            tipo=tipo or "",
+            titulo="confirmação",
+            camera=camera or "",
+            documento=documento or "",
+        )
+    except Exception:
+        pass
     if not sim:
         try:
             from audio_registro import rejeitar_pendente
@@ -142,7 +155,7 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
             rejeitar_pendente(ident)
         except Exception:
             pass
-        return "Anotado. Essa situação não entra na base."
+        return "Anotado. Essa situação não entra na base. O Stive ajustou o reconhecimento para reduzir falso positivo."
     natureza = {
         "disparo": "Disparo",
         "audio": "Áudio de risco",
@@ -218,6 +231,19 @@ def registrar_reacao(documento: str, chave: str, titulo: str, texto: str, nota: 
         })
         bruto["reacoes"] = bruto["reacoes"][-1000:]
         _gravar(bruto)
+    if valor in (-1, 1):
+        try:
+            from agente.aprendizado_feedback import aplicar_feedback
+
+            aplicar_feedback(
+                valor,
+                texto=texto or "",
+                tipo=tipo or "",
+                titulo=titulo or "",
+                documento=documento or "",
+            )
+        except Exception:
+            pass
     return {"ok": True, "nota": valor}
 
 

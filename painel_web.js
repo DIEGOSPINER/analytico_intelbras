@@ -1614,6 +1614,9 @@ async function confirmarPendencia(botao) {
 const filaFalaStive = [];
 const falasVistas = new Set();
 let falandoStive = false;
+let falaAtivaStive = null;
+const CHAVE_FALA_ATIVA = "stive-fala-ativa";
+const CHAVE_FALA_VIVO = "stive-fala-vivo";
 
 function piscarStive() {
   const avatar = document.querySelector("#abrir-stive");
@@ -1625,7 +1628,27 @@ function piscarStive() {
 }
 
 function linkAoVivoHtml() {
-  return `<p class="link-vivo"><a href="/painel/cameras">Visualize ao vivo</a></p>`;
+  return `<p class="link-vivo"><a href="/painel/cameras" data-stive-vivo="1">Visualize ao vivo</a></p>`;
+}
+
+function salvarFalaAtiva(item) {
+  falaAtivaStive = item || null;
+  try {
+    if (item) sessionStorage.setItem(CHAVE_FALA_ATIVA, JSON.stringify(item));
+    else sessionStorage.removeItem(CHAVE_FALA_ATIVA);
+  } catch (erro) {}
+}
+
+function lerFalaAtiva() {
+  if (falaAtivaStive) return falaAtivaStive;
+  try {
+    const bruto = JSON.parse(sessionStorage.getItem(CHAVE_FALA_ATIVA) || "null");
+    if (bruto && bruto.texto) {
+      falaAtivaStive = bruto;
+      return bruto;
+    }
+  } catch (erro) {}
+  return null;
 }
 
 function mereceLinkAoVivo(texto, opcoes) {
@@ -1652,20 +1675,22 @@ function acoesFalaHtml(item) {
 
 function mostrarFalaHq(item) {
   const caixa = document.getElementById("fala-hq");
-  if (!caixa) return;
+  if (!caixa || !item) return;
   const classe = item.classe || "";
   caixa.hidden = false;
   caixa.dataset.travado = "1";
   caixa.className = `fala-hq sobe${classe ? ` ${classe}` : ""}`;
   const link = item.linkVivo ? linkAoVivoHtml() : "";
   caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${link}${acoesFalaHtml(item)}`;
+  falandoStive = true;
+  salvarFalaAtiva(item);
   piscarStive();
 }
 
 function enfileirarFalaStive(chave, titulo, texto, opcoes) {
   if (!chave || !texto || falasVistas.has(chave)) return false;
   // Um assunto por vez: não empilha informe + disparo + confirmação juntos.
-  if (falandoStive || filaFalaStive.length) return false;
+  if (falandoStive || filaFalaStive.length || lerFalaAtiva()) return false;
   falasVistas.add(chave);
   if (falasVistas.size > 80) {
     const antigo = falasVistas.values().next().value;
@@ -1685,7 +1710,7 @@ function enfileirarFalaStive(chave, titulo, texto, opcoes) {
 }
 
 function processarFilaFalaStive() {
-  if (falandoStive) return;
+  if (falandoStive || lerFalaAtiva()) return;
   const caixa = document.getElementById("fala-hq");
   if (!caixa) return;
   const item = filaFalaStive.shift();
@@ -1695,8 +1720,22 @@ function processarFilaFalaStive() {
     caixa.dataset.travado = "";
     return;
   }
-  falandoStive = true;
   mostrarFalaHq(item);
+}
+
+function restaurarFalaStive() {
+  const item = lerFalaAtiva();
+  if (!item) return;
+  mostrarFalaHq(item);
+  // Chegou em Ao vivo após clicar no link: aguarda visualização e fecha.
+  try {
+    if (sessionStorage.getItem(CHAVE_FALA_VIVO) === "1" && /\/painel\/cameras\/?$/.test(location.pathname)) {
+      sessionStorage.setItem(CHAVE_FALA_VIVO, "visto");
+      setTimeout(() => {
+        if (sessionStorage.getItem(CHAVE_FALA_VIVO) === "visto") fecharFalaStive();
+      }, 5000);
+    }
+  } catch (erro) {}
 }
 
 function chavesFalaBase(dados) {
@@ -1751,10 +1790,11 @@ function atualizarFalaStive(dados) {
   if (!window._stiveBasePronto) {
     chavesFalaBase(dados).forEach((chave) => falasVistas.add(chave));
     window._stiveBasePronto = true;
+    restaurarFalaStive();
     return;
   }
-  // Já há um balão ativo ou na fila: não mistura assuntos (alerta + disparo etc.).
-  if (falandoStive || filaFalaStive.length) return;
+  // Já há um balão ativo (inclusive restaurado da sessão) ou na fila: não mistura assuntos.
+  if (falandoStive || filaFalaStive.length || lerFalaAtiva()) return;
 
   const pendencias = dados.pendencias || [];
   if (pendencias[0]) {
@@ -1835,6 +1875,10 @@ function fecharFalaStive() {
     caixa.dataset.travado = "";
   }
   falandoStive = false;
+  salvarFalaAtiva(null);
+  try {
+    sessionStorage.removeItem(CHAVE_FALA_VIVO);
+  } catch (erro) {}
   processarFilaFalaStive();
 }
 
@@ -1899,7 +1943,15 @@ function iniciarFalaStive() {
   document.body.dataset.falaPronta = "1";
   const caixa = document.getElementById("fala-hq");
   if (!caixa) return;
+  restaurarFalaStive();
   caixa.addEventListener("click", async (evento) => {
+    const linkVivo = evento.target.closest("a[data-stive-vivo]");
+    if (linkVivo) {
+      // Não fecha agora: persiste o balão e só libera após visualizar Ao vivo.
+      try { sessionStorage.setItem(CHAVE_FALA_VIVO, "1"); } catch (erro) {}
+      salvarFalaAtiva(lerFalaAtiva() || falaAtivaStive);
+      return;
+    }
     const confirmar = evento.target.closest("button[data-resp]");
     if (confirmar) {
       const dados = await confirmarPendencia(confirmar);
@@ -1916,6 +1968,7 @@ function iniciarFalaStive() {
     }
     const fechar = evento.target.closest("button[data-fechar]");
     if (fechar) {
+      // Fechar sem like/dislike não treina o modelo (nota 0).
       await enviarReacaoStive(fechar, 0);
       fecharFalaStive();
     }

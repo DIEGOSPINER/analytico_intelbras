@@ -253,6 +253,7 @@ class IdentificadorFaces:
         self._trava = threading.Lock()
         self._seq = 0
         self._dim = 128
+        self._atualizar_limiares_feedback()
 
         candidatos = [caminho_modelo, MODELO_FACE, MODELO_FACE_FALLBACK]
         modelo_usado = None
@@ -289,6 +290,24 @@ class IdentificadorFaces:
             f"Galeria: {len(self.galeria)} identidade(s)."
         )
 
+    def _atualizar_limiares_feedback(self):
+        """Aplica delta aprendido com likes/dislikes e sim/não do Stive."""
+        base_match = LIMIAR_MATCH if self.usa_sface else getattr(self, "_base_match", self.limiar_match)
+        base_certeza = LIMIAR_CERTEZA if self.usa_sface else getattr(self, "_base_certeza", self.limiar_certeza)
+        if not self.usa_sface and self.limiar_match in (0.46, LIMIAR_MATCH):
+            base_match = 0.46
+            base_certeza = 0.62
+        self._base_match = float(getattr(self, "_base_match", base_match) or base_match)
+        self._base_certeza = float(getattr(self, "_base_certeza", base_certeza) or base_certeza)
+        try:
+            from agente.aprendizado_feedback import limiar_face
+
+            self.limiar_match = limiar_face(self._base_match)
+            self.limiar_certeza = limiar_face(self._base_certeza)
+        except Exception:
+            self.limiar_match = self._base_match
+            self.limiar_certeza = self._base_certeza
+
     def _iniciar_reconhecedor(self):
         caminho = self._garantir_modelo_sface()
         if not caminho or not hasattr(cv2, "FaceRecognizerSF"):
@@ -300,17 +319,23 @@ class IdentificadorFaces:
             self.limiar_match = 0.46
             self.limiar_certeza = 0.62
             self.limiar_fundir = 0.55
+            self._base_match = 0.46
+            self._base_certeza = 0.62
             return
         try:
             self.reconhecedor = cv2.FaceRecognizerSF.create(caminho, "")
             self.usa_sface = True
             self._dim = 128
+            self._base_match = LIMIAR_MATCH
+            self._base_certeza = LIMIAR_CERTEZA
         except Exception as exc:
             print(f"Falha ao abrir SFace ({exc}). Usando características visuais.")
             self._dim = 400
             self.limiar_match = 0.46
             self.limiar_certeza = 0.62
             self.limiar_fundir = 0.55
+            self._base_match = 0.46
+            self._base_certeza = 0.62
 
     @staticmethod
     def _garantir_modelo_sface():
@@ -957,6 +982,7 @@ class IdentificadorFaces:
 
     def _identificar_face(self, frame, crop, face, camera, track_id, agora):
         """Devolve (face_id, score, novo) reutilizando a galeria de características."""
+        self._atualizar_limiares_feedback()
         chave = (camera, track_id)
         cached = self.track_para_face.get(chave)
         ultimo_calc = self.track_ultima_amostra.get(chave, 0)

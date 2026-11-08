@@ -108,10 +108,20 @@ SONDA_OFFLINE_SEG = 20
 
 def perfil_camera(modelo: str) -> dict:
     chave = (modelo or "").lower().replace(" ", "").replace("-", "")
-    for nome, perfil in PERFIS_CAMERA.items():
+    perfil = dict(PERFIS_CAMERA["padrao"])
+    for nome, item in PERFIS_CAMERA.items():
         if nome != "padrao" and nome in chave:
-            return dict(perfil)
-    return dict(PERFIS_CAMERA["padrao"])
+            perfil = dict(item)
+            break
+    try:
+        from agente.aprendizado_feedback import conf_deteccao
+
+        pessoa, veiculo = conf_deteccao(perfil.get("conf", 0.4), perfil.get("conf_veiculo", 0.35))
+        perfil["conf"] = pessoa
+        perfil["conf_veiculo"] = veiculo
+    except Exception:
+        pass
+    return perfil
 
 
 def _ler_foto(caminho):
@@ -632,9 +642,25 @@ class AnaliseComportamental:
             "qualidade_pose": round(qualidade_pose, 2)
         }
 
+    def _frames_confirmacao(self):
+        try:
+            from agente.aprendizado_feedback import frames_confirmacao
+
+            return frames_confirmacao(FRAMES_CONFIRMACAO)
+        except Exception:
+            return FRAMES_CONFIRMACAO
+
+    def _tempo_parado(self):
+        try:
+            from agente.aprendizado_feedback import tempo_parado_comportamento
+
+            return tempo_parado_comportamento()
+        except Exception:
+            return float(TEMPO_PARADO_SEG)
+
     def _confirmar_e_registrar(self, chave_conf, chave_cd, agora, risco, builder):
         self.confirmacoes[chave_conf] += 1
-        if self.confirmacoes[chave_conf] < FRAMES_CONFIRMACAO:
+        if self.confirmacoes[chave_conf] < self._frames_confirmacao():
             return None
         if not self._pode_registrar(chave_cd, agora, risco):
             return None
@@ -675,15 +701,16 @@ class AnaliseComportamental:
             (agora, features["ombro"][1], features["altura_tronco"], features["postura"])
         )
 
-        # Permanência
-        desloc = self._deslocamento(track_id, TEMPO_PARADO_SEG, diagonal)
+        # Permanência (tempo ajustável pelo feedback do Stive)
+        tempo_parado = self._tempo_parado()
+        desloc = self._deslocamento(track_id, tempo_parado, diagonal)
         parado_prolongado = False
         duracao_parado = 0.0
         if desloc is not None and desloc <= DESLOCAMENTO_PARADO:
             inicio = self.inicio_parado.get(track_id, agora)
             self.inicio_parado[track_id] = inicio
             duracao_parado = agora - inicio
-            parado_prolongado = duracao_parado >= TEMPO_PARADO_SEG
+            parado_prolongado = duracao_parado >= tempo_parado
         else:
             self.inicio_parado.pop(track_id, None)
 
@@ -772,7 +799,7 @@ class AnaliseComportamental:
                 self.confirmacoes[("acao", track_id)] += 1
 
             if (
-                self.confirmacoes[("acao", track_id)] >= FRAMES_CONFIRMACAO
+                self.confirmacoes[("acao", track_id)] >= self._frames_confirmacao()
                 and acao != atual
             ):
                 risco_nome, _ = RISCO_POR_ACAO.get(acao, ("Informativo", 1))
@@ -2013,10 +2040,17 @@ def _formatar_duracao(segundos) -> str:
 def _permanencias(nome, centros_pessoa, centros_veiculo):
     """Conta quem permanece na cena e quem fica parado no mesmo ponto."""
     agora = time.time()
+    parado_base, cena_base = 20.0, 10.0
+    try:
+        from agente.aprendizado_feedback import tempos_permanencia
+
+        parado_base, cena_base = tempos_permanencia()
+    except Exception:
+        pass
     frases = []
     for tipo, centros, parado_seg, cena_seg, sujeito in (
-        ("pessoa", centros_pessoa, 20, 10, "Uma pessoa"),
-        ("veiculo", centros_veiculo, 20, 10, "Um veículo"),
+        ("pessoa", centros_pessoa, parado_base, cena_base, "Uma pessoa"),
+        ("veiculo", centros_veiculo, parado_base, cena_base, "Um veículo"),
     ):
         chave = (nome, tipo)
         trilhas = _TRILHAS.setdefault(chave, [])
