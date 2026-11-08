@@ -1,8 +1,9 @@
 """Escuta o áudio do RTSP, separado da imagem do OpenCV.
 
-Um pico muito curto vira possível disparo. Um trecho de voz pode ser
-transcrito para procurar briga. Os dois avisos pedem confirmação: moto,
-porta e conversa alta também fazem barulho.
+Pico curto = barulho alto (não afirma disparo). Transcrição só com
+evidência forte de fala; alucinações típicas do Whisper são descartadas.
+Risco de disparo nasce da fusão visual + barulho no Detector de risco,
+com confirmação do operador no Stive.
 """
 
 from __future__ import annotations
@@ -28,14 +29,42 @@ from cameras import destino_publico
 
 TAXA = 16000
 JANELA_SEGUNDOS = 6
+# Whisper inventa legendas de YouTube / frases de risco em silêncio ou ruído.
 FRASES_INVENTADAS = (
     "obrigado por assistir",
+    "obrigada por assistir",
     "thanks for watching",
+    "thank you for watching",
     "inscreva-se",
+    "inscreva no canal",
+    "se inscreva",
+    "se inscreva no canal",
+    "ative o sininho",
+    "ativa o sininho",
+    "sininho",
+    "receba notificações",
+    "novos vídeos",
+    "novos videos",
     "legendas pela comunidade",
+    "legendas geradas automaticamente",
     "amara.org",
     "até a próxima",
+    "ate a proxima",
     "tchau tchau",
+    "subscribe to the channel",
+    "subscribe",
+    "notification bell",
+    "leave a like",
+    "like and subscribe",
+    # Frase fantasma recorrente neste projeto (ruído → "socorro/briga/disparo")
+    "socorro, tem uma briga e disparo",
+    "socorro tem uma briga e disparo",
+    "tem uma briga e disparo na rua",
+    "briga e disparo na rua",
+)
+_ALUCINACAO_RISCO = re.compile(
+    r"socorro.{0,40}brig|brig.{0,40}dispar|socorro.{0,40}dispar",
+    re.IGNORECASE,
 )
 
 
@@ -60,7 +89,11 @@ def _pcm_para_wav(pcm: bytes) -> bytes:
 
 
 def classificar_pcm(pcm: bytes):
-    """Devolve ('disparo', nivel) ou ('voz', nivel). Silêncio devolve None."""
+    """Devolve ('barulho', nivel) ou ('voz', nivel). Silêncio devolve None.
+
+    Pico curto NÃO é classificado como disparo — só como barulho alto para
+    fusão com visão (interação + queda + deitada) no Detector de risco.
+    """
     if len(pcm) < TAXA * 2:
         return None
     amostras = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
@@ -83,9 +116,10 @@ def classificar_pcm(pcm: bytes):
     except Exception:
         pass
     if pico > pico_min and altos <= 3 and pico > base * mult:
-        return "disparo", pico
-    voz = int(np.sum(serie > 0.015))
-    if voz >= 40:
+        return "barulho", pico
+    # Exige mais frames com energia de fala antes de gastar Whisper.
+    voz = int(np.sum(serie > 0.02))
+    if voz >= 55:
         return "voz", pico
     return None
 
@@ -94,9 +128,11 @@ def _transcrever(wav: bytes, api_key: str) -> dict:
     limite = "----audioanalitico"
     partes = []
     prompt = (
-        "Transcreva somente falas humanas claras em português brasileiro. "
-        "Se não houver fala inteligível, devolva texto vazio. "
-        "Não invente palavras, música, legendas ou comentários."
+        "Ambiente de câmera de rua / CFTV em português brasileiro. "
+        "Transcreva apenas fala humana clara e inteligível. "
+        "Se for só ruído, vento, motor, música ou silêncio, devolva texto vazio. "
+        "Nunca invente pedidos de socorro, briga, disparo, legendas, "
+        "inscrições em canal, sininho ou 'obrigado por assistir'."
     )
     campos = (
         ("model", "whisper-1"),
@@ -134,25 +170,31 @@ def _transcricao_confiavel(corpo: dict) -> str:
     """Aceita só trechos com evidência forte de fala; rejeita alucinações do Whisper."""
     texto = str(corpo.get("text") or "").strip()
     baixo = texto.lower()
-    if len(texto) < 8 or any(frase in baixo for frase in FRASES_INVENTADAS):
+    if len(texto) < 8:
         return ""
-    # Poucas letras / repetição típica de alucinação
+    if any(frase in baixo for frase in FRASES_INVENTADAS):
+        return ""
+    if _ALUCINACAO_RISCO.search(baixo):
+        return ""
     letras = sum(1 for c in texto if c.isalpha())
-    if letras < 6:
+    if letras < 8:
         return ""
     palavras = [p for p in re.findall(r"\w+", baixo) if len(p) > 1]
     if len(palavras) >= 4 and len(set(palavras)) <= 2:
         return ""
     segmentos = corpo.get("segments") or []
     if not segmentos:
-        # Sem segmentos verbose: só aceita se o modelo reportou duração plausível
         return ""
     silencio = sum(float(item.get("no_speech_prob") or 0) for item in segmentos) / len(segmentos)
     confianca = sum(float(item.get("avg_logprob") or -10) for item in segmentos) / len(segmentos)
     compressao = sum(float(item.get("compression_ratio") or 1) for item in segmentos) / len(segmentos)
-    # Mais rigoroso: silêncio alto ou logprob ruim = ruído/alucinação
-    if silencio > 0.32 or confianca < -0.75 or compressao > 2.4:
+    # Mais rigoroso: silêncio/ruído → Whisper alucina legendas e frases de risco.
+    if silencio > 0.22 or confianca < -0.55 or compressao > 2.15:
         return ""
+    # Palavras de risco exigem confiança ainda maior (evita inventar "socorro/tiro").
+    if classificar_texto(texto):
+        if silencio > 0.12 or confianca < -0.35:
+            return ""
     return texto
 
 
@@ -170,7 +212,7 @@ class EscutaAudio:
         self.eventos = queue.Queue()
         self.stopped = False
         self._thread = None
-        self._ultimo_disparo = 0.0
+        self._ultimo_barulho = 0.0
         self._ultima_fala = 0.0
         self.suspeito_ate = 0.0
         self.suspeito_tipo = ""
@@ -247,27 +289,13 @@ class EscutaAudio:
             _pico, _mult, cooldown = limiar_audio_disparo()
         except Exception:
             pass
-        if tipo == "disparo" and agora - self._ultimo_disparo >= cooldown:
-            self._ultimo_disparo = agora
+        # Barulho alto: sinal para fusão no Detector de risco (não afirma disparo).
+        if tipo == "barulho" and agora - self._ultimo_barulho >= cooldown:
+            self._ultimo_barulho = agora
             self.suspeito_ate = agora + 45
-            self.suspeito_tipo = "disparo"
-            detalhe = "Pico curto de áudio compatível com disparo. Confirme o trecho; moto e porta também estouram."
+            self.suspeito_tipo = "barulho"
+            detalhe = "Barulho alto detectado. Sem afirmação de disparo até fusão visual e confirmação no Stive."
             self.suspeito_detalhe = detalhe
-            conf = round(min(nivel, 1.0), 2)
-            # Não grava na base até o operador confirmar no Stive.
-            self.eventos.put({
-                "classe": "Possivel_Disparo",
-                "risco": "Atencao",
-                "nivel": 3,
-                "confianca": conf,
-                "detalhe": detalhe,
-                "texto": "",
-                "categoria": "disparo",
-                "palavras": ["disparo"],
-                "stive": True,
-                "confirmar": True,
-                "pergunta": f"Houve disparo na {self.nome}? Confirme se foi de fato para gravar na base.",
-            })
             return
         if tipo != "voz" or agora - self._ultima_fala < 50:
             return
@@ -287,51 +315,15 @@ class EscutaAudio:
             return
         trecho = " ".join(texto.split())[:240]
         achados = _risco_audio(trecho)
-        categorias = sorted({item["categoria"] for item in achados})
-        palavras = [item["palavra"] for item in achados]
-        nivel = max((int(item["nivel"]) for item in achados), default=0)
-        classe = "Transcricao_Audio"
-        risco_nome = "Informativo"
-        avisar = False
-        if achados:
-            if "disparo" in categorias or "briga" in categorias or "socorro" in categorias:
-                classe = "Audio_Risco"
-                risco_nome = "Prioritario"
-                avisar = True
-            else:
-                classe = "Audio_Atencao"
-                risco_nome = "Atencao"
-                avisar = True
-        # Fala limpa (sem risco) pode ir direto à esteira; risco só após Sim no Stive.
-        if not avisar:
-            registrar_audio(
-                self.nome,
-                classe,
-                texto=trecho,
-                detalhe="Transcrição de áudio da câmera.",
-                confianca=0.55,
-                categoria="transcricao",
-                nivel=0,
-                palavras=[],
-            )
-            return
-        self.suspeito_ate = time.time() + 45
-        self.suspeito_tipo = "voz"
-        self.suspeito_detalhe = f"{', '.join(categorias)}. {trecho}".strip()
-        pergunta = (
-            f"Na {self.nome} parece ter havido {', '.join(categorias)}. "
-            f'Ouvi: "{trecho}". Isso aconteceu de fato? Confirme para gravar na base.'
+        # Transcrição NÃO eleva LED nem pede confirmação sozinha (alucinação comum).
+        # Só entra na esteira como registro informativo.
+        registrar_audio(
+            self.nome,
+            "Transcricao_Audio",
+            texto=trecho,
+            detalhe="Transcrição de áudio da câmera (informativo; sem risco automático).",
+            confianca=0.55,
+            categoria="transcricao",
+            nivel=0,
+            palavras=[item["palavra"] for item in achados],
         )
-        self.eventos.put({
-            "classe": classe,
-            "risco": risco_nome,
-            "nivel": nivel or 1,
-            "confianca": 0.7,
-            "detalhe": f"Áudio com sinal de {', '.join(categorias)}: {trecho}",
-            "texto": trecho,
-            "categoria": ",".join(categorias),
-            "palavras": palavras,
-            "stive": True,
-            "confirmar": True,
-            "pergunta": pergunta,
-        })

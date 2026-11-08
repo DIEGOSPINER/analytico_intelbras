@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import re
 import threading
+import time
 from collections import Counter, defaultdict, deque
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,8 @@ _RANK = defaultdict(Counter)
 _ALERTAS = deque(maxlen=80)
 _PENDENTES = {}
 _HIDRATADO = False
+# Disparo confirmado pelo operador (Stive) → LED vermelho temporário por câmera.
+_DISPARO_CONFIRMADO: dict[str, float] = {}
 
 STOP = {
     "a", "o", "os", "as", "um", "uma", "uns", "umas", "de", "da", "do", "das", "dos",
@@ -54,8 +57,9 @@ LEXICO_RISCO = {
         r"\bsoco\b", r"\bespanca\w*", r"\bpelea\b",
     )),
     "socorro": (3, (
-        r"\bsocorro\b", r"\bme ajuda\b", r"\bajuda\b", r"\bpol[ií]cia\b", r"\bsamu\b",
-        r"\bbombeiro\b", r"\bemerg[eê]ncia\b", r"\bestou ferid\w*", r"\bfogo\b",
+        # "ajuda" sozinho gera falso positivo; exige pedido claro de socorro.
+        r"\bsocorro\b", r"\bme ajuda\b", r"\bpede ajuda\b", r"\bpol[ií]cia\b", r"\bsamu\b",
+        r"\bbombeiro\b", r"\bemerg[eê]ncia\b", r"\bestou ferid\w*",
     )),
     "incidente": (2, (
         r"\bacidente\b", r"\batropel\w*", r"\brou[bv]o\b", r"\bfurto\b", r"\bassalto\b",
@@ -146,6 +150,25 @@ def confirmar_pendente(chave: str) -> bool:
 def rejeitar_pendente(chave: str) -> bool:
     with _TRAVA:
         return _PENDENTES.pop(str(chave), None) is not None
+
+
+def marcar_disparo_confirmado(camera: str, segundos: float = 300.0) -> None:
+    """Após Sim no Stive: ativa risco vermelho na câmera por alguns minutos."""
+    nome = str(camera or "").strip()
+    if not nome:
+        return
+    with _TRAVA:
+        _DISPARO_CONFIRMADO[nome] = time.time() + float(segundos)
+
+
+def disparo_confirmado_ativo(camera: str) -> bool:
+    nome = str(camera or "").strip()
+    with _TRAVA:
+        ate = float(_DISPARO_CONFIRMADO.get(nome) or 0)
+        if ate and time.time() > ate:
+            _DISPARO_CONFIRMADO.pop(nome, None)
+            return False
+        return bool(ate and time.time() <= ate)
 
 
 def registrar(

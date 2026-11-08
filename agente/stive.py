@@ -155,7 +155,7 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
             rejeitar_pendente(ident)
         except Exception:
             pass
-        return "Anotado. Essa situação não entra na base. O Stive ajustou o reconhecimento para reduzir falso positivo."
+        return "Anotado. Sem disparo — dado ignorado e nada entra na base."
     natureza = {
         "disparo": "Disparo",
         "audio": "Áudio de risco",
@@ -170,6 +170,13 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
             audio_gravado = confirmar_pendente(ident)
         except Exception:
             audio_gravado = False
+    if tipo == "disparo":
+        try:
+            from audio_registro import marcar_disparo_confirmado
+
+            marcar_disparo_confirmado(camera or "", segundos=300)
+        except Exception:
+            pass
     from ocorrencias import informar_ocorrencia
 
     informar_ocorrencia(documento, {
@@ -179,6 +186,8 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         "descricao": (texto or natureza) + " Confirmado pelo operador com o Agente Stive.",
         "endereco": camera or "",
     }, usar_modelo=False)
+    if tipo == "disparo":
+        return "Confirmado. Disparo lançado na base e risco vermelho ativado na câmera."
     if audio_gravado:
         return "Confirmado. Áudio e ocorrência gravados na base."
     return "Confirmação gravada na base de ocorrências."

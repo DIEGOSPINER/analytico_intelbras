@@ -1861,8 +1861,28 @@ def _pendencias_vivas(cameras):
                 else f"Confirma a pessoa que permanece parada na {nome}?"
             )
             _lembrar_pendencia(nome, tipo, pergunta, agora)
-        if "disparo" in (camera.get("frase") or "").lower():
-            _lembrar_pendencia(nome, "disparo", f"Houve disparo na {nome}? Pode confirmar para a base?", agora)
+        # Pedido de confirmação de disparo só na fusão amarela (barulho + interação + queda + deitada).
+        if camera.get("risco") == "amarelo" and (camera.get("audio_vivo") or {}).get("tipo") == "barulho":
+            _lembrar_pendencia(
+                nome,
+                "disparo",
+                (
+                    f"Na {nome} há barulho alto com interação, queda e pessoa deitada. "
+                    f"Houve disparo? Se sim, gravo na base e ativo risco vermelho."
+                ),
+                agora,
+                audio_payload={
+                    "camera": nome,
+                    "tipo": "Possivel_Disparo",
+                    "texto": "",
+                    "detalhe": (camera.get("audio_vivo") or {}).get("detalhe") or "Fusão visual + barulho alto",
+                    "confianca": 0.6,
+                    "categoria": "disparo",
+                    "nivel": 3,
+                    "palavras": ["disparo"],
+                    "risco": "Atencao",
+                },
+            )
     respondidas = _ids_respondidos()
     vivos = []
     for chave, item in list(_PENDENCIAS.items()):
@@ -1961,31 +1981,34 @@ def _frase_camera(nome, visao, audio_suspeito, audio_tipo):
         texto = _FRASES.get(item.get("classe") or "")
         if texto and texto not in partes:
             partes.append(texto)
-    if audio_suspeito and audio_tipo == "disparo":
-        partes.append("um disparo")
-    elif audio_suspeito:
-        partes.append("uma fala com sinal de briga")
+    if audio_suspeito and audio_tipo == "barulho":
+        partes.append("barulho alto")
     if not partes:
         return f"{nome} sem comportamento de risco agora."
     return "Existe " + ", ".join(partes) + f" na {nome}. Atenção!"
 
 
-def _risco_camera(visao, audio_suspeito, tem_interesse, interesse_risco=True):
+def _risco_camera(visao, audio_barulho, tem_interesse, interesse_risco=True, disparo_confirmado=False):
+    """LED por câmera.
+
+    Interação sozinha não é risco. Pico de áudio não afirma disparo.
+    Amarelo: barulho alto + interação + queda + pessoa deitada → Stive pergunta disparo.
+    Vermelho: operador confirmou disparo (ou arma / interesse de risco).
+    """
     acoes = {
         item.get("classe") or item.get("nome"): int(item.get("agora") or 0)
         for item in visao.get("comportamentos") or []
     }
     deitado = acoes.get("Deitado", 0) > 0
-    interacao = acoes.get("Interacao_Proxima", 0) > 0 or acoes.get("Possivel_Briga", 0) > 0
+    interacao = acoes.get("Interacao_Proxima", 0) > 0
     queda = acoes.get("Possivel_Queda", 0) > 0
-    briga = acoes.get("Possivel_Briga", 0) > 0
-    if deitado and interacao and audio_suspeito:
-        return "preto"
-    if queda or briga:
+    arma = acoes.get("Possivel_Arma_Fogo", 0) > 0
+    if disparo_confirmado:
         return "vermelho"
-    if tem_interesse and interesse_risco:
+    if arma or (tem_interesse and interesse_risco):
         return "vermelho"
-    if deitado or interacao or audio_suspeito:
+    # Fusão completa → amarelo e pergunta de disparo no Stive (não afirma sozinho).
+    if audio_barulho and interacao and queda and deitado:
         return "amarelo"
     if tem_interesse:
         return "verde"
@@ -2187,6 +2210,7 @@ def _match_json(match, classe, risco, narracao, narracao_ia):
 def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
     from remoto import slug_camera
     import cadastro
+    from audio_registro import disparo_confirmado_ativo
 
     pacote = acervo.pacote(cameras_online, matches)
     for chave in ("1", "2", "3", "4"):
@@ -2215,13 +2239,21 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         audio_on = bool(audio and time.time() <= float(getattr(audio, "suspeito_ate", 0) or 0))
         audio_tipo = str(getattr(audio, "suspeito_tipo", "") or "") if audio_on else ""
         audio_detalhe = str(getattr(audio, "suspeito_detalhe", "") or "") if audio_on else ""
+        # Só barulho alto entra na fusão de risco; transcrição/voz não eleva LED sozinha.
+        audio_barulho = audio_on and audio_tipo == "barulho"
         interesse_risco = True
         if match and match.get("tipo") == "FACE":
             pessoa_match = pessoas.get(str(match.get("id") or "").upper()) or {}
             interesse_risco = cadastro.pessoa_de_risco(pessoa_match)
         elif match and match.get("tipo") == "PLACA":
             interesse_risco = True
-        risco = _risco_camera(visao, audio_on, bool(match), interesse_risco)
+        risco = _risco_camera(
+            visao,
+            audio_barulho,
+            bool(match),
+            interesse_risco,
+            disparo_confirmado=disparo_confirmado_ativo(item["nome"]),
+        )
         if _ORDEM_LED.get(risco, 0) > _ORDEM_LED.get(led, 0):
             led = risco
         slug = slug_camera(item["nome"])
@@ -2268,7 +2300,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
                 }
                 for comp in (visao.get("comportamentos") or [])[:6]
             ],
-            "frase": _frase_camera(item["nome"], visao, audio_on, audio_tipo),
+            "frase": _frase_camera(item["nome"], visao, audio_barulho, audio_tipo),
             "fluxo": _fluxo_serie(item["nome"], "pessoa", acumulado["Pessoa"]),
             "fluxo_veiculo": _fluxo_serie(item["nome"], "veiculo", acumulado["Veiculo"]),
             "permanencias": _permanencias(
@@ -2504,31 +2536,9 @@ def main():
             matches_vivos = []
             for item in list(estado.values()):
                 cam = item["analitica"]
-                for som in item.get("audio").drenar() if item.get("audio") else []:
-                    if som.get("confirmar"):
-                        tipo_pend = "disparo" if "disparo" in str(som.get("categoria") or "").lower() else "audio"
-                        pergunta = som.get("pergunta") or (
-                            f"Confirma o áudio de risco na {cam.nome} para gravar na base?"
-                        )
-                        _lembrar_pendencia(
-                            cam.nome,
-                            tipo_pend,
-                            pergunta,
-                            time.time(),
-                            audio_payload={
-                                "camera": cam.nome,
-                                "tipo": som.get("classe") or "Audio",
-                                "texto": som.get("texto") or "",
-                                "detalhe": som.get("detalhe") or "",
-                                "confianca": som.get("confianca", 0),
-                                "categoria": som.get("categoria") or "",
-                                "nivel": som.get("nivel") or 0,
-                                "palavras": list(som.get("palavras") or []),
-                                "risco": som.get("risco") or "Atencao",
-                            },
-                        )
-                        continue
-                    # Sem confirmação prévia: não grava risco sonoro automaticamente.
+                # Áudio não afirma disparo sozinho; pendência nasce da fusão amarela em _pendencias_vivas.
+                if item.get("audio"):
+                    item["audio"].drenar()
                 pacotes, visao = cam.retirar_resultados()
                 match = visao.get("match")
                 if match and time.time() <= float(match.get("ate") or 0):
