@@ -1595,6 +1595,7 @@ class Acervo:
                 if soma:
                     horas_ativas.append({"rotulo": f"{hora:02d}:00:00", "total": soma})
             inicio_mes = hoje[:8] + "01"
+            inicio_semana = (date.today() - timedelta(days=6)).isoformat()
             dias_serie = [(date.today() - timedelta(days=offset)).isoformat() for offset in range(6, -1, -1)]
 
             def somar_cat(inicio):
@@ -1623,7 +1624,12 @@ class Acervo:
                 base["MatchPlaca"] = somar_match(inicio, "PLACA")
                 return base
 
-            periodos = {"dia": bloco(hoje), "mes": bloco(inicio_mes), "total": bloco("")}
+            periodos = {
+                "dia": bloco(hoje),
+                "semana": bloco(inicio_semana),
+                "mes": bloco(inicio_mes),
+                "total": bloco(""),
+            }
             serie_dias = []
             dias_empilhados = []
             for dia in dias_serie:

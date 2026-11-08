@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ARQUIVO = Path("feedback_modelo.json")
@@ -14,17 +15,42 @@ _CHATS = {}
 _SISTEMA = (
     "Você é Stive, agente de segurança do C4ISTAR MONITOR e analista criminal de campo. "
     "Fale como policial experiente: horário, dia da semana, local, pessoa e padrão importam. "
-    "Responda em português, objetivo, só com o contexto enviado. "
-    "O contexto é a base inteira do cliente logado, não apenas o dia de hoje. "
+    "Responda em português, objetivo, usando SEMPRE o contexto numérico e textual enviado abaixo. "
+    "Esse contexto JÁ É a consulta à base do cliente logado (dia, semana, mês, total, cubo, app, alertas). "
+    "NUNCA diga que não tem acesso, que não consegue consultar, que falta permissão ou que os dados "
+    "do dia/semana não estão disponíveis. Se o total do período for zero, diga claramente que "
+    "na base daquele período não há registros — isso ainda é uma resposta com base nos dados. "
+    "Quando perguntarem o que ocorreu no dia, na semana ou no mês, use os blocos Totais do dia / "
+    "da semana / do mês, a série diária, ocorrências, matches e áudio do contexto. "
     "Regra de probabilidade: cada passagem de pessoa de risco no histórico = 1 risco de invasão. "
     "Entre 20h e 06h aumente a chance (ladrões preferem a madrugada); sexta a domingo também eleva. "
     "Quando pedirem chance, probabilidade, invasão, cruzamento ou padrão, use o briefing criminal "
     "e diga números claros (passagens, dias, % estimada). Cruze pessoa × câmera × horário × ocorrências. "
-    "Quando o operador relatar uma ocorrência, preencha o objeto ocorrencia. "
+    "Quando o operador RELATAR (não perguntar) uma ocorrência nova para gravar, preencha o objeto ocorrencia. "
+    "Perguntas do tipo 'o que aconteceu', 'houve', 'resumo do dia' NÃO são registro — só narração. "
     "Devolva sempre um JSON com as chaves fala, visual e ocorrencia. "
     "visual.tipo pode ser numeros, lista, texto, barras, linha ou rosca. "
     "Para gráfico, análise, chance ou comparação, use barras, linha ou rosca e preencha itens com rotulo e total. "
     "ocorrencia tem natureza, descricao, endereco, data e hora, ou fica vazio."
+)
+
+_RECUSAS = (
+    "não tenho acesso",
+    "nao tenho acesso",
+    "sem acesso",
+    "não consigo consultar",
+    "nao consigo consultar",
+    "não posso consultar",
+    "nao posso consultar",
+    "não tenho como acessar",
+    "nao tenho como acessar",
+    "não disponho dos dados",
+    "nao disponho dos dados",
+    "dados não estão disponíveis",
+    "dados nao estao disponiveis",
+    "não posso responder",
+    "nao posso responder",
+    "fora do meu alcance",
 )
 
 
@@ -52,6 +78,11 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
             briefing = texto_briefing(analise)
         except Exception:
             briefing = ""
+    # Perguntas de período respondem direto da base — evita GPT inventar "sem acesso".
+    local_periodo = _resposta_periodo(pergunta, resumo)
+    if local_periodo is not None and not pede_analise_criminal(pergunta):
+        _guardar(documento, pergunta, local_periodo["fala"])
+        return local_periodo
     contexto = _contexto(resumo)
     if briefing:
         contexto = contexto + "\n\n" + briefing
@@ -68,7 +99,9 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
             saida = extrair_json(texto)
             if isinstance(saida, dict) and saida.get("fala"):
                 resultado = _normalizar(saida)
-                if analise and (not resultado.get("visual") or not (resultado["visual"].get("itens"))):
+                if _parece_recusa(resultado.get("fala") or ""):
+                    resultado = local_periodo or _local(pergunta, resumo, documento=documento)
+                elif analise and (not resultado.get("visual") or not (resultado["visual"].get("itens"))):
                     from agente.criminal import resposta_chat
 
                     visual = resposta_chat(documento, pergunta, resumo).get("visual") or {}
@@ -79,7 +112,7 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
                 return resultado
     except Exception:
         pass
-    resultado = _local(pergunta, resumo, documento=documento)
+    resultado = local_periodo or _local(pergunta, resumo, documento=documento)
     _guardar(documento, pergunta, resultado["fala"])
     _registrar_ocorrencia(documento, resultado.get("ocorrencia"))
     return resultado
@@ -270,6 +303,170 @@ def _somar(itens, chave):
     return sorted(totais.items(), key=lambda par: -par[1])[:8]
 
 
+def _parece_recusa(fala: str) -> bool:
+    baixo = (fala or "").lower()
+    return any(trecho in baixo for trecho in _RECUSAS)
+
+
+def _fmt_bloco(bloco: dict) -> str:
+    if not bloco:
+        return "sem contagem"
+    partes = [f"{chave} {int(valor or 0)}" for chave, valor in bloco.items() if int(valor or 0)]
+    return ", ".join(partes) if partes else "nenhum registro"
+
+
+def _periodo_chave(baixo: str) -> str | None:
+    if any(t in baixo for t in ("semana", "últimos 7", "ultimos 7", "7 dias", "nessa semana", "nesta semana")):
+        return "semana"
+    if any(t in baixo for t in ("mês", "mes", "neste mês", "nesse mes", "no mês", "no mes")):
+        return "mes"
+    if any(t in baixo for t in (
+        "hoje", "no dia", "do dia", "neste dia", "nesse dia", "dia de hoje",
+        "ocorreram hoje", "ocorreu hoje", "aconteceu hoje", "aconteceram hoje",
+    )):
+        return "dia"
+    if any(t in baixo for t in (
+        "o que ocorreu", "o que aconteceu", "o que houve", "resumo do",
+        "balanço", "balanco", "situação atual", "situacao atual",
+    )):
+        return "dia"
+    return None
+
+
+def _cubo_periodo(resumo: dict, chave: str) -> list[dict]:
+    cubo = (resumo or {}).get("cubo") or []
+    hoje = date.today()
+    if chave == "dia":
+        inicio = hoje.isoformat()
+        return [item for item in cubo if str(item.get("d") or "")[:10] == inicio]
+    if chave == "semana":
+        inicio = (hoje - timedelta(days=6)).isoformat()
+    elif chave == "mes":
+        inicio = hoje.replace(day=1).isoformat()
+    else:
+        return list(cubo)
+    return [item for item in cubo if str(item.get("d") or "")[:10] >= inicio]
+
+
+def _app_periodo(resumo: dict, chave: str) -> list[dict]:
+    app = (resumo or {}).get("app_linhas") or []
+    hoje = date.today()
+    if chave == "dia":
+        inicio = hoje.isoformat()
+        return [item for item in app if str(item.get("data") or "")[:10] == inicio]
+    if chave == "semana":
+        inicio = (hoje - timedelta(days=6)).isoformat()
+    elif chave == "mes":
+        inicio = hoje.replace(day=1).isoformat()
+    else:
+        return list(app)
+    return [item for item in app if str(item.get("data") or "")[:10] >= inicio]
+
+
+def _bloco_periodo(resumo: dict, chave: str) -> dict:
+    periodos = (resumo or {}).get("periodos") or {}
+    bloco = dict(periodos.get(chave) or {})
+    if bloco:
+        return bloco
+    # Fallback: monta a partir do cubo se periodos.semana ainda não existir no resumo vivo.
+    totais = {}
+    for item in _cubo_periodo(resumo, chave):
+        classe = str(item.get("k") or "") or "Outro"
+        totais[classe] = totais.get(classe, 0) + int(item.get("n") or 0)
+    return totais
+
+
+def _rotulo_periodo(chave: str) -> str:
+    return {"dia": "hoje", "semana": "nesta semana", "mes": "neste mês"}.get(chave, "no período")
+
+
+def _narrar_periodo(resumo: dict, chave: str) -> dict:
+    bloco = _bloco_periodo(resumo, chave)
+    app = _app_periodo(resumo, chave)
+    cubo = _cubo_periodo(resumo, chave)
+    historico = (resumo or {}).get("historico") or []
+    informes = (resumo or {}).get("informes") or []
+    audio = ((resumo or {}).get("audio") or {}).get("alertas") or []
+    rotulo = _rotulo_periodo(chave)
+    pessoas = int(bloco.get("Pessoa") or 0)
+    veiculos = int(bloco.get("Veiculo") or 0)
+    armas = int(bloco.get("Arma") or 0)
+    faces = int(bloco.get("MatchFace") or 0)
+    placas = int(bloco.get("MatchPlaca") or 0)
+    soma = sum(int(v or 0) for v in bloco.values())
+    naturezas = _somar(app, "natureza")
+    por_camera = {}
+    for item in cubo:
+        cam = str(item.get("c") or "Sem câmera")
+        por_camera[cam] = por_camera.get(cam, 0) + int(item.get("n") or 0)
+    top_cams = sorted(por_camera.items(), key=lambda par: -par[1])[:5]
+
+    partes = []
+    if soma <= 0 and not app and not historico:
+        partes.append(f"Na base {rotulo} não há registros analíticos ainda.")
+    else:
+        partes.append(
+            f"Na base {rotulo}: {pessoas} pessoas, {veiculos} veículos"
+            + (f", {armas} armas" if armas else "")
+            + (f", {faces} matches de face" if faces else "")
+            + (f", {placas} matches de placa" if placas else "")
+            + "."
+        )
+    if app:
+        nat = ", ".join(f"{n} {q}" for n, q in naturezas[:4]) or "diversas"
+        partes.append(f"Ocorrências do app: {len(app)} ({nat}).")
+    if historico and chave == "dia":
+        nomes = ", ".join(
+            f"{(h.get('nome') or h.get('id') or 'alerta')}" for h in historico[:3]
+        )
+        partes.append(f"Alertas recentes de interesse: {nomes}.")
+    if informes and chave in ("dia", "semana"):
+        partes.append(f"Informes enviados recentes: {len(informes)}.")
+    if audio and chave == "dia":
+        partes.append(
+            "Áudio de risco: " + "; ".join(
+                f"{a.get('camera') or ''}: {a.get('categoria') or ''}" for a in audio[:3]
+            ) + "."
+        )
+    if top_cams:
+        partes.append(
+            "Câmeras com mais movimento: "
+            + ", ".join(f"{nome} ({qtd})" for nome, qtd in top_cams) + "."
+        )
+
+    itens = [{"rotulo": k, "total": int(v or 0)} for k, v in bloco.items() if int(v or 0)]
+    if not itens and naturezas:
+        itens = [{"rotulo": n, "total": q} for n, q in naturezas]
+    if not itens:
+        itens = [{"rotulo": f"Sem registros {rotulo}", "total": 0}]
+    titulo = {"dia": "Resumo do dia", "semana": "Resumo da semana", "mes": "Resumo do mês"}.get(chave, "Resumo")
+    return _normalizar({
+        "fala": " ".join(partes),
+        "visual": {
+            "tipo": "barras" if len(itens) > 1 else "numeros",
+            "titulo": titulo,
+            "itens": itens[:10],
+        },
+    })
+
+
+def _resposta_periodo(pergunta: str, resumo: dict) -> dict | None:
+    baixo = (pergunta or "").lower()
+    chave = _periodo_chave(baixo)
+    if not chave:
+        return None
+    # Só força resposta local quando a pergunta é sobre o que ocorreu / resumo / totais do período.
+    gatilhos = (
+        "ocorreu", "ocorreram", "aconteceu", "aconteceram", "houve", "resumo",
+        "balanço", "balanco", "total", "quantos", "quantas", "movimento",
+        "passou", "passaram", "situação", "situacao", "status", "hoje",
+        "no dia", "na semana", "no mês", "no mes", "nesta semana", "neste dia",
+    )
+    if not any(t in baixo for t in gatilhos):
+        return None
+    return _narrar_periodo(resumo, chave)
+
+
 def _contexto_audio(resumo: dict) -> str:
     pacote = (resumo or {}).get("audio") or {}
     alertas = pacote.get("alertas") or []
@@ -287,8 +484,10 @@ def _contexto_audio(resumo: dict) -> str:
 def _contexto(resumo: dict) -> str:
     resumo = resumo or {}
     periodos = resumo.get("periodos") or {}
-    total = periodos.get("total") or {}
-    mes = periodos.get("mes") or {}
+    total = periodos.get("total") or _bloco_periodo(resumo, "total")
+    dia = periodos.get("dia") or _bloco_periodo(resumo, "dia")
+    semana = periodos.get("semana") or _bloco_periodo(resumo, "semana")
+    mes = periodos.get("mes") or _bloco_periodo(resumo, "mes")
     cubo = resumo.get("cubo") or []
     por_classe = {}
     por_camera = {}
@@ -318,16 +517,49 @@ def _contexto(resumo: dict) -> str:
     intervalo = ""
     if datas or datas_app:
         tudo = datas + datas_app
-        intervalo = f"Período coberto: {min(tudo)} a {max(tudo)}."
+        intervalo = f"Período coberto na base: {min(tudo)} a {max(tudo)}."
+    serie = resumo.get("serie_dias") or []
+    serie_txt = ", ".join(
+        f"{item.get('rotulo')}: P{item.get('Pessoa', 0)} V{item.get('Veiculo', 0)}"
+        for item in serie[-7:]
+    ) or "sem série"
+    historico = resumo.get("historico") or []
+    hist_txt = " | ".join(
+        f"{h.get('quando') or ''} {h.get('tipo') or ''} {h.get('nome') or h.get('id') or ''} "
+        f"@{h.get('camera') or ''}"
+        for h in historico[:6]
+    ) or "nenhum"
+    informes = resumo.get("informes") or []
+    inf_txt = " | ".join(
+        f"{i.get('quando') or ''} {i.get('tipo') or ''}: {(i.get('descricao') or '')[:80]}"
+        for i in informes[:5]
+    ) or "nenhum"
+    insights = resumo.get("insights") or []
+    ins_txt = " | ".join(
+        f"{i.get('quando') or ''} {i.get('tipo') or ''} {i.get('nome') or ''}: {(i.get('descricao') or '')[:80]}"
+        for i in insights[:4]
+    ) or "nenhum"
+    texto_resumo = str(resumo.get("resumo") or "").strip()
+    assessoramento = str(resumo.get("assessoramento") or "").strip()
     return "\n".join([
-        "Base completa do cliente logado, não só o dia corrente.",
+        "CONSULTA À BASE do cliente logado (já carregada — use estes números; não diga que não tem acesso).",
         intervalo,
-        "Acumulado analítico: " + ", ".join(f"{chave} {valor}" for chave, valor in por_classe.items()),
-        "Totais gravados: " + ", ".join(f"{chave} {valor}" for chave, valor in total.items()),
-        "No mês: " + ", ".join(f"{chave} {valor}" for chave, valor in mes.items()),
-        "Por câmera no histórico: " + ", ".join(f"{nome} {qtd}" for nome, qtd in sorted(por_camera.items(), key=lambda par: -par[1])[:8]),
+        "Totais do dia (hoje): " + _fmt_bloco(dia),
+        "Totais da semana (últimos 7 dias): " + _fmt_bloco(semana),
+        "Totais do mês: " + _fmt_bloco(mes),
+        "Totais acumulados: " + _fmt_bloco(total),
+        "Série diária (7 dias): " + serie_txt,
+        "Acumulado analítico (cubo): " + ", ".join(f"{chave} {valor}" for chave, valor in por_classe.items()),
+        "Por câmera no histórico: " + ", ".join(
+            f"{nome} {qtd}" for nome, qtd in sorted(por_camera.items(), key=lambda par: -par[1])[:8]
+        ),
         "Câmeras neste instante: " + ("; ".join(cameras_agora) or "nenhuma"),
         f"Ocorrências do aplicativo: {len(app)}. Naturezas: {naturezas}. Logradouros: {ruas}.",
+        "Alertas de interesse: " + hist_txt,
+        "Informes: " + inf_txt,
+        "Insights: " + ins_txt,
+        ("Resumo operacional: " + texto_resumo[:500]) if texto_resumo else "Resumo operacional: (vazio)",
+        ("Assessoramento: " + assessoramento[:400]) if assessoramento else "",
         "Confirmações pendentes: " + ("; ".join(pendencias) or "nenhuma"),
         f"LED geral: {resumo.get('led') or 'branco'}",
         f"Voz da tela: {resumo.get('voz') or ''}"[:500],
@@ -389,9 +621,25 @@ def _total_base(resumo: dict, classe: str) -> int:
     return int((((resumo or {}).get("periodos") or {}).get("total") or {}).get(classe) or 0)
 
 
+def _quer_registrar(baixo: str) -> bool:
+    if any(t in baixo for t in (
+        "o que ocorreu", "o que aconteceu", "o que houve", "resumo",
+        "quantos", "quantas", "houve algo", "aconteceu algo",
+    )):
+        return False
+    return bool(re.search(
+        r"\b(registra|registrar|informar ocorr|lan[cç]ar ocorr|anota(?:r)? ocorr|"
+        r"grava(?:r)? ocorr|houve um[a]? |aconteceu um[a]? )\b",
+        baixo,
+    )) or baixo.startswith(("houve ", "aconteceu "))
+
+
 def _local(pergunta: str, resumo: dict, documento: str = "") -> dict:
     baixo = pergunta.lower()
-    if any(trecho in baixo for trecho in ("registr", "informar ocorr", "houve ", "aconteceu")):
+    periodo = _resposta_periodo(pergunta, resumo)
+    if periodo is not None:
+        return periodo
+    if _quer_registrar(baixo):
         return _normalizar({
             "fala": "Anotado como ocorrência informada pelo operador.",
             "visual": {"tipo": "texto", "titulo": "Ocorrência", "itens": [{"rotulo": pergunta[:80], "total": ""}]},
@@ -462,8 +710,5 @@ def _local(pergunta: str, resumo: dict, documento: str = "") -> dict:
             "fala": "Este é o acumulado da base do cliente.",
             "visual": {"tipo": "barras", "titulo": "Base do cliente", "itens": itens or [{"rotulo": "Sem contagem", "total": 0}]},
         })
-    voz = (resumo or {}).get("voz") or "A área está em observação."
-    return _normalizar({
-        "fala": voz,
-        "visual": {"tipo": "texto", "titulo": "Situação", "itens": [{"rotulo": "Risco", "total": (resumo or {}).get("led") or "branco"}]},
-    })
+    # Fallback geral: narra o dia a partir da base em vez de só ecoar a voz da tela.
+    return _narrar_periodo(resumo, "dia")

@@ -223,11 +223,11 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .fala-hq.pergunta { border: 2px solid #4c8dff; }
 .fala-hq.risco { border: 2px solid #ff5c7a; }
 .fala-hq.info { border: 2px solid #3ddc97; }
-/* Lâmina RF/LPR: gira/entra da direita para a esquerda; longe do balão do Stive (canto inferior direito) */
-.alerta-rf-flutuante { position: fixed; left: 268px; top: 88px; right: auto; bottom: auto; width: min(320px, calc(100vw - 300px)); max-width: 340px; background: var(--vidro); color: var(--texto); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); backdrop-filter: blur(16px); z-index: 32; cursor: pointer; transform-origin: right center; animation: abre-rf-direita .7s ease; }
+/* Lâmina RF/LPR: entra da esquerda para a direita, ancorada à direita do conteúdo */
+.alerta-rf-flutuante { position: fixed; right: 24px; left: auto; top: 88px; bottom: auto; width: min(320px, calc(100vw - 48px)); max-width: 340px; background: var(--vidro); color: var(--texto); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); backdrop-filter: blur(16px); z-index: 32; cursor: pointer; transform-origin: left center; animation: abre-rf-esquerda .7s ease; }
 .alerta-rf-flutuante.risco { border-color: rgba(255,92,122,.65); box-shadow: 0 18px 40px rgba(255,60,90,.18); }
 .alerta-rf-flutuante.info { border-color: rgba(61,220,151,.45); }
-.alerta-rf-flutuante.fechando { animation: fecha-rf-direita .65s ease forwards; pointer-events: none; }
+.alerta-rf-flutuante.fechando { animation: fecha-rf-esquerda .65s ease forwards; pointer-events: none; }
 .alerta-rf-flutuante strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ciano); margin-bottom: 6px; }
 .alerta-rf-flutuante .rf-fotos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
 .alerta-rf-flutuante .rf-fotos figure { margin: 0; text-align: center; }
@@ -235,16 +235,16 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .alerta-rf-flutuante .rf-fotos figcaption { font-size: 11px; color: var(--mudo); margin-top: 4px; }
 .alerta-rf-flutuante .rf-meta { font-size: 13px; line-height: 1.35; margin: 0; color: var(--texto); }
 .alerta-rf-flutuante .rf-link { display: block; margin-top: 10px; font-size: 12px; color: var(--ciano); font-weight: 700; }
-@keyframes abre-rf-direita {
-  from { transform: translateX(120%) rotateY(-28deg); opacity: 0; }
+@keyframes abre-rf-esquerda {
+  from { transform: translateX(-120%) rotateY(28deg); opacity: 0; }
   to { transform: none; opacity: 1; }
 }
-@keyframes fecha-rf-direita {
+@keyframes fecha-rf-esquerda {
   from { transform: none; opacity: 1; }
-  to { transform: translateX(120%) rotateY(-28deg); opacity: 0; }
+  to { transform: translateX(-120%) rotateY(28deg); opacity: 0; }
 }
 @media (max-width: 980px) {
-  .alerta-rf-flutuante { left: 18px; top: 72px; width: min(300px, calc(100vw - 36px)); }
+  .alerta-rf-flutuante { right: 18px; left: auto; top: 72px; width: min(300px, calc(100vw - 36px)); }
 }
 .stage-stive { position: relative; display: inline-block; }
 .stage-stive .fala-hq { right: auto; left: calc(100% + 10px); bottom: 120px; }
