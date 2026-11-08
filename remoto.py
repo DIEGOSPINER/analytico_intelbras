@@ -117,6 +117,7 @@ a.texto { color: var(--ciano); }
 .grafico, .mapa { width: 100%; height: 280px; border-radius: 12px; background: #101624; }
 .grafico.grafico-rosca { height: 360px; }
 iframe.mapa, iframe.mapa-folium { display: block; width: 100%; height: 280px; border: 0; border-radius: 12px; background: #d5e2ef; }
+canvas.grafico.filtravel { cursor: pointer; }
 iframe#mapa { height: 520px; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
 main[data-tela="inicio"] .cartao span svg { width: 40px; height: 40px; }

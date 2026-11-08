@@ -21,6 +21,8 @@ const NOME_TIPO = {
   Possivel_Queda: "Possível queda", Possivel_Briga: "Possível briga", Possivel_Arma_Fogo: "Possível arma",
 };
 const COR_LED = { branco: "#f4f7fb", verde: "#3ddc97", amarelo: "#ffb020", vermelho: "#ff3b3b", preto: "#05070c" };
+/** Filtro cruzado estilo Power BI: { dimensao, valor, rotulo, origem } */
+let filtroPagina = null;
 
 function ler(dados, caminho) {
   return String(caminho).split(".").reduce((acc, chave) => (acc == null ? undefined : acc[chave]), dados);
@@ -64,9 +66,124 @@ function nomeTipo(classe) {
 function seriesClasse(origem, lerValor) {
   return CLASSES.map((nome) => ({
     nome: NOME_CLASSE[nome],
+    chave: nome,
     cor: CORES[nome],
     valores: lerValor(nome),
   }));
+}
+
+function definirFiltroPagina(filtro) {
+  if (filtro && filtroPagina && filtroPagina.dimensao === filtro.dimensao && String(filtroPagina.valor) === String(filtro.valor)) {
+    filtroPagina = null;
+  } else {
+    filtroPagina = filtro;
+  }
+  if (ultimoDados) ciclo();
+}
+
+function dadosComFiltro(dados) {
+  if (!filtroPagina || !dados) return dados;
+  const { dimensao, valor } = filtroPagina;
+  const chave = String(valor);
+  const copia = { ...dados };
+  if (dimensao === "classe") {
+    copia.cubo = (dados.cubo || []).filter((item) => String(item.k) === chave);
+    const riscos = { ...(dados.riscos || {}) };
+    // mantém riscos; cards usam periodos filtrados abaixo
+  } else if (dimensao === "camera") {
+    copia.cubo = (dados.cubo || []).filter((item) => String(item.c) === chave);
+    copia.app_linhas = (dados.app_linhas || []).filter((item) => String(item.camera || "") === chave);
+    copia.geo = (dados.geo || []).filter((item) => String(item.nome || item.camera || "") === chave);
+  } else if (dimensao === "risco") {
+    const mapa = { Informativo: "Informativo", Atencao: "Atencao", Atenção: "Atencao", Prioritario: "Prioritario", Prioritário: "Prioritario", Critico: "Critico", Crítico: "Critico" };
+    const alvo = mapa[chave] || chave;
+    copia.riscos = Object.fromEntries(Object.entries(dados.riscos || {}).map(([nome, total]) => [nome, nome === alvo ? total : 0]));
+  } else if (dimensao === "natureza") {
+    copia.app_linhas = (dados.app_linhas || []).filter((item) => String(item.natureza || "") === chave);
+  } else if (dimensao === "rua" || dimensao === "bairro" || dimensao === "cidade") {
+    copia.app_linhas = (dados.app_linhas || []).filter((item) => {
+      const atual = String(item[dimensao] || "").trim() || "Sem informação";
+      return atual === chave;
+    });
+  } else if (dimensao === "periodo") {
+    copia.cubo = (dados.cubo || []).filter((item) => String(item.d || "").includes(chave) || String(item.d || "").endsWith(chave));
+  }
+  if (dimensao === "classe" || dimensao === "camera" || dimensao === "periodo") {
+    const base = { Pessoa: 0, Veiculo: 0, Objeto: 0, Animal: 0, Comportamento: 0, MatchFace: 0, MatchPlaca: 0 };
+    (copia.cubo || dados.cubo || []).forEach((item) => {
+      if (dimensao === "classe" && String(item.k) !== chave) return;
+      if (dimensao === "camera" && String(item.c) !== chave) return;
+      if (dimensao === "periodo" && !(String(item.d || "").includes(chave) || String(item.d || "").endsWith(chave))) return;
+      const k = item.k;
+      if (k in base) base[k] += Number(item.n || 0);
+    });
+    copia.periodos = {
+      ...(dados.periodos || {}),
+      dia: { ...(dados.periodos || {}).dia, ...base },
+    };
+  }
+  return copia;
+}
+
+function hitCanvas(canvas, evento) {
+  const hits = canvas._hits || [];
+  const rect = canvas.getBoundingClientRect();
+  const x = ((evento.clientX - rect.left) / Math.max(rect.width, 1)) * (canvas.clientWidth || rect.width);
+  const y = ((evento.clientY - rect.top) / Math.max(rect.height, 1)) * (canvas.clientHeight || rect.height);
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    const hit = hits[i];
+    if (hit.tipo === "arco") {
+      const dx = x - hit.cx;
+      const dy = y - hit.cy;
+      const dist = Math.hypot(dx, dy);
+      if (dist < hit.raio * 0.58 || dist > hit.raio) continue;
+      let ang = Math.atan2(dy, dx);
+      const ini = hit.ini;
+      const fim = hit.fim;
+      while (ang < ini) ang += Math.PI * 2;
+      while (ang >= ini + Math.PI * 2) ang -= Math.PI * 2;
+      if (ang >= ini && ang <= fim) return hit;
+      continue;
+    }
+    if (hit.tipo === "ponto") {
+      if (Math.hypot(x - hit.x, y - hit.y) <= (hit.r || 12)) return hit;
+      continue;
+    }
+    if (x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h) return hit;
+  }
+  return null;
+}
+
+function cliqueGrafico(canvas, evento) {
+  const hit = hitCanvas(canvas, evento);
+  if (!hit || !hit.filtro) return;
+  definirFiltroPagina(hit.filtro);
+}
+
+function prepararVisualizacoes(raiz) {
+  if (!raiz) return;
+  raiz.querySelectorAll("#filtro-pagina, .filtro-pagina").forEach((barra) => barra.remove());
+  // Remove botões/wrappers de zoom (recurso retirado).
+  raiz.querySelectorAll(".viz-wrap").forEach((wrap) => {
+    wrap.querySelectorAll(".viz-zoom").forEach((botao) => botao.remove());
+    const filho = wrap.querySelector("canvas.grafico, iframe.mapa, iframe.mapa-folium");
+    if (filho && wrap.parentNode) {
+      wrap.parentNode.insertBefore(filho, wrap);
+      wrap.remove();
+    }
+  });
+  raiz.querySelectorAll(".viz-zoom").forEach((botao) => botao.remove());
+  const modal = document.getElementById("viz-modal");
+  if (modal) modal.remove();
+  // Mantém clique filtrável nos gráficos.
+  raiz.querySelectorAll("canvas.grafico").forEach((el) => {
+    if (el.closest(".cartoes")) return;
+    el.classList.add("filtravel");
+    if (!el.dataset.filtroLigado) {
+      el.dataset.filtroLigado = "1";
+      el.addEventListener("click", (evento) => cliqueGrafico(el, evento));
+    }
+  });
 }
 
 function linha(canvas, series, rotulos, eixoX, opcoes) {
@@ -79,6 +196,7 @@ function linha(canvas, series, rotulos, eixoX, opcoes) {
   canvas.height = altura * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
+  const hits = [];
   const fonte = (opcoes && opcoes.fonte) || 12;
   const esquerda = fonte >= 15 ? 72 : 48;
   const topo = 28;
@@ -109,6 +227,10 @@ function linha(canvas, series, rotulos, eixoX, opcoes) {
     const x = esquerda + (n <= 1 ? w / 2 : (indice / (n - 1)) * w);
     ctx.fillStyle = "#93a0b8";
     ctx.fillText(String(rotulo), x - 10, topo + h + 16);
+    hits.push({
+      tipo: "ret", x: x - 18, y: topo + h, w: 36, h: 28,
+      filtro: { dimensao: "periodo", valor: String(rotulo), rotulo: `Período ${rotulo}`, origem: canvas.id },
+    });
   });
   ctx.fillText(eixoX || "", esquerda, altura - 6);
   const xDe = (indice, total) => esquerda + (total <= 1 ? w / 2 : (indice / (total - 1)) * w);
@@ -118,12 +240,16 @@ function linha(canvas, series, rotulos, eixoX, opcoes) {
       x: xDe(indice, valores.length),
       y: topo + h - ((serie.teto ? (valor ? 1 : 0) : valor / pico) * h),
       valor,
+      rotulo: rotulos[indice],
     }));
+    const ativo = filtroPagina && filtroPagina.dimensao === "classe" && String(filtroPagina.valor) === String(serie.chave || serie.nome);
     ctx.beginPath();
     ctx.strokeStyle = serie.cor;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = ativo ? 3.5 : 2;
+    ctx.globalAlpha = filtroPagina && filtroPagina.dimensao === "classe" && !ativo ? 0.28 : 1;
     pontos.forEach((ponto, indice) => (indice === 0 ? ctx.moveTo(ponto.x, ponto.y) : ctx.lineTo(ponto.x, ponto.y)));
     ctx.stroke();
+    ctx.globalAlpha = 1;
     const marcarTodos = valores.length <= 8;
     let picoIndice = 0;
     valores.forEach((valor, indice) => {
@@ -134,16 +260,34 @@ function linha(canvas, series, rotulos, eixoX, opcoes) {
       if (!ponto.valor) return;
       if (!marcarTodos && indice !== picoIndice) return;
       ctx.fillText(String(ponto.valor), ponto.x + 2, Math.max(14, ponto.y - 4));
+      hits.push({
+        tipo: "ponto", x: ponto.x, y: ponto.y, r: 14,
+        filtro: {
+          dimensao: "classe",
+          valor: serie.chave || serie.nome,
+          rotulo: serie.nome,
+          origem: canvas.id,
+        },
+      });
     });
   });
   let lx = esquerda;
   series.forEach((serie) => {
+    const ativo = filtroPagina && filtroPagina.dimensao === "classe" && String(filtroPagina.valor) === String(serie.chave || serie.nome);
+    ctx.globalAlpha = filtroPagina && filtroPagina.dimensao === "classe" && !ativo ? 0.35 : 1;
     ctx.fillStyle = serie.cor;
     ctx.fillRect(lx, 6, 10, 10);
     ctx.fillStyle = "#f4f7fb";
     ctx.fillText(serie.nome, lx + 14, 15);
-    lx += ctx.measureText(serie.nome).width + 28;
+    const larguraLegenda = ctx.measureText(serie.nome).width + 28;
+    hits.push({
+      tipo: "ret", x: lx, y: 0, w: larguraLegenda, h: 22,
+      filtro: { dimensao: "classe", valor: serie.chave || serie.nome, rotulo: serie.nome, origem: canvas.id },
+    });
+    lx += larguraLegenda;
+    ctx.globalAlpha = 1;
   });
+  canvas._hits = hits;
 }
 
 function barras(itens) {
@@ -198,20 +342,30 @@ function barrasEmpilhadas(canvas, dias, opcoes) {
     ctx.fillStyle = "#93a0b8";
     ctx.fillText(String(Math.round(pico * fracao)), 2, y + 4);
   });
+  const hits = [];
   dias.forEach((dia, indiceDia) => {
     const x0 = esquerda + indiceDia * larguraGrupo + 8;
     CLASSES.forEach((classe, indiceClasse) => {
       const x = x0 + indiceClasse * (larguraBarra + 3);
       let y = topo + h;
       let total = 0;
+      const yTopoClasse = topo + h;
       cameras.forEach((camera, indiceCamera) => {
         const valor = Number((dia.cameras?.[camera] || {})[classe] || 0);
         if (!valor) return;
         const alturaBarra = (valor / pico) * h;
         y -= alturaBarra;
         total += valor;
+        const ativoCam = filtroPagina && filtroPagina.dimensao === "camera" && String(filtroPagina.valor) === String(camera);
+        const ativoClasse = filtroPagina && filtroPagina.dimensao === "classe" && String(filtroPagina.valor) === String(classe);
+        ctx.globalAlpha = filtroPagina && !(ativoCam || ativoClasse) ? 0.28 : 1;
         ctx.fillStyle = corCamera(camera, indiceCamera);
         ctx.fillRect(x, y, larguraBarra, alturaBarra);
+        ctx.globalAlpha = 1;
+        hits.push({
+          tipo: "ret", x, y, w: larguraBarra, h: alturaBarra,
+          filtro: { dimensao: "camera", valor: camera, rotulo: camera, origem: canvas.id },
+        });
         if (!muitos && alturaBarra >= 16 && larguraBarra >= 16) {
           ctx.fillStyle = "#041018";
           ctx.font = "10px Segoe UI";
@@ -219,6 +373,12 @@ function barrasEmpilhadas(canvas, dias, opcoes) {
           ctx.font = `${fonte}px Segoe UI`;
         }
       });
+      if (total) {
+        hits.push({
+          tipo: "ret", x, y, w: larguraBarra, h: Math.max(8, yTopoClasse - y),
+          filtro: { dimensao: "classe", valor: classe, rotulo: NOME_CLASSE[classe] || classe, origem: canvas.id },
+        });
+      }
       if (total && larguraBarra >= 18) {
         ctx.fillStyle = "#f4f7fb";
         ctx.font = "11px Segoe UI";
@@ -238,10 +398,15 @@ function barrasEmpilhadas(canvas, dias, opcoes) {
       ctx.font = "11px Segoe UI";
       ctx.fillText(dia.rotulo || "", x0, altura - 8);
       ctx.font = `${fonte}px Segoe UI`;
+      hits.push({
+        tipo: "ret", x: x0, y: altura - 22, w: Math.max(24, larguraGrupo - 8), h: 20,
+        filtro: { dimensao: "periodo", valor: String(dia.rotulo || ""), rotulo: `Período ${dia.rotulo || ""}`, origem: canvas.id },
+      });
     }
   });
   ctx.fillStyle = "#93a0b8";
   ctx.fillText("contagens", 2, 12);
+  canvas._hits = hits;
   return cameras;
 }
 
@@ -257,6 +422,8 @@ function rosca(canvas, riscos) {
     .map((nome) => ({
       nome: NOME_RISCO[nome],
       rotulo: NOME_RISCO[nome],
+      chave: nome,
+      dimensao: "risco",
       total: Number(riscos[nome] || 0),
       cor: CORES_RISCO[nome],
     }))
@@ -436,9 +603,11 @@ function barrasVerticais(canvas, itens) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, largura, altura);
   ctx.font = "15px Segoe UI";
+  const hits = [];
   if (!itens.length) {
     ctx.fillStyle = "#93a0b8";
     ctx.fillText("Sem ocorrência neste período.", 16, 36);
+    canvas._hits = hits;
     return;
   }
   const esquerda = 52;
@@ -451,8 +620,14 @@ function barrasVerticais(canvas, itens) {
     const alturaBarra = (item.total / pico) * h;
     const x = esquerda + indice * passo + 8;
     const y = topo + h - alturaBarra;
+    const larguraBarra = Math.max(8, passo - 16);
+    const dimensao = item.dimensao || (item.chave && CLASSES.includes(item.chave) ? "classe" : "natureza");
+    const valor = item.chave || item.rotulo || item.nome;
+    const ativo = filtroPagina && filtroPagina.dimensao === dimensao && String(filtroPagina.valor) === String(valor);
+    ctx.globalAlpha = filtroPagina && !ativo ? 0.28 : 1;
     ctx.fillStyle = item.cor || "#4c8dff";
-    ctx.fillRect(x, y, Math.max(8, passo - 16), alturaBarra);
+    ctx.fillRect(x, y, larguraBarra, alturaBarra);
+    ctx.globalAlpha = 1;
     ctx.fillStyle = "#f4f7fb";
     ctx.fillText(String(item.total), x, Math.max(14, y - 4));
     ctx.fillStyle = "#93a0b8";
@@ -461,7 +636,12 @@ function barrasVerticais(canvas, itens) {
     ctx.rotate(itens.length > 8 ? -0.7 : 0);
     ctx.fillText(String(item.rotulo).slice(0, 18), 0, 12);
     ctx.restore();
+    hits.push({
+      tipo: "ret", x, y, w: larguraBarra, h: Math.max(alturaBarra, 8),
+      filtro: { dimensao, valor, rotulo: String(item.rotulo || item.nome || valor), origem: canvas.id },
+    });
   });
+  canvas._hits = hits;
 }
 
 function roscaLivre(canvas, fatias, opcoes) {
@@ -482,22 +662,35 @@ function roscaLivre(canvas, fatias, opcoes) {
   const raio = Math.min(largura, altura) * (externos ? 0.28 : 0.32);
   let angulo = -Math.PI / 2;
   const fatiasDesenhadas = [];
+  const hits = [];
   fatias.forEach((item) => {
     const fatia = total ? (Number(item.total || 0) / total) * Math.PI * 2 : 0;
     if (fatia <= 0) return;
+    const ini = angulo;
+    const fim = angulo + fatia;
+    const chave = String(item.chave || item.nome || item.rotulo || "");
+    const dimensao = item.dimensao || (Object.prototype.hasOwnProperty.call(CORES_RISCO, item.chave || item.nome) ? "risco" : "natureza");
+    const ativo = filtroPagina && filtroPagina.dimensao === dimensao && String(filtroPagina.valor) === chave;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.fillStyle = item.cor;
-    ctx.arc(cx, cy, raio, angulo, angulo + fatia);
+    ctx.globalAlpha = filtroPagina && !ativo ? 0.28 : 1;
+    ctx.arc(cx, cy, raio, ini, fim);
     ctx.closePath();
     ctx.fill();
+    ctx.globalAlpha = 1;
     fatiasDesenhadas.push({
       ...item,
-      meio: angulo + fatia / 2,
+      meio: ini + fatia / 2,
       pct: total ? Math.round((1000 * Number(item.total || 0)) / total) / 10 : 0,
     });
-    angulo += fatia;
+    hits.push({
+      tipo: "arco", cx, cy, raio, ini, fim,
+      filtro: { dimensao, valor: chave, rotulo: String(item.nome || item.rotulo || chave), origem: canvas.id },
+    });
+    angulo = fim;
   });
+  canvas._hits = hits;
   ctx.beginPath();
   ctx.fillStyle = "#12182a";
   ctx.arc(cx, cy, raio * 0.58, 0, Math.PI * 2);
@@ -1128,7 +1321,7 @@ function posicionarAgulha(artigo, valor, topo) {
 
 function risco(tela, dados) {
   const cameras = dados.cameras_vivo || [];
-  const assinatura = `risco-v2|${cameras.map((camera) => camera.nome).join("|")}`;
+  const assinatura = `risco-v4|${cameras.map((camera) => camera.nome).join("|")}`;
   if (tela.dataset.pronto !== assinatura) {
     tela.innerHTML = `<article class="cartao"><p id="voz" class="voz branco"></p></article>
     <div id="odometros">${cameras.map((camera) => fileiraFluxo(camera)).join("") || "<p>Nenhuma câmera em análise.</p>"}</div>
@@ -1284,7 +1477,7 @@ function contarCampo(linhas, campo) {
     totais[chave] = (totais[chave] || 0) + 1;
   });
   return Object.entries(totais).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([rotulo, total], indice) => ({
-    rotulo, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
+    rotulo, chave: rotulo, dimensao: campo, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
   }));
 }
 
@@ -1426,7 +1619,7 @@ function mapas(tela, dados) {
   const bairrosGrafico = contarCampo(linhas, "bairro");
   const cidadesGrafico = contarCampo(linhas, "cidade");
   const naturezasGrafico = Object.entries(tipos).map(([nome, total], indice) => ({
-    nome, rotulo: nome, total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
+    nome, rotulo: nome, chave: nome, dimensao: "natureza", total, cor: CORES_CAMERA[indice % CORES_CAMERA.length],
   }));
   const antigoHora = CLASSES.slice();
   try {
@@ -1550,44 +1743,147 @@ async function ciclo() {
   }
   ultimoDados = dados;
   const led = document.getElementById("led");
-  const selo = document.getElementById("selo-stive");
-  if (selo) {
-    const total = (dados.pendencias || []).length;
-    selo.hidden = !total;
-    selo.textContent = total ? String(total) : "";
-  }
-  const seloAlertas = document.getElementById("selo-alertas");
-  if (seloAlertas) {
-    const total = (dados.match ? 1 : 0) + ((dados.historico || []).length);
-    seloAlertas.hidden = !total;
-    seloAlertas.textContent = total ? String(total) : "";
-  }
-  const seloAudio = document.getElementById("selo-audio");
-  if (seloAudio) {
-    const total = Number((dados.audio || {}).risco_aberto || 0) || ((dados.audio || {}).alertas || []).length;
-    seloAudio.hidden = !total;
-    seloAudio.textContent = total ? String(total) : "";
-  }
-  const seloRisco = document.getElementById("selo-risco");
-  if (seloRisco) {
-    const aceso = ["amarelo", "vermelho", "preto"].includes(dados.led);
-    seloRisco.hidden = !aceso;
-    seloRisco.textContent = aceso ? "!" : "";
-  }
+  atualizarSelosNav(dados);
   if (window.atualizarStive) window.atualizarStive(dados);
   atualizarFalaStive(dados);
   atualizarAlertaRfFlutuante(dados);
   if (led) led.className = "led " + (dados.led || "branco");
   const tela = document.getElementById("tela");
-  if (tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, dados);
-  animar(dados);
+  const vista = dadosComFiltro(dados);
+  if (tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, vista);
+  animar(vista);
+  prepararVisualizacoes(tela);
   if (tela && tela.dataset.tela === "vivo" && !document.querySelector(".video")) {
     setTimeout(() => location.reload(), 2000);
   }
 }
 
+const SELOS_NAV = {
+  stive: { id: "selo-stive", path: "/painel/stive" },
+  alertas: { id: "selo-alertas", path: "/painel/3" },
+  risco: { id: "selo-risco", path: "/painel/risco" },
+  audio: { id: "selo-audio", path: "/painel/audio" },
+};
+
+function caminhoAtual() {
+  return (location.pathname || "/").replace(/\/$/, "") || "/";
+}
+
+function chaveSeloStorage(tipo) {
+  return `selo-visto-${tipo}`;
+}
+
+function lerChavesSelo(tipo) {
+  try {
+    const bruto = JSON.parse(sessionStorage.getItem(chaveSeloStorage(tipo)) || "null");
+    return Array.isArray(bruto) ? bruto.map(String) : null;
+  } catch (erro) {
+    return null;
+  }
+}
+
+function gravarChavesSelo(tipo, chaves) {
+  try {
+    sessionStorage.setItem(chaveSeloStorage(tipo), JSON.stringify((chaves || []).slice(-300)));
+  } catch (erro) {}
+}
+
+function eventosSelo(tipo, dados) {
+  if (tipo === "stive") {
+    return (dados.pendencias || []).map((item) => `pend:${item.id}`);
+  }
+  if (tipo === "alertas") {
+    const chaves = (dados.historico || []).map(
+      (item) => `hist:${item.quando || ""}|${item.id || ""}|${item.taxa || ""}|${item.camera || ""}`,
+    );
+    if (dados.match && dados.match.id) {
+      chaves.push(`match:${dados.match.id}|${dados.match.taxa || ""}|${dados.match.risco ? 1 : 0}|${dados.match.camera || ""}`);
+    }
+    return chaves;
+  }
+  if (tipo === "audio") {
+    return ((dados.audio || {}).alertas || []).map(
+      (item) => `audio:${item.quando || ""}|${item.camera || ""}|${item.categoria || ""}|${item.texto || item.detalhe || ""}`,
+    );
+  }
+  if (tipo === "risco") {
+    const chaves = [];
+    if (["amarelo", "vermelho", "preto"].includes(dados.led)) chaves.push(`led:${dados.led}`);
+    const voz = String(dados.voz || "").trim();
+    if (voz) chaves.push(`voz:${voz.slice(0, 120)}`);
+    (dados.cameras_vivo || []).forEach((camera) => {
+      if (camera.fluxo_anormal) chaves.push(`fluxo:${camera.nome || ""}`);
+      (camera.permanencias || []).forEach((frase) => chaves.push(`perm:${camera.nome}|${frase}`));
+    });
+    return chaves;
+  }
+  return [];
+}
+
+function tipoSeloDaRota(path) {
+  const atual = (path || caminhoAtual()).replace(/\/$/, "") || "/";
+  return Object.keys(SELOS_NAV).find((tipo) => SELOS_NAV[tipo].path.replace(/\/$/, "") === atual) || "";
+}
+
+function marcarSeloVisto(tipo, dados) {
+  if (!tipo) return;
+  gravarChavesSelo(tipo, eventosSelo(tipo, dados || ultimoDados || {}));
+  const el = document.getElementById((SELOS_NAV[tipo] || {}).id || "");
+  if (el) {
+    el.hidden = true;
+    el.textContent = "";
+  }
+}
+
+function novosDoSelo(tipo, dados) {
+  const atuais = eventosSelo(tipo, dados);
+  // Na própria tela: marca tudo como visto e não mostra selo.
+  if (tipoSeloDaRota() === tipo) {
+    gravarChavesSelo(tipo, atuais);
+    return 0;
+  }
+  const vistos = lerChavesSelo(tipo);
+  // Primeira carga da sessão: baseline sem notificar o que já existe.
+  if (vistos == null) {
+    gravarChavesSelo(tipo, atuais);
+    return 0;
+  }
+  const base = new Set(vistos);
+  return atuais.filter((chave) => !base.has(chave)).length;
+}
+
+function atualizarSelosNav(dados) {
+  Object.keys(SELOS_NAV).forEach((tipo) => {
+    const el = document.getElementById(SELOS_NAV[tipo].id);
+    if (!el) return;
+    const total = novosDoSelo(tipo, dados);
+    el.hidden = !total;
+    if (!total) {
+      el.textContent = "";
+      return;
+    }
+    el.textContent = tipo === "risco" && total === 1 ? "!" : String(total);
+  });
+}
+
+function iniciarSelosNav() {
+  if (document.body.dataset.selosProntos) return;
+  document.body.dataset.selosProntos = "1";
+  document.querySelectorAll("aside nav a[href]").forEach((link) => {
+    const href = (link.getAttribute("href") || "").replace(/\/$/, "") || "/";
+    const tipo = Object.keys(SELOS_NAV).find((nome) => SELOS_NAV[nome].path.replace(/\/$/, "") === href);
+    if (!tipo) return;
+    link.addEventListener("click", () => {
+      marcarSeloVisto(tipo, ultimoDados);
+    });
+  });
+  const tipoAtual = tipoSeloDaRota();
+  if (tipoAtual && ultimoDados) marcarSeloVisto(tipoAtual, ultimoDados);
+}
+
 ciclo();
 setInterval(ciclo, 1500);
+iniciarSelosNav();
 
 function csrfDoBalao() {
   const form = document.getElementById("form-balao") || document.getElementById("form-stive");
@@ -1628,7 +1924,14 @@ function piscarStive() {
 }
 
 function linkAoVivoHtml() {
-  return `<p class="link-vivo"><a href="/painel/cameras" data-stive-vivo="1">Visualize ao vivo</a></p>`;
+  return linkFalaHtml({ linkHref: "/painel/cameras", linkTexto: "Visualize ao vivo" });
+}
+
+function linkFalaHtml(item) {
+  const href = (item && item.linkHref) || (item && item.linkVivo ? "/painel/cameras" : "");
+  if (!href) return "";
+  const texto = (item && item.linkTexto) || (href.indexOf("/cameras") >= 0 ? "Visualize ao vivo" : "Acompanhe na tela...");
+  return `<p class="link-vivo"><a href="${escapar(href)}" data-stive-link="1" data-stive-destino="${escapar(href)}">${escapar(texto)}</a></p>`;
 }
 
 function salvarFalaAtiva(item) {
@@ -1652,13 +1955,16 @@ function lerFalaAtiva() {
 }
 
 function mereceLinkAoVivo(texto, opcoes) {
+  if (opcoes && (opcoes.linkHref || opcoes.linkTexto)) return false;
   if (opcoes && opcoes.linkVivo === false) return false;
   if (opcoes && opcoes.linkVivo) return true;
   const tipo = String((opcoes && opcoes.tipo) || "").toLowerCase();
   if (tipo === "pendencia" || tipo === "pessoa" || tipo === "veiculo" || tipo === "veículo") return true;
+  if (tipo === "fluxo") return false;
   const classe = String((opcoes && opcoes.classe) || "").toLowerCase();
   if (classe === "risco" || classe === "pergunta") return true;
   const baixo = String(texto || "").toLowerCase();
+  if (/fluxo de pessoas fora do normal/.test(baixo)) return false;
   return /parada|parado|permanece|veícul|veicul|pessoa|risco|disparo|briga|queda|atenção|atencao|confirma/.test(baixo);
 }
 
@@ -1680,7 +1986,8 @@ function mostrarFalaHq(item) {
   caixa.hidden = false;
   caixa.dataset.travado = "1";
   caixa.className = `fala-hq sobe${classe ? ` ${classe}` : ""}`;
-  const link = item.linkVivo ? linkAoVivoHtml() : "";
+  const comLinkVivo = !!item.linkVivo && !item.linkHref;
+  const link = item.linkHref || comLinkVivo ? linkFalaHtml(item.linkHref ? item : { linkHref: "/painel/cameras", linkTexto: "Visualize ao vivo" }) : "";
   caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${link}${acoesFalaHtml(item)}`;
   falandoStive = true;
   salvarFalaAtiva(item);
@@ -1704,6 +2011,8 @@ function enfileirarFalaStive(chave, titulo, texto, opcoes) {
     classe: (opcoes && opcoes.classe) || "",
     html: (opcoes && opcoes.html) || "",
     linkVivo: mereceLinkAoVivo(texto, opcoes),
+    linkHref: (opcoes && opcoes.linkHref) || "",
+    linkTexto: (opcoes && opcoes.linkTexto) || "",
   });
   processarFilaFalaStive();
   return true;
@@ -1727,9 +2036,10 @@ function restaurarFalaStive() {
   const item = lerFalaAtiva();
   if (!item) return;
   mostrarFalaHq(item);
-  // Chegou em Ao vivo após clicar no link: aguarda visualização e fecha.
+  // Após clicar no hiperlink, aguarda visualização da tela destino e fecha.
   try {
-    if (sessionStorage.getItem(CHAVE_FALA_VIVO) === "1" && /\/painel\/cameras\/?$/.test(location.pathname)) {
+    const destino = sessionStorage.getItem(CHAVE_FALA_VIVO) || "";
+    if (destino && destino !== "visto" && location.pathname.replace(/\/$/, "") === destino.replace(/\/$/, "")) {
       sessionStorage.setItem(CHAVE_FALA_VIVO, "visto");
       setTimeout(() => {
         if (sessionStorage.getItem(CHAVE_FALA_VIVO) === "visto") fecharFalaStive();
@@ -1759,6 +2069,11 @@ function chavesFalaBase(dados) {
     const trecho = String(item.texto || item.detalhe || item.categoria || "").trim();
     if (trecho) chaves.push(`audio:${item.quando}|${item.camera}|${trecho}`);
   });
+  (dados.cameras_vivo || []).forEach((camera) => {
+    if (camera.fluxo_anormal) {
+      chaves.push(`fluxo:${camera.nome}:${Math.floor(Date.now() / 120000)}`);
+    }
+  });
   return chaves;
 }
 
@@ -1769,6 +2084,25 @@ function vozDeBaixoRisco(dados, voz) {
   if (led === "amarelo" || led === "vermelho" || led === "preto") return false;
   const baixo = String(voz || "").toLowerCase();
   return /observação|observacao|nenhum risco|sem comportamento de risco|área está|area esta|tranquila|ronda/.test(baixo) || !baixo;
+}
+
+function falarFluxoAnormalStive(dados) {
+  const cameras = dados.cameras_vivo || [];
+  for (const camera of cameras) {
+    if (!camera.fluxo_anormal) continue;
+    const nome = camera.nome || "câmera";
+    const minuto = Number((camera.fluxo || {}).minuto || 0);
+    const chave = `fluxo:${nome}:${Math.floor(Date.now() / 120000)}`;
+    const texto = `Fluxo de pessoas fora do normal identificado na ${nome}${minuto ? ` (${minuto}/min)` : ""}.`;
+    if (enfileirarFalaStive(chave, "Fluxo anormal", texto, {
+      tipo: "fluxo",
+      classe: "risco",
+      linkVivo: false,
+      linkHref: "/painel/risco",
+      linkTexto: "Acompanhe na tela...",
+    })) return true;
+  }
+  return false;
 }
 
 function falarVozStive(dados) {
@@ -1847,6 +2181,9 @@ function atualizarFalaStive(dados) {
     if (!texto) continue;
     if (enfileirarFalaStive(`ins:${item.quando}|${texto}`, "Insight", texto, { classe: "info" })) return;
   }
+
+  // Fluxo anormal de pessoas → Detector de risco.
+  if (falarFluxoAnormalStive(dados)) return;
 
   // Match RF sobe na lâmina; voz só se não houver outro assunto pendente.
   falarVozStive(dados);
@@ -1945,10 +2282,11 @@ function iniciarFalaStive() {
   if (!caixa) return;
   restaurarFalaStive();
   caixa.addEventListener("click", async (evento) => {
-    const linkVivo = evento.target.closest("a[data-stive-vivo]");
-    if (linkVivo) {
-      // Não fecha agora: persiste o balão e só libera após visualizar Ao vivo.
-      try { sessionStorage.setItem(CHAVE_FALA_VIVO, "1"); } catch (erro) {}
+    const linkNav = evento.target.closest("a[data-stive-link], a[data-stive-vivo]");
+    if (linkNav) {
+      // Não fecha agora: persiste o balão e só libera após visualizar a tela destino.
+      const destino = linkNav.getAttribute("data-stive-destino") || linkNav.getAttribute("href") || "/painel/cameras";
+      try { sessionStorage.setItem(CHAVE_FALA_VIVO, destino); } catch (erro) {}
       salvarFalaAtiva(lerFalaAtiva() || falaAtivaStive);
       return;
     }

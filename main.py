@@ -2010,6 +2010,20 @@ def _fluxo_pessoa(nome, passagens):
     return _fluxo_serie(nome, "pessoa", passagens)
 
 
+# Limiares alinhados aos odômetros do Detector de risco (topo ~2/s e ~12/min).
+_FLUXO_ANORMAL_SEGUNDO = 3
+_FLUXO_ANORMAL_MINUTO = 8
+
+
+def _fluxo_pessoas_anormal(fluxo: dict) -> bool:
+    if not fluxo:
+        return False
+    return (
+        int(fluxo.get("segundo") or 0) >= _FLUXO_ANORMAL_SEGUNDO
+        or int(fluxo.get("minuto") or 0) >= _FLUXO_ANORMAL_MINUTO
+    )
+
+
 _TRILHAS = {}
 _INTERVALO_AVISO_PARADO = 600
 
@@ -2269,6 +2283,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
             ),
             "cena": f"/img/cena-{slug}.jpg" if risco == "preto" else "",
         })
+        cameras[-1]["fluxo_anormal"] = _fluxo_pessoas_anormal(cameras[-1]["fluxo"])
     classe = ""
     risco_match = False
     if match_vivo and match_vivo.get("tipo") == "FACE":
