@@ -167,6 +167,7 @@ class EscutaAudio:
         self._ultima_fala = 0.0
         self.suspeito_ate = 0.0
         self.suspeito_tipo = ""
+        self.suspeito_detalhe = ""
 
     def start(self):
         if os.getenv("AUDIO_ATIVO", "1").strip().lower() in ("0", "false", "nao", "não"):
@@ -237,6 +238,7 @@ class EscutaAudio:
             self.suspeito_ate = agora + 45
             self.suspeito_tipo = "disparo"
             detalhe = "Pico curto de áudio compatível com disparo. Confirme o trecho; moto e porta também estouram."
+            self.suspeito_detalhe = detalhe
             conf = round(min(nivel, 1.0), 2)
             # Não grava na base até o operador confirmar no Stive.
             self.eventos.put({
@@ -301,6 +303,7 @@ class EscutaAudio:
             return
         self.suspeito_ate = time.time() + 45
         self.suspeito_tipo = "voz"
+        self.suspeito_detalhe = f"{', '.join(categorias)}. {trecho}".strip()
         pergunta = (
             f"Na {self.nome} parece ter havido {', '.join(categorias)}. "
             f'Ouvi: "{trecho}". Isso aconteceu de fato? Confirme para gravar na base.'

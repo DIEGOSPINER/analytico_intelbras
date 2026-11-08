@@ -1890,6 +1890,7 @@ def _pacote_audio():
 
 
 def _montar_voz(cameras, match, narracao, narracao_ia):
+    """Só eventos vivos entram no card; em silêncio o texto fica vazio."""
     partes = []
     for camera in cameras or []:
         risco = camera.get("risco") or "branco"
@@ -1898,26 +1899,30 @@ def _montar_voz(cameras, match, narracao, narracao_ia):
         partes.extend(camera.get("permanencias") or [])
         if risco in ("vermelho", "preto") and camera.get("rua"):
             partes.append(f"O ponto é {camera['rua']}, na {camera['nome']}.")
-    if match and match.get("tipo") == "FACE":
-        quem = match.get("nome") or match.get("id") or "uma pessoa"
-        partes.append(
-            f"Reconhecimento facial: {quem} na {match.get('camera') or 'câmera'}. "
-            f"{narracao_ia or narracao or ''}".strip()
-        )
-    elif match and match.get("tipo") == "PLACA":
-        partes.append(f"Veículo de interesse {match.get('id') or ''} na {match.get('camera') or 'câmera'}.")
-    try:
-        from audio_registro import resumo_audio
-
-        for alerta in (resumo_audio().get("alertas") or [])[:2]:
-            trecho = alerta.get("texto") or alerta.get("detalhe") or alerta.get("categoria") or "áudio de risco"
-            partes.append(
-                f"Áudio na {alerta.get('camera') or 'câmera'}: {trecho}"
+        # Áudio só enquanto suspeito_ate da câmera estiver ativo — não usa histórico.
+        vivo = camera.get("audio_vivo") or {}
+        if vivo:
+            trecho = (
+                vivo.get("detalhe")
+                or vivo.get("texto")
+                or vivo.get("tipo")
+                or "áudio de risco"
             )
-    except Exception:
-        pass
+            partes.append(f"Áudio na {camera.get('nome') or 'câmera'}: {trecho}")
+    agora = time.time()
+    if match and agora <= float(match.get("ate") or 0):
+        if match.get("tipo") == "FACE":
+            quem = match.get("nome") or match.get("id") or "uma pessoa"
+            partes.append(
+                f"Reconhecimento facial: {quem} na {match.get('camera') or 'câmera'}. "
+                f"{narracao_ia or narracao or ''}".strip()
+            )
+        elif match.get("tipo") == "PLACA":
+            partes.append(
+                f"Veículo de interesse {match.get('id') or ''} na {match.get('camera') or 'câmera'}."
+            )
     if not partes:
-        return "A área está em observação. Nenhum risco acima de informe neste momento."
+        return ""
     return " ".join(parte.strip() for parte in partes if str(parte).strip())
 
 
@@ -2161,6 +2166,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         audio = item.get("audio")
         audio_on = bool(audio and time.time() <= float(getattr(audio, "suspeito_ate", 0) or 0))
         audio_tipo = str(getattr(audio, "suspeito_tipo", "") or "") if audio_on else ""
+        audio_detalhe = str(getattr(audio, "suspeito_detalhe", "") or "") if audio_on else ""
         interesse_risco = True
         if match and match.get("tipo") == "FACE":
             pessoa_match = pessoas.get(str(match.get("id") or "").upper()) or {}
@@ -2223,6 +2229,10 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
                 visao.get("centros_veiculo") or [],
             ),
             "risco": risco,
+            "audio_vivo": (
+                {"tipo": audio_tipo, "detalhe": audio_detalhe}
+                if audio_on else None
+            ),
             "cena": f"/img/cena-{slug}.jpg" if risco == "preto" else "",
         })
     classe = ""

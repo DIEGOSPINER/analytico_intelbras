@@ -222,6 +222,9 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .fala-hq strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #4c6fff; margin-bottom: 4px; }
 .fala-hq .pendencia { margin-top: 10px; }
 .fala-hq .pendencia button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; }
+.fala-hq .link-vivo { margin: 10px 0 0; }
+.fala-hq .link-vivo a { color: #4c6fff; font-weight: 700; text-decoration: none; }
+.fala-hq .link-vivo a:hover { text-decoration: underline; }
 .fala-hq.pergunta { border: 2px solid #4c8dff; }
 .fala-hq.risco { border: 2px solid #ff5c7a; }
 .fala-hq.info { border: 2px solid #3ddc97; }

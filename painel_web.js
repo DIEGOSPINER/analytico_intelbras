@@ -1148,8 +1148,11 @@ function risco(tela, dados) {
   }
   const voz = document.getElementById("voz");
   if (voz) {
-    voz.textContent = dados.voz || "A área está em observação.";
-    voz.className = "voz " + (dados.led || "branco");
+    const texto = String(dados.voz || "").trim();
+    const silencio = !texto || /área está em observação|area esta em observacao|nenhum risco acima|a área está|a area esta/i.test(texto);
+    // Em silêncio o card dinâmico fica em branco — não mantém a última mensagem.
+    voz.textContent = silencio ? "" : texto;
+    voz.className = "voz " + ((silencio ? "branco" : dados.led) || "branco");
   }
   const topos = { segundo: 2, minuto: 12, hora: 120 };
   cameras.forEach((camera) => {
@@ -1621,6 +1624,21 @@ function piscarStive() {
   setTimeout(() => avatar.classList.remove("falando"), 1200);
 }
 
+function linkAoVivoHtml() {
+  return `<p class="link-vivo"><a href="/painel/cameras">Visualize ao vivo</a></p>`;
+}
+
+function mereceLinkAoVivo(texto, opcoes) {
+  if (opcoes && opcoes.linkVivo === false) return false;
+  if (opcoes && opcoes.linkVivo) return true;
+  const tipo = String((opcoes && opcoes.tipo) || "").toLowerCase();
+  if (tipo === "pendencia" || tipo === "pessoa" || tipo === "veiculo" || tipo === "veículo") return true;
+  const classe = String((opcoes && opcoes.classe) || "").toLowerCase();
+  if (classe === "risco" || classe === "pergunta") return true;
+  const baixo = String(texto || "").toLowerCase();
+  return /parada|parado|permanece|veícul|veicul|pessoa|risco|disparo|briga|queda|atenção|atencao|confirma/.test(baixo);
+}
+
 function acoesFalaHtml(item) {
   const extra = item.html || "";
   const like = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M2 20h4V9H2v11zm20-9c0-1.1-.9-2-2-2h-6.3l.9-4.4.1-.9c0-.4-.2-.8-.4-1.1L13.2 1 6.6 7.6C6.2 8 6 8.5 6 9v9c0 1.1.9 2 2 2h8c.8 0 1.5-.5 1.8-1.2l3-7c.1-.3.2-.5.2-.8v-2z"/></svg>`;
@@ -1639,7 +1657,8 @@ function mostrarFalaHq(item) {
   caixa.hidden = false;
   caixa.dataset.travado = "1";
   caixa.className = `fala-hq sobe${classe ? ` ${classe}` : ""}`;
-  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${acoesFalaHtml(item)}`;
+  const link = item.linkVivo ? linkAoVivoHtml() : "";
+  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${link}${acoesFalaHtml(item)}`;
   piscarStive();
 }
 
@@ -1659,6 +1678,7 @@ function enfileirarFalaStive(chave, titulo, texto, opcoes) {
     tipo: (opcoes && opcoes.tipo) || "",
     classe: (opcoes && opcoes.classe) || "",
     html: (opcoes && opcoes.html) || "",
+    linkVivo: mereceLinkAoVivo(texto, opcoes),
   });
   processarFilaFalaStive();
   return true;
@@ -1720,10 +1740,10 @@ function falarVozStive(dados) {
     const agora = Date.now();
     if (agora - ultimaVozBaixaEm < 10 * 60 * 1000) return;
     ultimaVozBaixaEm = agora;
-    enfileirarFalaStive(`voz:baixa:${Math.floor(agora / 600000)}`, "Detector de risco", voz, { classe });
+    enfileirarFalaStive(`voz:baixa:${Math.floor(agora / 600000)}`, "Detector de risco", voz, { classe, linkVivo: false });
     return;
   }
-  enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, { classe });
+  enfileirarFalaStive(`voz:${voz}`, "Detector de risco", voz, { classe, linkVivo: true });
 }
 
 function atualizarFalaStive(dados) {
@@ -1746,6 +1766,7 @@ function atualizarFalaStive(dados) {
       {
         tipo: "pendencia",
         classe: "pergunta",
+        linkVivo: true,
         html: `<div class="pendencia"><span>
           <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Sim</button>
           <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Não</button>
