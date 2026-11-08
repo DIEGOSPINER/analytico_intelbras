@@ -4,18 +4,27 @@ App Expo (React Native) espelhando o portal web. A **inferência YOLO fica no PC
 
 ## Pré-requisitos
 
-1. **Node.js 20+** — [nodejs.org](https://nodejs.org/) (nesta máquina ainda não estava no PATH).
+1. **Node.js 20+** — [nodejs.org](https://nodejs.org/). Se `npm` não for reconhecido no Cursor, **feche o Cursor por completo e abra de novo**. Se aparecer erro de *Execution Policy* no `npm.ps1`, use `npm.cmd` / `npx.cmd` ou rode uma vez: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 2. Portal do analítico rodando (`WEB_SENHA` / usuários) em `http://IP_DO_PC:8787`.
 3. Celular e PC na mesma rede **ou** túnel (`abrir_tunel.ps1` / Cloudflare).
 
 ## Desenvolvimento
 
-```bash
+Atalho (corrige PATH nesta sessão):
+
+```powershell
 cd mobile
-npm install
-# IP do PC na LAN (não use 127.0.0.1 no aparelho físico)
-set EXPO_PUBLIC_API_URL=http://192.168.0.10:8787
-npx expo start
+.\iniciar.ps1
+```
+
+Ou manualmente:
+
+```powershell
+$env:Path = "C:\Program Files\nodejs;" + $env:Path
+cd mobile
+& "C:\Program Files\nodejs\npm.cmd" install
+$env:EXPO_PUBLIC_API_URL = "http://192.168.0.10:8787"   # IP da LAN; nao use 127.0.0.1 no celular
+& "C:\Program Files\nodejs\npx.cmd" expo start
 ```
 
 - Escaneie o QR com **Expo Go** (Android/iOS) ou pressione `a` / `i` com emulador.
