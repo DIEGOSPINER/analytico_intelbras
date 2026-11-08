@@ -1852,16 +1852,16 @@ let timerRfToast = null;
 
 function caixaAlertaRf() {
   let caixa = document.getElementById("alerta-rf-flutuante");
-  if (caixa) return caixa;
-  const grupo = document.getElementById("grupo-stive") || document.getElementById("balao-stive");
-  if (!grupo) return null;
+  if (caixa) {
+    // Garante que fica no body (esquerda da tela), fora do balão do Stive.
+    if (caixa.parentElement !== document.body) document.body.appendChild(caixa);
+    return caixa;
+  }
   caixa = document.createElement("div");
   caixa.id = "alerta-rf-flutuante";
   caixa.className = "alerta-rf-flutuante";
   caixa.hidden = true;
-  const fala = document.getElementById("fala-hq");
-  if (fala && fala.parentElement === grupo) grupo.insertBefore(caixa, fala);
-  else grupo.prepend(caixa);
+  document.body.appendChild(caixa);
   return caixa;
 }
 
@@ -1872,18 +1872,17 @@ function atualizarAlertaRfFlutuante(dados) {
   if (!match || !match.id) return;
   const chave = `${match.id}|${Number(match.taxa || 0).toFixed(2)}|${match.risco ? 1 : 0}|${match.camera || ""}`;
   if (chave === ultimoMatchRfToast) return;
-  // Não engole o primeiro match: marca pronto e sobe a lâmina nesta mesma vez.
   window._rfToastPronto = true;
   ultimoMatchRfToast = chave;
   const risco = !!match.risco;
   const t = Date.now();
   if (timerRfToast) clearTimeout(timerRfToast);
   caixa.hidden = false;
-  caixa.classList.remove("descendo", "risco", "info");
+  caixa.classList.remove("fechando", "descendo", "risco", "info");
   void caixa.offsetWidth;
   caixa.className = `alerta-rf-flutuante${risco ? " risco" : " info"}`;
   caixa.innerHTML = `
-    <strong>${risco ? "Alerta RF" : "Presença informativa"}</strong>
+    <strong>${risco ? "Alerta RF / LPR" : "Presença informativa"}</strong>
     <div class="rf-fotos">
       <figure><img alt="Referência" src="/img/match-ref.jpg?t=${t}" onerror="this.style.opacity=.35"><figcaption>Referência</figcaption></figure>
       <figure><img alt="Detectada" src="/img/match-agora.jpg?t=${t}" onerror="this.style.opacity=.35"><figcaption>Detectada</figcaption></figure>
@@ -1893,15 +1892,15 @@ function atualizarAlertaRfFlutuante(dados) {
     <span class="rf-link">Abrir Alertas de RF e LPR →</span>`;
   caixa.onclick = () => { window.location.href = "/painel/3"; };
   timerRfToast = setTimeout(() => {
-    caixa.classList.add("descendo");
+    caixa.classList.add("fechando");
     setTimeout(() => {
-      if (!caixa.classList.contains("descendo")) return;
+      if (!caixa.classList.contains("fechando")) return;
       caixa.hidden = true;
-      caixa.classList.remove("descendo");
+      caixa.classList.remove("fechando");
       caixa.innerHTML = "";
       caixa.onclick = null;
-    }, 560);
-  }, 8000);
+    }, 650);
+  }, 9000);
 }
 
 function iniciarFalaStive() {

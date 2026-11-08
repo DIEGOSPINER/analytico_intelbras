@@ -223,11 +223,11 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .fala-hq.pergunta { border: 2px solid #4c8dff; }
 .fala-hq.risco { border: 2px solid #ff5c7a; }
 .fala-hq.info { border: 2px solid #3ddc97; }
-/* Lâmina RF: mesmo vidro do chat Stive, ao lado/acima do balão HQ branco */
-.alerta-rf-flutuante { position: absolute; right: calc(100% + 8px); bottom: 210px; width: min(300px, 70vw); background: var(--vidro); color: var(--texto); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); backdrop-filter: blur(16px); z-index: 5; cursor: pointer; animation: sobe-rf .55s ease; }
+/* Lâmina RF/LPR: gira/entra da direita para a esquerda; longe do balão do Stive (canto inferior direito) */
+.alerta-rf-flutuante { position: fixed; left: 268px; top: 88px; right: auto; bottom: auto; width: min(320px, calc(100vw - 300px)); max-width: 340px; background: var(--vidro); color: var(--texto); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); backdrop-filter: blur(16px); z-index: 32; cursor: pointer; transform-origin: right center; animation: abre-rf-direita .7s ease; }
 .alerta-rf-flutuante.risco { border-color: rgba(255,92,122,.65); box-shadow: 0 18px 40px rgba(255,60,90,.18); }
 .alerta-rf-flutuante.info { border-color: rgba(61,220,151,.45); }
-.alerta-rf-flutuante.descendo { animation: desce-rf .55s ease forwards; pointer-events: none; }
+.alerta-rf-flutuante.fechando { animation: fecha-rf-direita .65s ease forwards; pointer-events: none; }
 .alerta-rf-flutuante strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ciano); margin-bottom: 6px; }
 .alerta-rf-flutuante .rf-fotos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
 .alerta-rf-flutuante .rf-fotos figure { margin: 0; text-align: center; }
@@ -235,10 +235,16 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .alerta-rf-flutuante .rf-fotos figcaption { font-size: 11px; color: var(--mudo); margin-top: 4px; }
 .alerta-rf-flutuante .rf-meta { font-size: 13px; line-height: 1.35; margin: 0; color: var(--texto); }
 .alerta-rf-flutuante .rf-link { display: block; margin-top: 10px; font-size: 12px; color: var(--ciano); font-weight: 700; }
-@keyframes sobe-rf { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes desce-rf { from { transform: none; opacity: 1; } to { transform: translateY(36px); opacity: 0; } }
-@media (max-width: 720px) {
-  .alerta-rf-flutuante { position: fixed; right: 12px; bottom: 170px; width: min(280px, calc(100vw - 24px)); }
+@keyframes abre-rf-direita {
+  from { transform: translateX(120%) rotateY(-28deg); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes fecha-rf-direita {
+  from { transform: none; opacity: 1; }
+  to { transform: translateX(120%) rotateY(-28deg); opacity: 0; }
+}
+@media (max-width: 980px) {
+  .alerta-rf-flutuante { left: 18px; top: 72px; width: min(300px, calc(100vw - 36px)); }
 }
 .stage-stive { position: relative; display: inline-block; }
 .stage-stive .fala-hq { right: auto; left: calc(100% + 10px); bottom: 120px; }
@@ -490,13 +496,13 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
             "<a class='texto' href='/painel/stive'>Abrir o Agente Stive</a>"
             "</form>"
             "<div class='grupo-puxador' id='grupo-stive'>"
-            "<div id='alerta-rf-flutuante' class='alerta-rf-flutuante' hidden></div>"
             "<div id='fala-hq' class='fala-hq' hidden></div>"
             "<button type='button' class='puxador-stive' id='abrir-stive' title='Fale com o Agente Stive'>"
             "<img alt='Stive' src='/agente/stive.png'></button>"
             "<span class='nome-balao-stive'>Fale com o Agente Stive</span>"
             "</div></div>"
         )
+    toast_rf = "<div id='alerta-rf-flutuante' class='alerta-rf-flutuante' hidden></div>" if csrf else ""
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -515,6 +521,7 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
 </div>
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
+{toast_rf}
 <script src="/painel.js"></script>
 </body>
 </html>"""
