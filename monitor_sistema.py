@@ -260,39 +260,75 @@ def _serie_mes(chave: str, meses: int = 12) -> list[dict]:
     return saida
 
 
-def resumo() -> dict:
-    """Pacote completo para a página /sistema (admin)."""
+def _escalar_serie(serie: list[dict], fator: float) -> list[dict]:
+    fator = max(0.0, min(float(fator or 0), 1.0))
+    return [
+        {
+            **item,
+            "valor": round(float(item.get("valor") or 0) * fator, 2),
+        }
+        for item in (serie or [])
+    ]
+
+
+def resumo(fator: float = 1.0, escopo: str = "cluster") -> dict:
+    """Pacote para /sistema. fator<1 estima fatia do host para um cliente."""
     host = _host()
     tabelas = _tabelas_postgres()
     total_bytes = sum(int(item.get("bytes") or 0) for item in tabelas)
+    fator = 1.0 if fator is None else max(0.0, min(float(fator), 1.0))
     with _TRAVA:
         hist = _ler_hist()
         amostras = list(hist.get("amostras") or [])[-288:]
+
+    def _escala_host(bloco: dict) -> dict:
+        if fator >= 0.999:
+            return dict(bloco)
+        saida = dict(bloco)
+        for chave in ("cpu_pct", "ram_pct", "ram_usada_mb", "disco_usado_mb", "tabelas_mb", "tabelas_bytes"):
+            if chave in saida and saida[chave] is not None:
+                saida[chave] = round(float(saida[chave]) * fator, 2) if chave != "tabelas_bytes" else int(float(saida[chave]) * fator)
+        return saida
+
+    agora = _escala_host({
+        **host,
+        "tabelas_bytes": total_bytes,
+        "tabelas_mb": _digitos_mb(total_bytes / (1024 * 1024)),
+        "tabelas": len(tabelas),
+        "quando": datetime.now().isoformat(timespec="seconds"),
+    })
+    tabelas_vista = []
+    for item in tabelas:
+        bytes_i = int(item.get("bytes") or 0)
+        if fator < 0.999:
+            bytes_i = int(bytes_i * fator)
+        tabelas_vista.append({
+            **item,
+            "bytes": bytes_i,
+            "mb": _digitos_mb(bytes_i / (1024 * 1024)),
+            "linhas": int(round(int(item.get("linhas") or 0) * fator)),
+        })
     return {
-        "agora": {
-            **host,
-            "tabelas_bytes": total_bytes,
-            "tabelas_mb": _digitos_mb(total_bytes / (1024 * 1024)),
-            "tabelas": len(tabelas),
-            "quando": datetime.now().isoformat(timespec="seconds"),
-        },
-        "tabelas": tabelas,
-        "total_armazenado_mb": _digitos_mb(total_bytes / (1024 * 1024)),
-        "crescimento_diario": _serie_dias("tabelas_mb", 30),
-        "crescimento_mensal": _serie_mes("tabelas_mb", 12),
-        "crescimento_acumulado": _serie_dias("tabelas_mb", 90),
-        "cpu_diario": _serie_dias("cpu_pct", 30),
-        "ram_diario": _serie_dias("ram_pct", 30),
-        "disco_diario": _serie_dias("disco_usado_mb", 30),
+        "agora": agora,
+        "tabelas": tabelas_vista,
+        "total_armazenado_mb": float(agora.get("tabelas_mb") or 0),
+        "crescimento_diario": _escalar_serie(_serie_dias("tabelas_mb", 30), fator),
+        "crescimento_mensal": _escalar_serie(_serie_mes("tabelas_mb", 12), fator),
+        "crescimento_acumulado": _escalar_serie(_serie_dias("tabelas_mb", 90), fator),
+        "cpu_diario": _escalar_serie(_serie_dias("cpu_pct", 30), fator),
+        "ram_diario": _escalar_serie(_serie_dias("ram_pct", 30), fator),
+        "disco_diario": _escalar_serie(_serie_dias("disco_usado_mb", 30), fator),
         "amostras": [
-            {
+            _escala_host({
                 "quando": item.get("quando"),
                 "cpu_pct": item.get("cpu_pct"),
                 "ram_pct": item.get("ram_pct"),
                 "tabelas_mb": item.get("tabelas_mb"),
-            }
+            })
             for item in amostras
         ],
+        "escopo": escopo,
+        "fator_escopo": round(fator, 4),
     }
 
 

@@ -49,17 +49,19 @@ LEXICO_RISCO = {
     )),
     "ruido": (2, (
         r"\bbarulho\b", r"\bestouro\b", r"\bexplod\w*", r"\bestalo\b", r"\bru[ií]do\b",
-        r"\bgritaria\b", r"\bgritando\b", r"\bbuzina\b",
+        r"\bgritaria\b", r"\bgritando\b", r"\bgrito\b", r"\bgritos\b", r"\bbuzina\b",
     )),
     "briga": (3, (
         r"\bbrig(?:a|as|ando|aram|ou)\b", r"\bagress\w*", r"\bporrada\b", r"\btapa\b",
         r"\bempurra\w*", r"\bcala a boca\b", r"\bte mato\b", r"\bvou te matar\b",
-        r"\bsoco\b", r"\bespanca\w*", r"\bpelea\b",
+        r"\bsoco\b", r"\bespanca\w*", r"\bpelea\b", r"\bvias de fato\b", r"\bvias-de-fato\b",
+        r"\bameaça\b", r"\bameaca\b", r"\bameaç\w*", r"\bme mata\b", r"\bvou te pegar\b",
     )),
     "socorro": (3, (
         # "ajuda" sozinho gera falso positivo; exige pedido claro de socorro.
         r"\bsocorro\b", r"\bme ajuda\b", r"\bpede ajuda\b", r"\bpol[ií]cia\b", r"\bsamu\b",
-        r"\bbombeiro\b", r"\bemerg[eê]ncia\b", r"\bestou ferid\w*",
+        r"\bbombeiro\b", r"\bemerg[eê]ncia\b", r"\bestou ferid\w*", r"\bsalva(?:e|-me)\b",
+        r"\bestou em perigo\b", r"\bme livra\b",
     )),
     "incidente": (2, (
         r"\bacidente\b", r"\batropel\w*", r"\brou[bv]o\b", r"\bfurto\b", r"\bassalto\b",

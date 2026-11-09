@@ -1822,10 +1822,10 @@ function serieSimples(itens, cor) {
 }
 
 async function sistema(tela) {
-  if (tela.dataset.pronto !== "sistema-v2") {
+  if (tela.dataset.pronto !== "sistema-v3") {
     tela.innerHTML = `<section class="cartao" style="margin-bottom:14px">
 <label>Segmentação por cliente
-<select id="sis-cliente"><option value="">Todos (instalação)</option></select>
+<select id="sis-cliente"><option value="">Cluster total (clientes + administrador)</option></select>
 </label>
 <p id="sis-cliente-info" style="color:var(--mudo);margin:.6rem 0 0"></p>
 </section>
@@ -1852,7 +1852,7 @@ async function sistema(tela) {
 <article class="cartao"><h2>Custos GPT por cliente (mês)</h2><div id="sistema-custos-cli"><p>Carregando…</p></div></article>
 <article class="cartao"><h2>Espaço em nuvem</h2><div id="sistema-nuvem"><p>Preparando medição por cliente…</p></div></article>
 </section>`;
-    tela.dataset.pronto = "sistema-v2";
+    tela.dataset.pronto = "sistema-v3";
     const sel = document.getElementById("sis-cliente");
     if (sel && !sel._sisBound) {
       sel._sisBound = true;
@@ -1874,7 +1874,7 @@ async function sistema(tela) {
     const pacote = await resposta.json();
     tela._sisQuando = agoraMs;
     if (sel && !sel.dataset.opcoes) {
-      const opts = ['<option value="">Todos (instalação)</option>'].concat(
+      const opts = ['<option value="">Cluster total (clientes + administrador)</option>'].concat(
         (pacote.clientes || []).map((c) =>
           `<option value="${escapar(c.documento)}">${escapar(c.nome || c.documento)} · ${escapar(c.documento)}</option>`
         )
@@ -1885,22 +1885,24 @@ async function sistema(tela) {
     }
     const info = document.getElementById("sis-cliente-info");
     const cli = pacote.cliente;
+    const cluster = pacote.cluster || {};
     if (info) {
       info.textContent = cli
-        ? `Monitorando ${cli.nome || cli.documento}: ${cli.cameras || 0} câmera(s), ${cli.pessoas || 0} pessoa(s), ~${Number(cli.mb_estimado_local || 0).toLocaleString("pt-BR")} MB estimados nos dados locais.`
-        : "Visão geral da instalação. Escolha um CPF/CNPJ para segmentar o monitoramento financeiro e a estimativa de armazenamento.";
+        ? `Computador/escopo do cliente ${cli.nome || cli.documento}: página filtrada (${cli.cameras || 0} câmera(s), fatia ~${Math.round((Number(cli.fator) || 0) * 100)}% do host, ~${Number(cli.mb_estimado_local || 0).toLocaleString("pt-BR")} MB).`
+        : `${cluster.rotulo || "Cluster total"}: ${cluster.clientes || 0} conta(s), ${cluster.cameras || 0} câmera(s). Sem seleção = soma de todo o cluster.`;
     }
     const agora = pacote.agora || {};
     const custos = pacote.custos || {};
+    const pref = cli ? "Cliente · " : "Cluster · ";
     const cards = document.getElementById("sistema-cards");
     if (cards) {
       cards.innerHTML = [
-        ["Total dados (MB)", agora.tabelas_mb || pacote.total_armazenado_mb || 0, "#4c8dff"],
-        ["CPU %", agora.cpu_pct || 0, "#ff8c28"],
-        ["RAM %", agora.ram_pct || 0, "#aa3cb4"],
-        ["Disco host (MB)", agora.disco_usado_mb || 0, "#28c4dc"],
-        ["GPT USD (mês)", custos.openai_usd_mes || 0, "#3ddc97"],
-        ["GPT tokens (mês)", custos.openai_tokens_mes || 0, "#ffb020"],
+        [pref + "dados (MB)", agora.tabelas_mb || pacote.total_armazenado_mb || 0, "#4c8dff"],
+        [pref + "CPU %", agora.cpu_pct || 0, "#ff8c28"],
+        [pref + "RAM %", agora.ram_pct || 0, "#aa3cb4"],
+        [pref + "disco (MB)", agora.disco_usado_mb || 0, "#28c4dc"],
+        [pref + "GPT USD (mês)", custos.openai_usd_mes || 0, "#3ddc97"],
+        [pref + "GPT tokens (mês)", custos.openai_tokens_mes || 0, "#ffb020"],
       ].map(([rotulo, valor, cor]) =>
         `<article class="cartao"><span style="color:${cor} !important">${rotulo}</span><strong style="color:${cor} !important">${Number(valor).toLocaleString("pt-BR")}</strong></article>`
       ).join("");
@@ -1914,9 +1916,11 @@ async function sistema(tela) {
     }
     const host = document.getElementById("sistema-agora");
     if (host) {
-      host.innerHTML = `<p>CPU ${agora.cpu_pct || 0}% · RAM ${agora.ram_pct || 0}% (${agora.ram_usada_mb || 0} / ${agora.ram_total_mb || 0} MB)</p>
+      const tituloHost = cli ? `Host do cliente (estimativa ${Math.round((Number(cli.fator) || 0) * 100)}%)` : "Host do cluster";
+      host.innerHTML = `<p><strong>${escapar(tituloHost)}</strong></p>
+        <p>CPU ${agora.cpu_pct || 0}% · RAM ${agora.ram_pct || 0}% (${agora.ram_usada_mb || 0} / ${agora.ram_total_mb || 0} MB)</p>
         <p>Disco ${agora.disco_usado_mb || 0} / ${agora.disco_total_mb || 0} MB · Dados nas tabelas ${agora.tabelas_mb || 0} MB</p>
-        <p style="color:var(--mudo)">Amostra ${escapar(agora.quando || "")}</p>`;
+        <p style="color:var(--mudo)">Amostra ${escapar(agora.quando || "")} · escopo ${escapar(pacote.escopo || "")}</p>`;
     }
     const custosCli = document.getElementById("sistema-custos-cli");
     if (custosCli) {

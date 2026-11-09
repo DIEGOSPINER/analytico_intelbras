@@ -1000,6 +1000,8 @@ class CameraAnalitica:
             self.unicos_por_categoria = defaultdict(set)
             self.estabilidade = {}
             self.origem_veiculo = {}
+            # Veículos parados >1h no mesmo ponto: estacionados (não contam de novo).
+            self.estacionados = []
             self._fps = 0.0
             self._ultimo_quadro = time.time()
             self.comportamento = AnaliseComportamental(nome, self.pose)
@@ -1066,6 +1068,49 @@ class CameraAnalitica:
         if cls_id in CLASSES_ANIMAIS:
             return CLASSES_ANIMAIS[cls_id]
         return self.model.names.get(cls_id, f"Classe_{cls_id}")
+
+    def _veiculo_estacionado(self, centro, track_id) -> bool:
+        """True se o veículo permanece parado no mesmo ponto há mais de 1 h."""
+        agora = time.time()
+        x, y = float(centro[0]), float(centro[1])
+        raio = 42.0
+        melhor = None
+        melhor_dist = raio
+        for indice, slot in enumerate(self.estacionados):
+            dist = ((float(slot["x"]) - x) ** 2 + (float(slot["y"]) - y) ** 2) ** 0.5
+            if dist < melhor_dist:
+                melhor = indice
+                melhor_dist = dist
+        if melhor is None:
+            self.estacionados.append({
+                "x": x,
+                "y": y,
+                "parado_desde": agora,
+                "visto": agora,
+                "estacionado": False,
+                "tracks": {track_id},
+            })
+            return False
+        slot = self.estacionados[melhor]
+        slot["visto"] = agora
+        tracks = slot.setdefault("tracks", set())
+        tracks.add(track_id)
+        if melhor_dist <= 28:
+            slot["x"], slot["y"] = x, y
+        else:
+            slot["x"], slot["y"] = x, y
+            slot["parado_desde"] = agora
+            slot["estacionado"] = False
+        if not slot.get("estacionado") and agora - float(slot.get("parado_desde") or agora) >= 3600:
+            slot["estacionado"] = True
+        return bool(slot.get("estacionado"))
+
+    def _limpar_estacionados(self):
+        agora = time.time()
+        self.estacionados = [
+            slot for slot in self.estacionados
+            if agora - float(slot.get("visto") or 0) <= 90
+        ]
 
     def process(self, exibir=True):
         vazio = (None, [], {}, [], {}, [], [])
@@ -1146,6 +1191,31 @@ class CameraAnalitica:
                 nitido = conf >= 0.48 and (x2 - x1) >= 36
                 if self.estabilidade[track_id] < frames_veiculo and not nitido:
                     continue
+                # Parado >1h no mesmo ponto = estacionado: não gera nova contagem.
+                if self._veiculo_estacionado(centro, track_id):
+                    quantidade_cena[categoria] += 1
+                    veiculos_cena[track_id] = {
+                        "centro": centro,
+                        "bbox": (x1, y1, x2, y2),
+                        "bbox_nitida": (
+                            int(x1 * escala_x),
+                            int(y1 * escala_y),
+                            int(x2 * escala_x),
+                            int(y2 * escala_y),
+                        ),
+                        "classe": nome,
+                        "estacionado": True,
+                    }
+                    cor = CORES[categoria]
+                    rotulo = f"{nome} #{track_id} | estacionado"
+                    anotacoes.append((x1, y1, x2, y2, rotulo, cor))
+                    if exibir:
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
+                        cv2.putText(
+                            frame, rotulo, (x1, max(y1 - 5, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, cor, 2
+                        )
+                    continue
                 passou = True
             elif track_id is None:
                 grade = (int(centro[0] // 48), int(centro[1] // 48))
@@ -1205,6 +1275,7 @@ class CameraAnalitica:
                 if self.estabilidade[track_id] <= 0:
                     self.estabilidade.pop(track_id, None)
                     self.origem_veiculo.pop(track_id, None)
+        self._limpar_estacionados()
 
         armas = self.detector_arma.detectar(frame)
         if exibir:
@@ -1861,27 +1932,39 @@ def _pendencias_vivas(cameras):
                 else f"Confirma a pessoa que permanece parada na {nome}?"
             )
             _lembrar_pendencia(nome, tipo, pergunta, agora)
-        # Pedido de confirmação de disparo só na fusão amarela (barulho + interação + queda + deitada).
-        if camera.get("risco") == "amarelo" and (camera.get("audio_vivo") or {}).get("tipo") == "barulho":
+        vivo = camera.get("audio_vivo") or {}
+        tipo_audio = str(vivo.get("tipo") or "")
+        # Estalos esporádicos (LED vermelho): Stive confirma se houve disparo.
+        if tipo_audio == "barulho":
             _lembrar_pendencia(
                 nome,
                 "disparo",
                 (
-                    f"Na {nome} há barulho alto com interação, queda e pessoa deitada. "
-                    f"Houve disparo? Se sim, gravo na base e ativo risco vermelho."
+                    f"Na {nome} houve estalo/barulho alto esporádico. "
+                    f"Houve disparo de arma de fogo? Se sim, gravo na base."
                 ),
                 agora,
                 audio_payload={
                     "camera": nome,
                     "tipo": "Possivel_Disparo",
                     "texto": "",
-                    "detalhe": (camera.get("audio_vivo") or {}).get("detalhe") or "Fusão visual + barulho alto",
+                    "detalhe": vivo.get("detalhe") or "Estalo/barulho alto esporádico",
                     "confianca": 0.6,
                     "categoria": "disparo",
                     "nivel": 3,
-                    "palavras": ["disparo"],
-                    "risco": "Atencao",
+                    "palavras": ["estalo", "disparo"],
+                    "risco": "Critico",
                 },
+            )
+        if tipo_audio == "sossego" and camera.get("risco") == "amarelo":
+            _lembrar_pendencia(
+                nome,
+                "sossego",
+                (
+                    f"Na {nome} há ruído muito alto há mais de 30 minutos. "
+                    f"Confirma perturbação do sossego? Já registrei a ocorrência."
+                ),
+                agora,
             )
     respondidas = _ids_respondidos()
     vivos = []
@@ -1981,19 +2064,31 @@ def _frase_camera(nome, visao, audio_suspeito, audio_tipo):
         texto = _FRASES.get(item.get("classe") or "")
         if texto and texto not in partes:
             partes.append(texto)
-    if audio_suspeito and audio_tipo == "barulho":
-        partes.append("barulho alto")
+    if audio_suspeito:
+        if audio_tipo == "sossego":
+            partes.append("perturbação do sossego (ruído alto prolongado)")
+        elif audio_tipo == "barulho":
+            partes.append("estalo/barulho alto esporádico")
+        elif audio_tipo in ("briga", "socorro", "disparo", "xingamento", "voz_risco"):
+            partes.append(f"áudio de risco ({audio_tipo})")
     if not partes:
         return f"{nome} sem comportamento de risco agora."
     return "Existe " + ", ".join(partes) + f" na {nome}. Atenção!"
 
 
-def _risco_camera(visao, audio_barulho, tem_interesse, interesse_risco=True, disparo_confirmado=False):
+def _risco_camera(
+    visao,
+    audio_barulho,
+    tem_interesse,
+    interesse_risco=True,
+    disparo_confirmado=False,
+    audio_tipo="",
+):
     """LED por câmera.
 
-    Interação sozinha não é risco. Pico de áudio não afirma disparo.
-    Amarelo: barulho alto + interação + queda + pessoa deitada → Stive pergunta disparo.
-    Vermelho: operador confirmou disparo (ou arma / interesse de risco).
+    Vermelho: disparo confirmado, arma, interesse de risco, estalos esporádicos,
+    gritos/briga/socorro/ameaças no áudio.
+    Amarelo: perturbação do sossego (ruído alto >30 min) ou fusão visual+barulho.
     """
     acoes = {
         item.get("classe") or item.get("nome"): int(item.get("agora") or 0)
@@ -2003,11 +2098,16 @@ def _risco_camera(visao, audio_barulho, tem_interesse, interesse_risco=True, dis
     interacao = acoes.get("Interacao_Proxima", 0) > 0
     queda = acoes.get("Possivel_Queda", 0) > 0
     arma = acoes.get("Possivel_Arma_Fogo", 0) > 0
+    tipo = str(audio_tipo or "")
     if disparo_confirmado:
         return "vermelho"
     if arma or (tem_interesse and interesse_risco):
         return "vermelho"
-    # Fusão completa → amarelo e pergunta de disparo no Stive (não afirma sozinho).
+    if tipo in ("barulho", "briga", "socorro", "disparo", "xingamento", "voz_risco") or audio_barulho:
+        return "vermelho"
+    if tipo == "sossego":
+        return "amarelo"
+    # Fusão visual completa ainda pede confirmação de disparo no Stive.
     if audio_barulho and interacao and queda and deitado:
         return "amarelo"
     if tem_interesse:
@@ -2239,7 +2339,6 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         audio_on = bool(audio and time.time() <= float(getattr(audio, "suspeito_ate", 0) or 0))
         audio_tipo = str(getattr(audio, "suspeito_tipo", "") or "") if audio_on else ""
         audio_detalhe = str(getattr(audio, "suspeito_detalhe", "") or "") if audio_on else ""
-        # Só barulho alto entra na fusão de risco; transcrição/voz não eleva LED sozinha.
         audio_barulho = audio_on and audio_tipo == "barulho"
         interesse_risco = True
         if match and match.get("tipo") == "FACE":
@@ -2253,6 +2352,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
             bool(match),
             interesse_risco,
             disparo_confirmado=disparo_confirmado_ativo(item["nome"]),
+            audio_tipo=audio_tipo if audio_on else "",
         )
         if _ORDEM_LED.get(risco, 0) > _ORDEM_LED.get(led, 0):
             led = risco

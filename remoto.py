@@ -745,7 +745,17 @@ setInterval(ranking, 1000);
 </script>"""
 
 
-def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
+def _painel(
+    numero: str,
+    titulo: str,
+    chave: str,
+    mapas: bool,
+    perfil: str = "",
+    csrf: str = "",
+    usuario: str = "",
+    documento: str = "",
+    vista: str = "",
+) -> str:
     telas = {"1": "contagens", "2": "comportamento", "3": "alertas", "4": "mapas"}
     comandos = ""
     if mapas:
@@ -760,19 +770,19 @@ def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "",
     miolo = _cabeca(titulo, "Os quadros seguem o mesmo padrão da tela de início.") + comandos + f"<main id='tela' data-tela='{telas[numero]}'></main>"
     return _moldura(
         f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}",
-        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
     )
 
 
-def _risco(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
+def _risco(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
     miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
     return _moldura(
         "C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco",
-        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
     )
 
 
-def _audio(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
+def _audio(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
     miolo = (
         _cabeca(
             "Áudio e transcrição",
@@ -782,11 +792,11 @@ def _audio(perfil: str = "", csrf: str = "", usuario: str = "", documento: str =
     )
     return _moldura(
         "C4ISTAR MONITOR · Áudio e transcrição", miolo, "/painel/audio",
-        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
     )
 
 
-def _ao_vivo(cameras, perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
+def _ao_vivo(cameras, perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
     blocos = []
     for slug, nome, rua in cameras:
         legenda = _html_seguro(f"{nome} {rua}".strip())
@@ -806,7 +816,7 @@ def _ao_vivo(cameras, perfil: str = "", csrf: str = "", usuario: str = "", docum
     )
     return _moldura(
         "C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras",
-        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
     )
 
 
@@ -999,7 +1009,7 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
     return _moldura("Agente Stive · C4ISTAR MONITOR", miolo, "/painel/stive", **_sessao_ui(sessao, portal))
 
 
-def _sem_analise(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
+def _sem_analise(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
     miolo = """<header class="topo"><div><h1>Painéis</h1>
 <p>As câmeras em análise nesta máquina pertencem a outro CPF. O seu cadastro continua disponível.</p></div></header>"""
     return _moldura(
@@ -1010,6 +1020,7 @@ def _sem_analise(perfil: str = "", csrf: str = "", usuario: str = "", documento:
         csrf=csrf,
         usuario=usuario,
         documento=documento,
+        vista=vista,
     )
 
 
@@ -1448,38 +1459,42 @@ def _sistema(sessao: dict) -> str:
 
 
 def _sistema_json(documento_filtro: str = "") -> dict:
-    """Pacote admin: host + filtro por cliente + custos GPT + placeholder de nuvem."""
+    """Pacote admin: geral = cluster (todos + adm); filtro = fatia daquele cliente."""
     import monitor_sistema
 
     digitos = "".join(c for c in str(documento_filtro or "") if c.isdigit())
-    pacote = monitor_sistema.resumo()
     clientes = []
-    for item in cadastro.listar_clientes():
-        doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
-        if not doc:
-            continue
-        clientes.append({
-            "documento": doc,
-            "nome": str(item.get("nome") or "") or doc,
-            "ativo": item.get("ativo") is not False,
-        })
-    clientes.sort(key=lambda c: (c.get("nome") or "").lower())
-
     total_cams = 0
     cams_cliente = 0
     pessoas_cliente = 0
     nome_cliente = ""
     for item in cadastro.listar_clientes():
         doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
-        nomes = cadastro.nomes_cameras_conta(doc) if doc else set()
+        if not doc:
+            continue
+        nomes = cadastro.nomes_cameras_conta(doc)
         total_cams += len(nomes)
+        clientes.append({
+            "documento": doc,
+            "nome": str(item.get("nome") or "") or doc,
+            "ativo": item.get("ativo") is not False,
+            "cameras": len(nomes),
+        })
         if digitos and doc == digitos:
             cams_cliente = len(nomes)
             pessoas_cliente = len(item.get("pessoas") or [])
             nome_cliente = str(item.get("nome") or "") or digitos
+    clientes.sort(key=lambda c: (c.get("nome") or "").lower())
 
-    total_mb = float(pacote.get("total_armazenado_mb") or (pacote.get("agora") or {}).get("tabelas_mb") or 0)
-    mb_estimado = round(total_mb * (cams_cliente / total_cams), 2) if digitos and total_cams else (total_mb if not digitos else 0.0)
+    # Sem filtro: host completo do cluster. Com filtro: estima a fatia do computador/cliente.
+    if digitos:
+        fator = (cams_cliente / total_cams) if total_cams else 0.0
+        escopo = "cliente"
+    else:
+        fator = 1.0
+        escopo = "cluster"
+    pacote = monitor_sistema.resumo(fator=fator, escopo=escopo)
+    mb_estimado = float(pacote.get("total_armazenado_mb") or 0)
 
     try:
         from db import custos as ledger
@@ -1498,14 +1513,24 @@ def _sistema_json(documento_filtro: str = "") -> dict:
             "cameras": cams_cliente,
             "pessoas": pessoas_cliente,
             "mb_estimado_local": mb_estimado,
-            "monitoramento": bool(digitos),
+            "monitoramento": True,
+            "fator": round(fator, 4),
         } if digitos else None,
+        "cluster": {
+            "clientes": len(clientes),
+            "cameras": total_cams,
+            "rotulo": "Cluster total (todos os clientes + administrador)",
+        },
         "custos": financeiro,
         "nuvem": {
             "status": "preparado",
             "usado_mb": None,
             "cota_mb": None,
-            "aviso": "Espaço em nuvem será medido por cliente quando o provedor estiver ligado.",
+            "aviso": (
+                f"Espaço em nuvem do cliente {nome_cliente or digitos} — medição por CPF quando o provedor estiver ligado."
+                if digitos
+                else "Espaço em nuvem do cluster — medição agregada por cliente quando o provedor estiver ligado."
+            ),
         },
     }
 
@@ -2164,27 +2189,13 @@ def _tratador(portal: Portal):
             if caminho.startswith("/painel/"):
                 if not ver:
                     ui = _sessao_ui(sessao, portal)
-                    self._html(
-                        _sem_analise(
-                            perfil,
-                            sessao.get("csrf") or "",
-                            usuario=ui["usuario"],
-                            documento=ui["documento"],
-                        ),
-                        200,
-                    )
+                    self._html(_sem_analise(**ui), 200)
                     return
                 numero = caminho.removeprefix("/painel/")
                 ui = _sessao_ui(sessao, portal)
                 if numero == "cameras":
                     self._html(
-                        _ao_vivo(
-                            _cameras_sessao(portal, sessao),
-                            perfil=ui["perfil"],
-                            csrf=ui["csrf"],
-                            usuario=ui["usuario"],
-                            documento=ui["documento"],
-                        ),
+                        _ao_vivo(_cameras_sessao(portal, sessao), **ui),
                         200,
                     )
                     return

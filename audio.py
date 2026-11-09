@@ -89,10 +89,10 @@ def _pcm_para_wav(pcm: bytes) -> bytes:
 
 
 def classificar_pcm(pcm: bytes):
-    """Devolve ('barulho', nivel) ou ('voz', nivel). Silêncio devolve None.
+    """Devolve ('barulho'|'ruido_continuo'|'voz', nivel) ou None.
 
-    Pico curto NÃO é classificado como disparo — só como barulho alto para
-    fusão com visão (interação + queda + deitada) no Detector de risco.
+    Pico curto = estalo/barulho esporádico. Energia alta contínua = ruído
+    sustentado (candidato a perturbação de sossego após 30 min).
     """
     if len(pcm) < TAXA * 2:
         return None
@@ -107,7 +107,9 @@ def classificar_pcm(pcm: bytes):
     serie = np.array(niveis)
     pico = float(serie.max())
     base = float(np.median(serie))
-    altos = int(np.sum(serie > max(0.08, base * 8)))
+    media = float(serie.mean())
+    piso_alto = max(0.08, base * 8)
+    altos = int(np.sum(serie > piso_alto))
     pico_min, mult, _cooldown = 0.45, 20.0, 90.0
     try:
         from agente.aprendizado_feedback import limiar_audio_disparo
@@ -115,8 +117,12 @@ def classificar_pcm(pcm: bytes):
         pico_min, mult, _cooldown = limiar_audio_disparo()
     except Exception:
         pass
+    # Pico curto (estalos): poucos frames altos e pico bem acima da base.
     if pico > pico_min and altos <= 3 and pico > base * mult:
         return "barulho", pico
+    # Ruído muito alto ininterrupto nesta janela (≥35% dos frames altos e média elevada).
+    if altos >= max(8, int(0.35 * len(serie))) and media >= max(0.06, base * 4):
+        return "ruido_continuo", media
     # Exige mais frames com energia de fala antes de gastar Whisper.
     voz = int(np.sum(serie > 0.02))
     if voz >= 55:
@@ -214,6 +220,8 @@ class EscutaAudio:
         self._thread = None
         self._ultimo_barulho = 0.0
         self._ultima_fala = 0.0
+        self._ruido_continuo_desde = 0.0
+        self._ultimo_sossego = 0.0
         self.suspeito_ate = 0.0
         self.suspeito_tipo = ""
         self.suspeito_detalhe = ""
@@ -278,10 +286,12 @@ class EscutaAudio:
     def _avaliar(self, pcm: bytes):
         import time
         classe = classificar_pcm(pcm)
+        agora = time.time()
         if classe is None:
+            # Quebra a sequência de ruído contínuo se a janela ficou quieta.
+            self._ruido_continuo_desde = 0.0
             return
         tipo, nivel = classe
-        agora = time.time()
         cooldown = 90.0
         try:
             from agente.aprendizado_feedback import limiar_audio_disparo
@@ -289,14 +299,70 @@ class EscutaAudio:
             _pico, _mult, cooldown = limiar_audio_disparo()
         except Exception:
             pass
-        # Barulho alto: sinal para fusão no Detector de risco (não afirma disparo).
+        # Estalos/barulho esporádico → alerta vermelho (não afirma disparo sozinho).
         if tipo == "barulho" and agora - self._ultimo_barulho >= cooldown:
             self._ultimo_barulho = agora
-            self.suspeito_ate = agora + 45
+            self._ruido_continuo_desde = 0.0
+            self.suspeito_ate = agora + 90
             self.suspeito_tipo = "barulho"
-            detalhe = "Barulho alto detectado. Sem afirmação de disparo até fusão visual e confirmação no Stive."
-            self.suspeito_detalhe = detalhe
+            self.suspeito_detalhe = (
+                "Estalo/barulho alto esporádico (possível disparo ou impacto). "
+                "Alerta vermelho — confirme no Stive se houve arma de fogo."
+            )
+            registrar_audio(
+                self.nome,
+                "Estalo_Alto",
+                texto="",
+                detalhe=self.suspeito_detalhe,
+                confianca=float(nivel or 0),
+                categoria="estalo",
+                nivel=3,
+                palavras=["estalo", "barulho"],
+            )
             return
+        # Ruído muito alto ininterrupto: acumula tempo até 30 min → sossego (amarelo).
+        if tipo == "ruido_continuo":
+            if self._ruido_continuo_desde <= 0:
+                self._ruido_continuo_desde = agora
+            decorrido = agora - self._ruido_continuo_desde
+            if decorrido >= 1800 and agora - self._ultimo_sossego >= 1800:
+                self._ultimo_sossego = agora
+                self.suspeito_ate = agora + 300
+                self.suspeito_tipo = "sossego"
+                self.suspeito_detalhe = (
+                    f"Ruído muito alto ininterrupto há {int(decorrido // 60)} min. "
+                    "Ocorrência: perturbação do sossego."
+                )
+                registrar_audio(
+                    self.nome,
+                    "Perturbacao_Sossego",
+                    texto="",
+                    detalhe=self.suspeito_detalhe,
+                    confianca=float(nivel or 0),
+                    categoria="sossego",
+                    nivel=2,
+                    palavras=["perturbacao", "sossego", "ruido"],
+                )
+                try:
+                    from ocorrencias import informar_ocorrencia
+                    from cadastro import cliente_ativo
+
+                    conta = cliente_ativo() or {}
+                    informar_ocorrencia(
+                        "".join(c for c in str(conta.get("documento") or "") if c.isdigit()),
+                        {
+                            "natureza": "Perturbacao",
+                            "descricao": self.suspeito_detalhe,
+                            "endereco": self.nome,
+                            "data": time.strftime("%Y-%m-%d"),
+                            "hora": time.strftime("%H:%M"),
+                        },
+                        usar_modelo=False,
+                    )
+                except Exception:
+                    pass
+            return
+        self._ruido_continuo_desde = 0.0
         if tipo != "voz" or agora - self._ultima_fala < 50:
             return
         if os.getenv("AUDIO_TRANSCRICAO", "1").strip().lower() in ("0", "false", "nao", "não"):
@@ -315,13 +381,34 @@ class EscutaAudio:
             return
         trecho = " ".join(texto.split())[:240]
         achados = _risco_audio(trecho)
-        # Transcrição NÃO eleva LED nem pede confirmação sozinha (alucinação comum).
-        # Só entra na esteira como registro informativo.
+        nivel_risco = max((int(item.get("nivel") or 0) for item in achados), default=0)
+        cats = sorted({str(item.get("categoria") or "") for item in achados if item.get("categoria")})
+        # Gritos/xingamentos/briga/socorro/ameaças elevam LED vermelho.
+        vermelho = nivel_risco >= 3 or any(
+            c in ("briga", "socorro", "disparo", "xingamento") for c in cats
+        )
+        if vermelho:
+            self.suspeito_ate = agora + 120
+            self.suspeito_tipo = cats[0] if cats else "voz_risco"
+            self.suspeito_detalhe = (
+                f"Áudio de risco ({', '.join(cats) or 'fala'}): {trecho[:160]}"
+            )
+            registrar_audio(
+                self.nome,
+                "Audio_Risco",
+                texto=trecho,
+                detalhe=self.suspeito_detalhe,
+                confianca=0.7,
+                categoria=",".join(cats) or "voz_risco",
+                nivel=max(nivel_risco, 3),
+                palavras=[item["palavra"] for item in achados],
+            )
+            return
         registrar_audio(
             self.nome,
             "Transcricao_Audio",
             texto=trecho,
-            detalhe="Transcrição de áudio da câmera (informativo; sem risco automático).",
+            detalhe="Transcrição de áudio da câmera (informativo).",
             confianca=0.55,
             categoria="transcricao",
             nivel=0,

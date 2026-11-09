@@ -51,6 +51,8 @@ _SITUACOES = {
     "acidente": "Acidente",
     "invas": "Invasao",
     "grito": "Perturbacao",
+    "sossego": "Perturbacao",
+    "perturba": "Perturbacao",
     "persegui": "Perseguicao",
     "correndo": "Correndo",
     "moto": "Moto",
