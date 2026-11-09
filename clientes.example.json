@@ -2,17 +2,17 @@
   "clientes": [
     {
       "id": "cli-1",
-      "nome": "Nome do cliente",
+      "nome": "Cliente Rua Professor Carlos Ott",
       "rg": "",
       "documento": "",
       "tipo_documento": "cpf",
-      "email": "cliente@exemplo.com",
+      "email": "cliente.carlosott@exemplo.com",
       "cameras": [
         {
-          "id": "cam-01",
-          "nome": "Portaria",
+          "id": "cam-carlos-ott",
+          "nome": "Câmera Professor Carlos Ott",
           "marca": "Intelbras",
-          "modelo": "VIP 1230",
+          "modelo": "IM5",
           "ativa": true,
           "host": "192.168.0.21",
           "porta": 554,
@@ -20,38 +20,48 @@
           "senha": "senha",
           "canal": 1,
           "subtype": 0,
-          "rua": "Rua da camera",
-          "bairro": "Bairro",
-          "cidade": "Cidade/UF",
-          "latitude": 0.0,
-          "longitude": 0.0
+          "rua": "Rua Professor Carlos Ott",
+          "bairro": "Stella Maris",
+          "cidade": "Salvador",
+          "latitude": -12.942006495533667,
+          "longitude": -38.33398144409458
         }
       ],
-      "pessoas": [
+      "pessoas": [],
+      "veiculos": [],
+      "contatos_apoio": []
+    },
+    {
+      "id": "cli-2",
+      "nome": "Cliente Rua Lidia Borja",
+      "rg": "",
+      "documento": "",
+      "tipo_documento": "cpf",
+      "email": "cliente.lidiaborja@exemplo.com",
+      "cameras": [
         {
-          "face_id": "F0001",
-          "nome": "Pessoa acompanhada",
-          "base_legal": "acompanhamento_familiar",
-          "referencia": "filho",
-          "motivo": "acompanhamento de familiar"
+          "id": "cam-lidia-borja",
+          "nome": "Câmera Lidia Borja",
+          "marca": "Intelbras",
+          "modelo": "im3",
+          "ativa": true,
+          "host": "192.168.0.108",
+          "porta": 554,
+          "usuario": "usuario",
+          "senha": "senha",
+          "canal": 1,
+          "subtype": 0,
+          "rua": "Rua Lidia Borja",
+          "bairro": "Stella Maris",
+          "cidade": "Salvador",
+          "latitude": -12.942335515695486,
+          "longitude": -38.3339624780146
         }
       ],
-      "veiculos": [
-        {
-          "placa": "ABC1D23",
-          "nome": "Veículo do cliente",
-          "vinculo": "proprio",
-          "motivo": "veículo da própria conta"
-        }
-      ],
-      "contatos_apoio": [
-        {
-          "nome": "Contato de apoio",
-          "email": "apoio@exemplo.com",
-          "telefone": "5571999999999",
-          "recebe_alerta": true
-        }
-      ]
+      "pessoas": [],
+      "veiculos": [],
+      "contatos_apoio": [],
+      "ativo": true
     }
   ]
 }

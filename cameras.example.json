@@ -1,26 +1,11 @@
 {
   "cameras": [
     {
-      "id": "cam-01",
-      "nome": "CAMERA 1",
+      "id": "cam-carlos-ott",
+      "nome": "Câmera Professor Carlos Ott",
       "ativa": true,
+      "modelo": "IM5",
       "host": "192.168.0.21",
-      "porta": 554,
-      "usuario": "usuario",
-      "senha": "senha",
-      "canal": 1,
-      "subtype": 0,
-      "rua": "Rua Lidia Borja",
-      "bairro": "Stella Maris",
-      "cidade": "Salvador/BA",
-      "latitude": -12.942074770281152,
-      "longitude": -38.333984025132985
-    },
-    {
-      "id": "cam-02",
-      "nome": "CAMERA 2",
-      "ativa": true,
-      "host": "192.168.0.108",
       "porta": 554,
       "usuario": "usuario",
       "senha": "senha",
@@ -28,9 +13,26 @@
       "subtype": 0,
       "rua": "Rua Professor Carlos Ott",
       "bairro": "Stella Maris",
-      "cidade": "Salvador/BA",
-      "latitude": -12.942260387896036,
-      "longitude": -38.33393891717083
+      "cidade": "Salvador",
+      "latitude": -12.942006495533667,
+      "longitude": -38.33398144409458
+    },
+    {
+      "id": "cam-lidia-borja",
+      "nome": "Câmera Lidia Borja",
+      "ativa": true,
+      "modelo": "im3",
+      "host": "192.168.0.108",
+      "porta": 554,
+      "usuario": "usuario",
+      "senha": "senha",
+      "canal": 1,
+      "subtype": 0,
+      "rua": "Rua Lidia Borja",
+      "bairro": "Stella Maris",
+      "cidade": "Salvador",
+      "latitude": -12.942335515695486,
+      "longitude": -38.3339624780146
     }
   ]
 }
