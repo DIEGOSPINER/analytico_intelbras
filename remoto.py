@@ -122,6 +122,9 @@ iframe#mapa { height: 520px; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
 main[data-tela="inicio"] .cartao span svg { width: 40px; height: 40px; }
 main[data-tela="inicio"] .cartao strong { font-size: 40px; }
+.cartao.cor-serie span { color: var(--cor-serie) !important; }
+.cartao.cor-serie span svg { stroke: var(--cor-serie) !important; }
+.cartao.cor-serie strong { color: var(--cor-serie) !important; }
 .grade.tres { grid-template-columns: 1fr 1fr 1fr; }
 .empilha { display: grid; grid-template-columns: 148px 1fr 40px; gap: 8px; align-items: center; margin: 10px 0; font-size: 14px; }
 .empilha .trilha { display: flex; height: 22px; border-radius: 7px; overflow: hidden; background: rgba(255,255,255,0.06); }

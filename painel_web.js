@@ -32,8 +32,23 @@ function escapar(texto) {
   return String(texto ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function corSerie(caminho) {
+  const chave = String(caminho || "").split(".").pop();
+  if (chave === "Comportamento" || chave === "MatchFace" || chave === "MatchPlaca") {
+    return "#f03c3c";
+  }
+  if (CORES[chave]) return CORES[chave];
+  return "";
+}
+
 function cartao(icone, rotulo, caminho) {
-  return `<article class="cartao"><span>${SVG[icone] || ""}${rotulo}</span><strong data-num="${caminho}">0</strong></article>`;
+  const cor = corSerie(caminho);
+  let svg = SVG[icone] || "";
+  if (cor && svg) {
+    svg = svg.replace("<svg ", `<svg style="stroke:${cor}" `);
+  }
+  const estilo = cor ? ` style="color:${cor} !important"` : "";
+  return `<article class="cartao"><span${estilo}>${svg}${rotulo}</span><strong data-num="${caminho}"${estilo}>0</strong></article>`;
 }
 
 function animar(dados) {
@@ -1025,24 +1040,25 @@ function horasDoDia() {
 }
 
 function inicio(tela, dados) {
-  if (!tela.dataset.pronto) {
+  // v4: matches e comportamentos em vermelho
+  if (tela.dataset.pronto !== "inicio-v4") {
     const blocos = [
       ["pessoa", "Pessoas hoje", "periodos.dia.Pessoa"],
       ["pessoa", "Pessoas no mês", "periodos.mes.Pessoa"],
       ["pessoa", "Pessoas acumulado", "periodos.total.Pessoa"],
+      ["alerta", "Comportamentos hoje", "periodos.dia.Comportamento"],
       ["veiculo", "Veículos hoje", "periodos.dia.Veiculo"],
       ["veiculo", "Veículos no mês", "periodos.mes.Veiculo"],
       ["veiculo", "Veículos acumulado", "periodos.total.Veiculo"],
+      ["pessoa", "Match de pessoa hoje", "periodos.dia.MatchFace"],
       ["animal", "Animais hoje", "periodos.dia.Animal"],
       ["animal", "Animais no mês", "periodos.mes.Animal"],
       ["animal", "Animais acumulado", "periodos.total.Animal"],
-      ["alerta", "Comportamentos hoje", "periodos.dia.Comportamento"],
-      ["pessoa", "Match de pessoa hoje", "periodos.dia.MatchFace"],
       ["veiculo", "Match de placa hoje", "periodos.dia.MatchPlaca"],
     ];
     tela.innerHTML = `<section class="cartoes">${blocos.map((item) => cartao(item[0], item[1], item[2])).join("")}</section>
       <section class="cartao"><h2>Movimento do dia</h2><canvas class="grafico" id="movimento"></canvas></section>`;
-    tela.dataset.pronto = "1";
+    tela.dataset.pronto = "inicio-v4";
   }
   const dias = dados.serie_dias || [];
   linha(document.getElementById("movimento"), seriesClasse(dias, (nome) => dias.map((dia) => Number(dia[nome] || 0))), dias.map((dia) => dia.rotulo || ""), "dias");
