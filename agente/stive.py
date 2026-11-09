@@ -9,14 +9,69 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ARQUIVO = Path("feedback_modelo.json")
+ARQUIVO_CHATS = Path("historico_stive.json")
 _TRAVA = threading.Lock()
 _CHATS = {}
+_VISUAIS = {}
+
+
+def _chave_chat(documento: str = "", email: str = "") -> str:
+    """Cada usuário (e-mail) tem conversa própria; documento só como fallback."""
+    mail = str(email or "").strip().lower()
+    if mail:
+        return f"u:{mail}"
+    digitos = "".join(c for c in str(documento or "") if c.isdigit())
+    return f"d:{digitos}" if digitos else "u:anonimo"
+
+
+def _carregar_chats_disco():
+    if not ARQUIVO_CHATS.exists():
+        return
+    try:
+        bruto = json.loads(ARQUIVO_CHATS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(bruto, dict):
+        return
+    conversas = bruto.get("conversas") if isinstance(bruto.get("conversas"), dict) else None
+    visuais = bruto.get("visuais") if isinstance(bruto.get("visuais"), dict) else None
+    if conversas is None:
+        conversas = {k: v for k, v in bruto.items() if isinstance(v, list)}
+    for chave, fila in conversas.items():
+        if isinstance(fila, list):
+            _CHATS[str(chave)] = [dict(item) for item in fila if isinstance(item, dict)][-40:]
+    if isinstance(visuais, dict):
+        for chave, visual in visuais.items():
+            if isinstance(visual, dict):
+                _VISUAIS[str(chave)] = dict(visual)
+
+
+def _gravar_chats_disco():
+    try:
+        ARQUIVO_CHATS.write_text(
+            json.dumps(
+                {"conversas": _CHATS, "visuais": _VISUAIS},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+_carregar_chats_disco()
 
 _SISTEMA = (
     "Você é Stive, agente de segurança do C4ISTAR MONITOR e analista criminal de campo. "
     "Fale como policial experiente: horário, dia da semana, local, pessoa e padrão importam. "
     "Responda em português, objetivo, usando SEMPRE o contexto numérico e textual enviado abaixo. "
-    "Esse contexto JÁ É a consulta à base do cliente logado (dia, semana, mês, total, cubo, app, alertas). "
+    "Esse contexto JÁ É a consulta à base do CPF/CNPJ da sessão (dia, semana, mês, total, cubo, app, alertas). "
+    "ISOLAMENTO: cada dado está atrelado a um CPF/CNPJ. Se o perfil não for administrador, fale e enxergue "
+    "APENAS o documento da sessão. Nunca mencione, compare ou invente dados de outros clientes, do administrador "
+    "ou de outros CPF/CNPJ. Não sugira nem descreva alerta/informe classificado para outro documento. "
+    "Se o perfil for administrador, pode falar sobre qualquer cliente listado no contexto. "
     "NUNCA diga que não tem acesso, que não consegue consultar, que falta permissão ou que os dados "
     "do dia/semana não estão disponíveis. Se o total do período for zero, diga claramente que "
     "na base daquele período não há registros — isso ainda é uma resposta com base nos dados. "
@@ -59,17 +114,42 @@ def ids_respondidos() -> set[str]:
     return {str(item.get("id") or "") for item in bruto.get("respostas") or [] if item.get("id")}
 
 
-def historico(documento: str) -> list[dict]:
+def historico(
+    documento: str = "",
+    email: str = "",
+    perfil: str = "",
+    todos: bool = False,
+) -> list[dict]:
+    """Histórico do usuário. Só o administrador pode pedir a visão completa (todos=True)."""
     with _TRAVA:
-        return [dict(item) for item in _CHATS.get(documento, [])][-12:]
+        if todos and perfil == "administrador":
+            saida = []
+            for chave, fila in _CHATS.items():
+                for item in fila[-20:]:
+                    bloco = dict(item)
+                    bloco["origem"] = chave
+                    saida.append(bloco)
+            return saida[-80:]
+        chave = _chave_chat(documento, email)
+        return [dict(item) for item in _CHATS.get(chave, [])][-40:]
 
 
-def responder(documento: str, pergunta: str, resumo: dict) -> dict:
+def visual_usuario(documento: str = "", email: str = "") -> dict:
+    """Último quadro pedido pelo próprio usuário (nunca compartilha entre sessões)."""
+    with _TRAVA:
+        chave = _chave_chat(documento, email)
+        bruto = _VISUAIS.get(chave) or {}
+        return dict(bruto) if isinstance(bruto, dict) else {}
+
+
+def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perfil: str = "") -> dict:
     pergunta = (pergunta or "").strip()
     if not pergunta:
         raise ValueError("Escreva a pergunta para o Stive.")
     from agente.criminal import analisar, pede_analise_criminal, texto_briefing
 
+    chave = _chave_chat(documento, email)
+    perfil = (perfil or str((resumo or {}).get("perfil_sessao") or "")).strip().lower()
     briefing = ""
     analise = None
     if pede_analise_criminal(pergunta):
@@ -81,9 +161,16 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
     # Perguntas de período respondem direto da base — evita GPT inventar "sem acesso".
     local_periodo = _resposta_periodo(pergunta, resumo)
     if local_periodo is not None and not pede_analise_criminal(pergunta):
-        _guardar(documento, pergunta, local_periodo["fala"])
+        _guardar(
+            chave,
+            pergunta,
+            local_periodo["fala"],
+            email=email,
+            documento=documento,
+            visual=local_periodo.get("visual"),
+        )
         return local_periodo
-    contexto = _contexto(resumo)
+    contexto = _contexto(resumo, documento=documento, perfil=perfil)
     if briefing:
         contexto = contexto + "\n\n" + briefing
     try:
@@ -93,7 +180,7 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
         if sessao.disponivel:
             texto = sessao.perguntar(
                 _SISTEMA,
-                contexto + "\n\nHistórico:\n" + _historico_texto(documento) + "\n\nPergunta: " + pergunta,
+                contexto + "\n\nHistórico:\n" + _historico_texto(chave) + "\n\nPergunta: " + pergunta,
                 json_mode=True,
             )
             saida = extrair_json(texto)
@@ -107,14 +194,28 @@ def responder(documento: str, pergunta: str, resumo: dict) -> dict:
                     visual = resposta_chat(documento, pergunta, resumo).get("visual") or {}
                     if visual.get("itens"):
                         resultado["visual"] = visual
-                _guardar(documento, pergunta, resultado["fala"])
-                _registrar_ocorrencia(documento, resultado.get("ocorrencia"))
+                _guardar(
+                    chave,
+                    pergunta,
+                    resultado["fala"],
+                    email=email,
+                    documento=documento,
+                    visual=resultado.get("visual"),
+                )
+                _registrar_ocorrencia(documento, resultado.get("ocorrencia"), perfil=perfil)
                 return resultado
     except Exception:
         pass
     resultado = local_periodo or _local(pergunta, resumo, documento=documento)
-    _guardar(documento, pergunta, resultado["fala"])
-    _registrar_ocorrencia(documento, resultado.get("ocorrencia"))
+    _guardar(
+        chave,
+        pergunta,
+        resultado["fala"],
+        email=email,
+        documento=documento,
+        visual=resultado.get("visual"),
+    )
+    _registrar_ocorrencia(documento, resultado.get("ocorrencia"), perfil=perfil)
     return resultado
 
 
@@ -315,18 +416,40 @@ def _serie_meses(reacoes: list[dict]) -> list[dict]:
     return saida
 
 
-def _guardar(documento: str, pergunta: str, fala: str):
+def _guardar(chave: str, pergunta: str, fala: str, email: str = "", documento: str = "", visual=None):
     with _TRAVA:
-        fila = _CHATS.setdefault(documento or "", [])
-        fila.append({"papel": "eu", "texto": pergunta[:500]})
-        fila.append({"papel": "stive", "texto": fala[:800]})
-        del fila[:-12]
+        fila = _CHATS.setdefault(chave or "u:anonimo", [])
+        agora = datetime.now().isoformat(timespec="seconds")
+        fila.append({
+            "papel": "eu",
+            "texto": pergunta[:500],
+            "quando": agora,
+            "email": (email or "").strip().lower(),
+            "documento": "".join(c for c in str(documento or "") if c.isdigit()),
+        })
+        fila.append({
+            "papel": "stive",
+            "texto": fala[:800],
+            "quando": agora,
+            "email": (email or "").strip().lower(),
+            "documento": "".join(c for c in str(documento or "") if c.isdigit()),
+        })
+        del fila[:-40]
+        if isinstance(visual, dict) and (visual.get("itens") or visual.get("tipo") or visual.get("titulo")):
+            _VISUAIS[chave or "u:anonimo"] = {
+                "tipo": str(visual.get("tipo") or "texto")[:20],
+                "titulo": str(visual.get("titulo") or "")[:80],
+                "itens": list(visual.get("itens") or [])[:24],
+            }
+        _gravar_chats_disco()
 
 
-def _historico_texto(documento: str) -> str:
+def _historico_texto(chave: str) -> str:
+    with _TRAVA:
+        fila = list(_CHATS.get(chave, []))[-12:]
     linhas = []
-    for item in historico(documento):
-        linhas.append(f"{item['papel']}: {item['texto']}")
+    for item in fila:
+        linhas.append(f"{item.get('papel')}: {item.get('texto')}")
     return "\n".join(linhas) or "(início da conversa)"
 
 
@@ -516,7 +639,25 @@ def _contexto_audio(resumo: dict) -> str:
     return "Áudio de risco recente: " + " | ".join(linhas)
 
 
-def _contexto(resumo: dict) -> str:
+def _diretorio_clientes_admin() -> str:
+    try:
+        from cadastro import listar_clientes
+
+        linhas = []
+        for item in listar_clientes():
+            doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
+            if not doc:
+                continue
+            nome = str(item.get("nome") or "") or doc
+            ativo = "ativo" if item.get("ativo") is not False else "inativo"
+            cams = len(item.get("cameras") or [])
+            linhas.append(f"{nome} | CPF/CNPJ {doc} | {ativo} | câmeras {cams}")
+        return "Contas cadastradas: " + (" || ".join(linhas[:40]) if linhas else "nenhuma")
+    except Exception:
+        return "Contas cadastradas: (indisponível)"
+
+
+def _contexto(resumo: dict, documento: str = "", perfil: str = "") -> str:
     resumo = resumo or {}
     periodos = resumo.get("periodos") or {}
     total = periodos.get("total") or _bloco_periodo(resumo, "total")
@@ -576,8 +717,21 @@ def _contexto(resumo: dict) -> str:
     ) or "nenhum"
     texto_resumo = str(resumo.get("resumo") or "").strip()
     assessoramento = str(resumo.get("assessoramento") or "").strip()
-    return "\n".join([
-        "CONSULTA À BASE do cliente logado (já carregada — use estes números; não diga que não tem acesso).",
+    doc = "".join(c for c in str(documento or resumo.get("cliente_documento") or "") if c.isdigit())
+    perfil = (perfil or str(resumo.get("perfil_sessao") or "")).strip().lower()
+    cabeca = [
+        f"DOCUMENTO DA SESSÃO (CPF/CNPJ): {doc or '(não informado)'}. Perfil: {perfil or 'usuario'}.",
+        "CONSULTA À BASE já carregada — use estes números; não diga que não tem acesso.",
+    ]
+    if perfil == "administrador":
+        cabeca.append("ADMIN: pode perguntar sobre qualquer cliente/conta da lista.")
+        cabeca.append(_diretorio_clientes_admin())
+    else:
+        cabeca.append(
+            "RESTRITO AO CPF/CNPJ DA SESSÃO: não fale de outros clientes, do administrador "
+            "nem de dados classificados de outro documento. Não envie nem sugira alerta para outro CPF/CNPJ."
+        )
+    return "\n".join(cabeca + [
         intervalo,
         "Totais do dia (hoje): " + _fmt_bloco(dia),
         "Totais da semana (últimos 7 dias): " + _fmt_bloco(semana),
@@ -634,18 +788,24 @@ def _normalizar(saida: dict) -> dict:
     }
 
 
-def _registrar_ocorrencia(documento: str, ocorrencia: dict):
+def _registrar_ocorrencia(documento: str, ocorrencia: dict, perfil: str = ""):
     if not ocorrencia:
+        return
+    # Sempre grava só no CPF/CNPJ da sessão — nunca em outro documento.
+    digitos = "".join(c for c in str(documento or "") if c.isdigit())
+    if not digitos:
         return
     from ocorrencias import informar_ocorrencia
 
     agora = datetime.now()
-    informar_ocorrencia(documento, {
+    informar_ocorrencia(digitos, {
         "data": ocorrencia.get("data") or agora.strftime("%Y-%m-%d"),
         "hora": (ocorrencia.get("hora") or agora.strftime("%H:%M"))[:5],
         "natureza": ocorrencia.get("natureza"),
         "descricao": ocorrencia.get("descricao"),
         "endereco": ocorrencia.get("endereco") or "",
+        "documento": digitos,
+        "perfil_origem": (perfil or "")[:40],
     }, usar_modelo=False)
 
 

@@ -1039,9 +1039,101 @@ function horasDoDia() {
   return Array.from({ length: 24 }, (_, hora) => `${String(hora).padStart(2, "0")}h`);
 }
 
+function csrfPortal() {
+  return (document.body.dataset.csrf || "").trim();
+}
+
+function atualizarFaixaVista(vista) {
+  const faixa = document.getElementById("faixa-vista");
+  if (!faixa) return;
+  if (document.body.dataset.perfil !== "administrador") {
+    faixa.hidden = true;
+    faixa.classList.remove("ativa");
+    return;
+  }
+  const valor = vista && vista.valor != null ? String(vista.valor) : (document.body.dataset.vista || "");
+  const rotulo = (vista && vista.rotulo) || "";
+  if (!valor) {
+    faixa.hidden = true;
+    faixa.classList.remove("ativa");
+    faixa.innerHTML = "";
+    document.body.dataset.vista = "";
+    return;
+  }
+  document.body.dataset.vista = valor;
+  faixa.hidden = false;
+  faixa.classList.add("ativa");
+  faixa.innerHTML = `Vista do portal: <strong>${escapar(rotulo || valor)}</strong> · <a href="/">alterar no início</a>`;
+}
+
+async function aplicarVistaPortal(valor) {
+  const corpo = new URLSearchParams();
+  corpo.set("csrf", csrfPortal());
+  corpo.set("vista", valor == null ? "" : String(valor));
+  const resp = await fetch("/vista", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: corpo,
+  });
+  const pacote = await resp.json().catch(() => ({}));
+  if (!resp.ok || !pacote.ok) {
+    throw new Error((pacote && pacote.erro) || "Não foi possível aplicar a vista.");
+  }
+  atualizarFaixaVista(pacote.vista_portal || { valor: String(valor || "") });
+  if ((location.pathname || "").indexOf("/painel/cameras") >= 0) {
+    location.reload();
+    return pacote;
+  }
+  if (typeof ciclo === "function") await ciclo();
+  return pacote;
+}
+
+function montarSegmentadorInicio(tela, dados) {
+  if (document.body.dataset.perfil !== "administrador") return;
+  let caixa = document.getElementById("segmentador-portal");
+  const vista = (dados && dados.vista_portal) || {};
+  const opcoes = Array.isArray(vista.opcoes) ? vista.opcoes : [];
+  if (!caixa) {
+    caixa = document.createElement("section");
+    caixa.id = "segmentador-portal";
+    caixa.className = "cartao segmentador-portal";
+    caixa.innerHTML = `<label>Segmentar dados do portal
+<select id="vista-portal-sel"></select>
+</label>
+<p class="estado" id="vista-portal-estado"></p>`;
+    tela.insertBefore(caixa, tela.firstChild);
+    const sel = caixa.querySelector("#vista-portal-sel");
+    sel.addEventListener("change", async () => {
+      const estado = document.getElementById("vista-portal-estado");
+      try {
+        if (estado) estado.textContent = "Aplicando…";
+        sel.disabled = true;
+        await aplicarVistaPortal(sel.value);
+        if (estado) estado.textContent = "Vista aplicada em todo o portal.";
+      } catch (erro) {
+        if (estado) estado.textContent = erro.message || "Falha ao aplicar a vista.";
+      } finally {
+        sel.disabled = false;
+      }
+    });
+  }
+  const sel = document.getElementById("vista-portal-sel");
+  const estado = document.getElementById("vista-portal-estado");
+  if (sel && (!sel.dataset.pronto || sel.options.length <= 1)) {
+    sel.innerHTML = (opcoes.length ? opcoes : [
+      { valor: "", rotulo: "Geral (toda a instalação)" },
+      { valor: "__admin__", rotulo: "Somente câmeras do administrador" },
+    ]).map((item) => `<option value="${escapar(item.valor)}">${escapar(item.rotulo)}</option>`).join("");
+    sel.dataset.pronto = "1";
+  }
+  if (sel && vista.valor != null) sel.value = String(vista.valor || "");
+  if (estado && vista.rotulo) estado.textContent = `Ativo: ${vista.rotulo}`;
+  atualizarFaixaVista(vista);
+}
+
 function inicio(tela, dados) {
-  // v4: matches e comportamentos em vermelho
-  if (tela.dataset.pronto !== "inicio-v4") {
+  // v5: segmentador admin + matches/comportamentos em vermelho
+  if (tela.dataset.pronto !== "inicio-v5") {
     const blocos = [
       ["pessoa", "Pessoas hoje", "periodos.dia.Pessoa"],
       ["pessoa", "Pessoas no mês", "periodos.mes.Pessoa"],
@@ -1058,8 +1150,9 @@ function inicio(tela, dados) {
     ];
     tela.innerHTML = `<section class="cartoes">${blocos.map((item) => cartao(item[0], item[1], item[2])).join("")}</section>
       <section class="cartao"><h2>Movimento do dia</h2><canvas class="grafico" id="movimento"></canvas></section>`;
-    tela.dataset.pronto = "inicio-v4";
+    tela.dataset.pronto = "inicio-v5";
   }
+  montarSegmentadorInicio(tela, dados);
   const dias = dados.serie_dias || [];
   linha(document.getElementById("movimento"), seriesClasse(dias, (nome) => dias.map((dia) => Number(dia[nome] || 0))), dias.map((dia) => dia.rotulo || ""), "dias");
 }
@@ -1441,23 +1534,8 @@ function risco(tela, dados) {
   }
 }
 
-function vivo(_tela, dados) {
-  (dados.cameras_vivo || []).forEach((camera) => {
-    const figura = document.querySelector(`[data-camera="${CSS.escape(camera.nome)}"] .placar-camera`);
-    if (!figura) return;
-    const agora = camera.agora || {};
-    const acumulado = camera.acumulado || {};
-    const linhas = [
-      ["pessoa", "Pessoas", agora.Pessoa || 0, acumulado.Pessoa || 0],
-      ["veiculo", "Veículos", agora.Veiculo || 0, acumulado.Veiculo || 0],
-      ["camera", "Objetos", agora.Objeto || 0, acumulado.Objeto || 0],
-      ["animal", "Animais", agora.Animal || 0, acumulado.Animal || 0],
-    ];
-    const comportamentoAtual = (camera.comportamentos || []).map((item) => `${item.nome} ${item.agora}`).join(" · ") || "sem comportamento agora";
-    figura.innerHTML = `<div class="placar"><div><span>Agora</span></div><div><span>Acumulado</span></div>
-      ${linhas.map((item) => `<div><span>${SVG[item[0]]} ${item[1]}</span><strong>${item[2]}</strong></div><div><strong>${item[3]}</strong></div>`).join("")}
-    </div><p>${escapar(comportamentoAtual)}</p>`;
-  });
+function vivo(_tela, _dados) {
+  // Ao vivo: só a imagem das câmeras — sem cards de contagem/placar.
 }
 
 function pontosDo(dados) {
@@ -1735,7 +1813,148 @@ function audio(tela, dados) {
   }
 }
 
-const render = { inicio, contagens, comportamento, alertas, mapas, risco, vivo, audio };
+function serieSimples(itens, cor) {
+  return [{
+    nome: "serie",
+    cor: cor || "#4c8dff",
+    valores: (itens || []).map((item) => Number(item.valor || 0)),
+  }];
+}
+
+async function sistema(tela) {
+  if (tela.dataset.pronto !== "sistema-v2") {
+    tela.innerHTML = `<section class="cartao" style="margin-bottom:14px">
+<label>Segmentação por cliente
+<select id="sis-cliente"><option value="">Todos (instalação)</option></select>
+</label>
+<p id="sis-cliente-info" style="color:var(--mudo);margin:.6rem 0 0"></p>
+</section>
+<section class="cartoes" id="sistema-cards"></section>
+<section class="grade">
+<article class="cartao"><h2>Tabelas no Postgres</h2><div id="sistema-tabelas"><p>Carregando…</p></div></article>
+<article class="cartao"><h2>Host agora</h2><div id="sistema-agora"><p>Carregando…</p></div></article>
+</section>
+<section class="grade tres">
+<article class="cartao"><h2>Crescimento diário (MB dados)</h2><canvas class="grafico" id="sis-diario"></canvas></article>
+<article class="cartao"><h2>Crescimento mensal (MB)</h2><canvas class="grafico" id="sis-mensal"></canvas></article>
+<article class="cartao"><h2>Acumulado 90 dias (MB)</h2><canvas class="grafico" id="sis-acumulado"></canvas></article>
+</section>
+<section class="grade tres">
+<article class="cartao"><h2>CPU diária (%)</h2><canvas class="grafico" id="sis-cpu"></canvas></article>
+<article class="cartao"><h2>RAM diária (%)</h2><canvas class="grafico" id="sis-ram"></canvas></article>
+<article class="cartao"><h2>Disco do sistema (MB)</h2><canvas class="grafico" id="sis-disco"></canvas></article>
+</section>
+<section class="grade">
+<article class="cartao"><h2>GPT · custo diário (USD)</h2><canvas class="grafico" id="sis-gpt-usd"></canvas></article>
+<article class="cartao"><h2>GPT · tokens/unidades diários</h2><canvas class="grafico" id="sis-gpt-tok"></canvas></article>
+</section>
+<section class="grade">
+<article class="cartao"><h2>Custos GPT por cliente (mês)</h2><div id="sistema-custos-cli"><p>Carregando…</p></div></article>
+<article class="cartao"><h2>Espaço em nuvem</h2><div id="sistema-nuvem"><p>Preparando medição por cliente…</p></div></article>
+</section>`;
+    tela.dataset.pronto = "sistema-v2";
+    const sel = document.getElementById("sis-cliente");
+    if (sel && !sel._sisBound) {
+      sel._sisBound = true;
+      sel.addEventListener("change", () => {
+        tela._sisQuando = 0;
+        sistema(tela);
+      });
+    }
+  }
+  if (tela._sisBusy) return;
+  const agoraMs = Date.now();
+  if (tela._sisQuando && agoraMs - tela._sisQuando < 8000) return;
+  tela._sisBusy = true;
+  try {
+    const sel = document.getElementById("sis-cliente");
+    const filtro = sel ? String(sel.value || "") : "";
+    const resposta = await fetch(`/sistema.json?documento=${encodeURIComponent(filtro)}`);
+    if (!resposta.ok) throw new Error("sem acesso");
+    const pacote = await resposta.json();
+    tela._sisQuando = agoraMs;
+    if (sel && !sel.dataset.opcoes) {
+      const opts = ['<option value="">Todos (instalação)</option>'].concat(
+        (pacote.clientes || []).map((c) =>
+          `<option value="${escapar(c.documento)}">${escapar(c.nome || c.documento)} · ${escapar(c.documento)}</option>`
+        )
+      );
+      sel.innerHTML = opts.join("");
+      sel.dataset.opcoes = "1";
+      if (filtro) sel.value = filtro;
+    }
+    const info = document.getElementById("sis-cliente-info");
+    const cli = pacote.cliente;
+    if (info) {
+      info.textContent = cli
+        ? `Monitorando ${cli.nome || cli.documento}: ${cli.cameras || 0} câmera(s), ${cli.pessoas || 0} pessoa(s), ~${Number(cli.mb_estimado_local || 0).toLocaleString("pt-BR")} MB estimados nos dados locais.`
+        : "Visão geral da instalação. Escolha um CPF/CNPJ para segmentar o monitoramento financeiro e a estimativa de armazenamento.";
+    }
+    const agora = pacote.agora || {};
+    const custos = pacote.custos || {};
+    const cards = document.getElementById("sistema-cards");
+    if (cards) {
+      cards.innerHTML = [
+        ["Total dados (MB)", agora.tabelas_mb || pacote.total_armazenado_mb || 0, "#4c8dff"],
+        ["CPU %", agora.cpu_pct || 0, "#ff8c28"],
+        ["RAM %", agora.ram_pct || 0, "#aa3cb4"],
+        ["Disco host (MB)", agora.disco_usado_mb || 0, "#28c4dc"],
+        ["GPT USD (mês)", custos.openai_usd_mes || 0, "#3ddc97"],
+        ["GPT tokens (mês)", custos.openai_tokens_mes || 0, "#ffb020"],
+      ].map(([rotulo, valor, cor]) =>
+        `<article class="cartao"><span style="color:${cor} !important">${rotulo}</span><strong style="color:${cor} !important">${Number(valor).toLocaleString("pt-BR")}</strong></article>`
+      ).join("");
+    }
+    const tabela = document.getElementById("sistema-tabelas");
+    if (tabela) {
+      const linhas = (pacote.tabelas || []).map((item) =>
+        `<tr><td>${escapar(item.tabela)}</td><td>${Number(item.linhas || 0).toLocaleString("pt-BR")}</td><td>${Number(item.mb || 0).toLocaleString("pt-BR")} MB</td></tr>`
+      ).join("");
+      tabela.innerHTML = `<table><tr><th>Tabela</th><th>Linhas</th><th>Tamanho</th></tr>${linhas || "<tr><td colspan='3'>Sem Postgres ou sem tabelas.</td></tr>"}</table>`;
+    }
+    const host = document.getElementById("sistema-agora");
+    if (host) {
+      host.innerHTML = `<p>CPU ${agora.cpu_pct || 0}% · RAM ${agora.ram_pct || 0}% (${agora.ram_usada_mb || 0} / ${agora.ram_total_mb || 0} MB)</p>
+        <p>Disco ${agora.disco_usado_mb || 0} / ${agora.disco_total_mb || 0} MB · Dados nas tabelas ${agora.tabelas_mb || 0} MB</p>
+        <p style="color:var(--mudo)">Amostra ${escapar(agora.quando || "")}</p>`;
+    }
+    const custosCli = document.getElementById("sistema-custos-cli");
+    if (custosCli) {
+      const lista = custos.por_cliente_mes || [];
+      if (filtro) {
+        custosCli.innerHTML = `<p>Filtro ${escapar(filtro)} · GPT mês: USD ${Number(custos.openai_usd_mes || 0).toLocaleString("pt-BR")} · tokens ${Number(custos.openai_tokens_mes || 0).toLocaleString("pt-BR")}</p>
+          <p>Total canais no mês: USD ${Number(custos.total_usd_mes || 0).toLocaleString("pt-BR")}</p>`;
+      } else {
+        const linhas = lista.map((item) =>
+          `<tr><td>${escapar(item.documento)}</td><td>${Number(item.unidades || 0).toLocaleString("pt-BR")}</td><td>${Number(item.usd || 0).toLocaleString("pt-BR")}</td></tr>`
+        ).join("");
+        custosCli.innerHTML = `<table><tr><th>CPF/CNPJ</th><th>Tokens/unid.</th><th>USD</th></tr>${linhas || "<tr><td colspan='3'>Sem uso GPT registrado neste mês.</td></tr>"}</table>`;
+      }
+    }
+    const nuvem = document.getElementById("sistema-nuvem");
+    if (nuvem) {
+      const n = pacote.nuvem || {};
+      nuvem.innerHTML = `<p><strong>Status:</strong> ${escapar(n.status || "preparado")}</p>
+        <p>Usado: ${n.usado_mb == null ? "—" : Number(n.usado_mb).toLocaleString("pt-BR") + " MB"} · Cota: ${n.cota_mb == null ? "—" : Number(n.cota_mb).toLocaleString("pt-BR") + " MB"}</p>
+        <p style="color:var(--mudo)">${escapar(n.aviso || "Medição de nuvem por cliente em preparação.")}</p>`;
+    }
+    linha(document.getElementById("sis-diario"), serieSimples(pacote.crescimento_diario, "#4c8dff"), (pacote.crescimento_diario || []).map((i) => i.rotulo), "dias");
+    linha(document.getElementById("sis-mensal"), serieSimples(pacote.crescimento_mensal, "#148ceb"), (pacote.crescimento_mensal || []).map((i) => i.rotulo), "meses");
+    linha(document.getElementById("sis-acumulado"), serieSimples(pacote.crescimento_acumulado, "#3ddc97"), (pacote.crescimento_acumulado || []).map((i) => i.rotulo), "dias");
+    linha(document.getElementById("sis-cpu"), serieSimples(pacote.cpu_diario, "#ff8c28"), (pacote.cpu_diario || []).map((i) => i.rotulo), "dias");
+    linha(document.getElementById("sis-ram"), serieSimples(pacote.ram_diario, "#aa3cb4"), (pacote.ram_diario || []).map((i) => i.rotulo), "dias");
+    linha(document.getElementById("sis-disco"), serieSimples(pacote.disco_diario, "#28c4dc"), (pacote.disco_diario || []).map((i) => i.rotulo), "dias");
+    linha(document.getElementById("sis-gpt-usd"), serieSimples(custos.gpt_usd_diario, "#3ddc97"), (custos.gpt_usd_diario || []).map((i) => i.rotulo), "dias");
+    linha(document.getElementById("sis-gpt-tok"), serieSimples(custos.gpt_tokens_diario, "#ffb020"), (custos.gpt_tokens_diario || []).map((i) => i.rotulo), "dias");
+  } catch (erro) {
+    const tabela = document.getElementById("sistema-tabelas");
+    if (tabela) tabela.innerHTML = "<p class='aviso'>Não foi possível carregar o monitor. Confirme o perfil administrador.</p>";
+  } finally {
+    tela._sisBusy = false;
+  }
+}
+
+const render = { inicio, contagens, comportamento, alertas, mapas, risco, vivo, audio, sistema };
 
 function pulsar() {
   document.querySelectorAll("[data-agulha]").forEach((artigo) => {
@@ -1759,6 +1978,7 @@ async function ciclo() {
   }
   ultimoDados = dados;
   const led = document.getElementById("led");
+  if (dados.vista_portal) atualizarFaixaVista(dados.vista_portal);
   atualizarSelosNav(dados);
   if (window.atualizarStive) window.atualizarStive(dados);
   atualizarFalaStive(dados);
@@ -1766,7 +1986,10 @@ async function ciclo() {
   if (led) led.className = "led " + (dados.led || "branco");
   const tela = document.getElementById("tela");
   const vista = dadosComFiltro(dados);
-  if (tela && render[tela.dataset.tela]) render[tela.dataset.tela](tela, vista);
+  if (tela && render[tela.dataset.tela]) {
+    if (tela.dataset.tela === "sistema") render.sistema(tela);
+    else render[tela.dataset.tela](tela, vista);
+  }
   animar(vista);
   prepararVisualizacoes(tela);
   if (tela && tela.dataset.tela === "vivo" && !document.querySelector(".video")) {
@@ -1927,8 +2150,13 @@ const filaFalaStive = [];
 const falasVistas = new Set();
 let falandoStive = false;
 let falaAtivaStive = null;
-const CHAVE_FALA_ATIVA = "stive-fala-ativa";
-const CHAVE_FALA_VIVO = "stive-fala-vivo";
+function chaveFalaAtiva() {
+  return `stive-fala-ativa:${usuarioStive()}`;
+}
+
+function chaveFalaVivo() {
+  return `stive-fala-vivo:${usuarioStive()}`;
+}
 
 function piscarStive() {
   const avatar = document.querySelector("#abrir-stive");
@@ -1953,15 +2181,15 @@ function linkFalaHtml(item) {
 function salvarFalaAtiva(item) {
   falaAtivaStive = item || null;
   try {
-    if (item) sessionStorage.setItem(CHAVE_FALA_ATIVA, JSON.stringify(item));
-    else sessionStorage.removeItem(CHAVE_FALA_ATIVA);
+    if (item) sessionStorage.setItem(chaveFalaAtiva(), JSON.stringify(item));
+    else sessionStorage.removeItem(chaveFalaAtiva());
   } catch (erro) {}
 }
 
 function lerFalaAtiva() {
   if (falaAtivaStive) return falaAtivaStive;
   try {
-    const bruto = JSON.parse(sessionStorage.getItem(CHAVE_FALA_ATIVA) || "null");
+    const bruto = JSON.parse(sessionStorage.getItem(chaveFalaAtiva()) || "null");
     if (bruto && bruto.texto) {
       falaAtivaStive = bruto;
       return bruto;
@@ -2054,11 +2282,11 @@ function restaurarFalaStive() {
   mostrarFalaHq(item);
   // Após clicar no hiperlink, aguarda visualização da tela destino e fecha.
   try {
-    const destino = sessionStorage.getItem(CHAVE_FALA_VIVO) || "";
+    const destino = sessionStorage.getItem(chaveFalaVivo()) || "";
     if (destino && destino !== "visto" && location.pathname.replace(/\/$/, "") === destino.replace(/\/$/, "")) {
-      sessionStorage.setItem(CHAVE_FALA_VIVO, "visto");
+      sessionStorage.setItem(chaveFalaVivo(), "visto");
       setTimeout(() => {
-        if (sessionStorage.getItem(CHAVE_FALA_VIVO) === "visto") fecharFalaStive();
+        if (sessionStorage.getItem(chaveFalaVivo()) === "visto") fecharFalaStive();
       }, 5000);
     }
   } catch (erro) {}
@@ -2230,7 +2458,7 @@ function fecharFalaStive() {
   falandoStive = false;
   salvarFalaAtiva(null);
   try {
-    sessionStorage.removeItem(CHAVE_FALA_VIVO);
+    sessionStorage.removeItem(chaveFalaVivo());
   } catch (erro) {}
   processarFilaFalaStive();
 }
@@ -2302,7 +2530,7 @@ function iniciarFalaStive() {
     if (linkNav) {
       // Não fecha agora: persiste o balão e só libera após visualizar a tela destino.
       const destino = linkNav.getAttribute("data-stive-destino") || linkNav.getAttribute("href") || "/painel/cameras";
-      try { sessionStorage.setItem(CHAVE_FALA_VIVO, destino); } catch (erro) {}
+      try { sessionStorage.setItem(chaveFalaVivo(), destino); } catch (erro) {}
       salvarFalaAtiva(lerFalaAtiva() || falaAtivaStive);
       return;
     }
@@ -2329,11 +2557,22 @@ function iniciarFalaStive() {
   });
 }
 
-const CHAVE_CHAT_STIVE = "stive-chat";
+function usuarioStive() {
+  return (document.body.dataset.usuario || "").trim().toLowerCase() || "anon";
+}
+
+function chaveChatStive() {
+  return `stive-chat:${usuarioStive()}`;
+}
+
+function chaveVisualStive() {
+  return `stive-visual:${usuarioStive()}`;
+}
 
 function lerChatStive() {
   try {
-    const bruto = JSON.parse(sessionStorage.getItem(CHAVE_CHAT_STIVE) || "[]");
+    sessionStorage.removeItem("stive-chat");
+    const bruto = JSON.parse(sessionStorage.getItem(chaveChatStive()) || "[]");
     return Array.isArray(bruto) ? bruto.filter((item) => item && item.papel && item.texto).slice(-80) : [];
   } catch (erro) {
     return [];
@@ -2342,7 +2581,7 @@ function lerChatStive() {
 
 function gravarChatStive(lista) {
   try {
-    sessionStorage.setItem(CHAVE_CHAT_STIVE, JSON.stringify((lista || []).slice(-80)));
+    sessionStorage.setItem(chaveChatStive(), JSON.stringify((lista || []).slice(-80)));
   } catch (erro) {}
 }
 
@@ -2440,7 +2679,10 @@ function iniciarBalao() {
     const visual = dados.visual || {};
     const grafico = visual.tipo === "barras" || visual.tipo === "linha" || visual.tipo === "rosca";
     if (grafico || visual.itens) {
-      try { sessionStorage.setItem("stive-visual", JSON.stringify(visual)); } catch (erro) {}
+      try {
+        sessionStorage.removeItem("stive-visual");
+        sessionStorage.setItem(chaveVisualStive(), JSON.stringify(visual));
+      } catch (erro) {}
     }
     const fala = `${dados.fala || "Não consegui consultar a base agora."}${grafico ? " Para ver o gráfico, abra a página do Agente Stive." : ""}`;
     acrescentarBolhaChat(chat, "stive", fala);

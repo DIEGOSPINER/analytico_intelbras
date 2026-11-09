@@ -252,6 +252,87 @@ def da_conta(documento: str) -> list[dict]:
     ]
 
 
+def atualizar_usuario_principal(documento: str, nome: str = "", email_novo: str = "", email_antigo: str = ""):
+    """Atualiza nome/e-mail do usuário principal da conta (gestão admin)."""
+    digitos = _digitos(documento)
+    novo = str(email_novo or "").strip().lower()
+    antigo = str(email_antigo or "").strip().lower()
+    if novo and not email_valido(novo):
+        raise ValueError("Informe um e-mail válido.")
+    dados = _ler()
+    if novo and antigo and novo != antigo:
+        for item in dados["usuarios"]:
+            if str(item.get("email") or "").strip().lower() == novo and _digitos(item.get("documento")) != digitos:
+                raise ValueError("Este e-mail já está em uso.")
+    alterou = False
+    for item in dados["usuarios"]:
+        if _digitos(item.get("documento")) != digitos:
+            continue
+        atual = str(item.get("email") or "").strip().lower()
+        if antigo and atual != antigo:
+            continue
+        if nome:
+            item["nome"] = nome.strip()
+            alterou = True
+        if novo and atual == (antigo or atual):
+            item["email"] = novo
+            alterou = True
+            break
+    if alterou:
+        _gravar(dados)
+
+
+def resetar_senha(documento: str, email: str = "") -> dict:
+    """Gera senha provisória para um usuário da conta e exige troca no próximo acesso."""
+    import secrets
+    import string
+
+    digitos = _digitos(documento)
+    if not digitos:
+        raise ValueError("Informe o CPF ou CNPJ da conta.")
+    da_conta_lista = [
+        item for item in listar()
+        if _digitos(item.get("documento")) == digitos
+    ]
+    if not da_conta_lista:
+        raise ValueError("Esta conta ainda não tem usuário de acesso.")
+    procurado = str(email or "").strip().lower()
+    alvo = None
+    if procurado:
+        for item in da_conta_lista:
+            if str(item.get("email") or "").strip().lower() == procurado:
+                alvo = item
+                break
+        if alvo is None:
+            raise ValueError("E-mail não encontrado nesta conta.")
+    else:
+        from cadastro import cliente_por_documento
+
+        cliente = cliente_por_documento(digitos) or {}
+        email_conta = str(cliente.get("email") or "").strip().lower()
+        for item in da_conta_lista:
+            if str(item.get("email") or "").strip().lower() == email_conta:
+                alvo = item
+                break
+        if alvo is None:
+            alvo = da_conta_lista[0]
+    senha = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12))
+    dados = _ler()
+    for item in dados["usuarios"]:
+        if str(item.get("email") or "").strip().lower() == str(alvo.get("email") or "").strip().lower():
+            item["senha_hash"] = gerar_hash(senha)
+            item["trocar_no_acesso"] = True
+            alvo = item
+            break
+    _gravar(dados)
+    return {
+        "email": alvo.get("email") or "",
+        "nome": alvo.get("nome") or "",
+        "documento": digitos,
+        "senha": senha,
+    }
+
+
 def emitir_cookie(usuario: dict, segredo: str) -> str:
     corpo = {
         "email": usuario["email"],

@@ -92,7 +92,7 @@ def dados(portal, sessao: dict, dados_json: Callable) -> tuple[int, dict]:
     return 200, payload
 
 
-def stive(portal, sessao: dict, pergunta: str) -> tuple[int, dict]:
+def stive(portal, sessao: dict, pergunta: str, resumo: dict | None = None) -> tuple[int, dict]:
     from agente.stive import responder
     import cadastro
     from custos.estimativa import registrar_envio
@@ -103,8 +103,15 @@ def stive(portal, sessao: dict, pergunta: str) -> tuple[int, dict]:
     if not texto:
         return 400, {"ok": False, "erro": "Informe a pergunta."}
     documento = sessao.get("documento") or ""
+    base = resumo if isinstance(resumo, dict) else portal.resumo()
     try:
-        saida = responder(documento, texto, portal.resumo())
+        saida = responder(
+            documento,
+            texto,
+            base,
+            email=sessao.get("email") or "",
+            perfil=sessao.get("perfil") or "",
+        )
     except ValueError as exc:
         return 200, {"ok": True, "fala": str(exc), "visual": {}}
     except Exception:

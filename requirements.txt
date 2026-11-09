@@ -6,5 +6,6 @@ rapidocr-onnxruntime
 onnxruntime
 folium
 psycopg[binary]
+psutil
 fastapi
 uvicorn

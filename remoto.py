@@ -65,6 +65,9 @@ nav a.ativo, nav a:hover { color: var(--texto); background: rgba(76, 141, 255, 0
 .topo h1 { margin: 0; font-size: 28px; font-weight: 600; }
 .topo p { margin: 4px 0 0; color: var(--mudo); font-size: 15px; }
 main { padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 22px; }
+.acoes-gestao { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.acoes-gestao form { margin: 0; display: inline; }
+.acoes-gestao button { padding: 8px 12px; font-size: 13px; }
 .cartoes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 0; }
 .cartao, .painel, .video, figure { background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); backdrop-filter: blur(10px); }
@@ -122,6 +125,13 @@ iframe#mapa { height: 520px; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
 main[data-tela="inicio"] .cartao span svg { width: 40px; height: 40px; }
 main[data-tela="inicio"] .cartao strong { font-size: 40px; }
+.segmentador-portal { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: end; margin-bottom: 16px; }
+.segmentador-portal label { display: grid; gap: 6px; min-width: min(100%, 420px); flex: 1; color: var(--mudo); font-size: 13px; }
+.segmentador-portal select { width: 100%; }
+.segmentador-portal .estado { margin: 0; color: var(--ciano); font-size: 14px; }
+.faixa-vista { position: sticky; top: 0; z-index: 12; margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; border: 1px solid rgba(76,141,255,.35); background: rgba(76,141,255,.12); color: #dce8ff; font-size: 14px; display: none; }
+.faixa-vista.ativa { display: block; }
+.faixa-vista a { color: var(--ciano); }
 .cartao.cor-serie span { color: var(--cor-serie) !important; }
 .cartao.cor-serie span svg { stroke: var(--cor-serie) !important; }
 .cartao.cor-serie strong { color: var(--cor-serie) !important; }
@@ -289,6 +299,29 @@ def slug_camera(nome: str) -> str:
     return texto.strip("-").lower() or "camera"
 
 
+_ARQUIVO_VISTAS = Path("vista_admin.json")
+
+
+def _ler_vistas_disco() -> dict:
+    if not _ARQUIVO_VISTAS.exists():
+        return {}
+    try:
+        bruto = json.loads(_ARQUIVO_VISTAS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return bruto if isinstance(bruto, dict) else {}
+
+
+def _gravar_vistas_disco(mapa: dict):
+    try:
+        _ARQUIVO_VISTAS.write_text(
+            json.dumps(mapa, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 class Portal:
     def __init__(self, senha: str, host: str = "127.0.0.1", porta: int = 8787):
         self.senha = senha
@@ -302,6 +335,10 @@ class Portal:
         self._cameras = []
         self._acervo = None
         self._httpd = None
+        self._vistas_admin = {
+            str(k).strip().lower(): str(v or "").strip()
+            for k, v in _ler_vistas_disco().items()
+        }
 
     def ligar_acervo(self, acervo):
         self._acervo = acervo
@@ -351,13 +388,46 @@ class Portal:
             token = _cookie(cabecalho)
         return acesso.ler_cookie(token, self.senha)
 
+    def ler_vista(self, email: str) -> str:
+        chave = str(email or "").strip().lower()
+        with self._trava:
+            return str(self._vistas_admin.get(chave) or "")
+
+    def definir_vista(self, email: str, documento: str = "") -> str:
+        """Admin: '' = geral, '__admin__' = só câmeras do admin, senão CPF/CNPJ do cliente."""
+        chave = str(email or "").strip().lower()
+        valor = str(documento or "").strip()
+        if valor not in ("", "__admin__"):
+            valor = "".join(c for c in valor if c.isdigit())
+        with self._trava:
+            if not chave:
+                return ""
+            if not valor:
+                self._vistas_admin.pop(chave, None)
+            else:
+                self._vistas_admin[chave] = valor
+            _gravar_vistas_disco(dict(self._vistas_admin))
+            return valor
+
     def iniciar(self):
         tratador = _tratador(self)
         self._httpd = ThreadingHTTPServer((self.host, self.porta), tratador)
         self._httpd.daemon_threads = True
         threading.Thread(target=self._httpd.serve_forever, name="acesso-remoto", daemon=True).start()
+        try:
+            import monitor_sistema
+
+            monitor_sistema.iniciar()
+        except Exception as exc:
+            print(f"Monitor de sistema não iniciado: {exc}")
 
     def parar(self):
+        try:
+            import monitor_sistema
+
+            monitor_sistema.parar()
+        except Exception:
+            pass
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd = None
@@ -448,50 +518,76 @@ _ICONES = {
     "mais": "<path d='M12 5v14M5 12h14'/>",
     "stive": "<circle cx='12' cy='8' r='3'/><path d='M6 19c1-3 3-4.5 6-4.5s5 1.5 6 4.5'/><path d='M18 5c1.5 1.2 2 2.6 2 4'/>",
     "audio": "<path d='M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4'/>",
+    "sistema": "<rect x='3' y='4' width='18' height='14' rx='2'/><path d='M7 20h10M12 18v2'/><path d='M7 9h2M11 9h2M15 9h2M7 13h10'/>",
 }
 
 
 def _menu(ativo: str, perfil: str = "") -> str:
-    itens = [
+    # Usuário (CPF/CNPJ): painéis + cadastros da própria conta.
+    # Administrador: + gestão e monitoramento de armazenamento/sistema.
+    navegacao = [
         ("/", "Início", "inicio"),
         ("/painel/1", "Contagens", "contagem"),
         ("/painel/2", "Comportamento", "pessoa"),
         ("/painel/3", "Alertas de RF e LPR", "alerta"),
         ("/painel/4", "Mapas", "mapa"),
         ("/painel/risco", "Detector de risco", "alerta"),
-        ("/painel/audio", "Áudio e transcrição", "audio"),
-        ("/painel/cameras", "Ao vivo", "camera"),
-        ("/painel/stive", "Agente Stive", "stive"),
-        ("/gestao", "Gestão de ativos", "cliente"),
-        ("/cadastro/cliente", "Cliente", "cliente"),
-        ("/cadastro/cameras", "Câmeras", "camera"),
-        ("/cadastro/pessoas", "Pessoas", "pessoa"),
-        ("/cadastro/avisos", "Avisos", "aviso"),
-        ("/conta", "Conta", "conta"),
-        ("/sair", "Sair", "sair"),
     ]
-    partes = ["<p class='grupo'>Navegação</p><nav>"]
-    for href, titulo, icone in itens:
-        if href == "/gestao" and perfil != "administrador":
-            continue
-        if href == "/gestao" or (href == "/cadastro/cliente" and perfil != "administrador"):
-            partes.append("<p class='grupo'>Conta</p>")
-        classe = " class='ativo'" if href == ativo else ""
-        selos = {
-            "/painel/stive": "<i id='selo-stive' class='selo' hidden></i>",
-            "/painel/3": "<i id='selo-alertas' class='selo' hidden></i>",
-            "/painel/risco": "<i id='selo-risco' class='selo' hidden></i>",
-            "/painel/audio": "<i id='selo-audio' class='selo' hidden></i>",
-        }
-        selo = selos.get(href, "")
-        partes.append(
-            f"<a href='{href}'{classe}>{_svg(_ICONES[icone])}<span>{titulo}</span>{selo}</a>"
-        )
+    # Áudio e transcrição: somente administrador (cliente usa a IA de áudio sem ver a página).
+    if perfil == "administrador":
+        navegacao.append(("/painel/audio", "Áudio e transcrição", "audio"))
+    navegacao.extend([
+        ("/painel/stive", "Agente Stive", "stive"),
+        ("/painel/cameras", "Ao vivo", "camera"),
+    ])
+    grupos = [
+        ("Navegação", navegacao),
+        ("Cadastros", [
+            ("/cadastro/cameras", "Câmeras", "camera"),
+            ("/cadastro/pessoas", "Pessoas", "pessoa"),
+            ("/cadastro/avisos", "Avisos", "aviso"),
+        ]),
+        ("Conta", [
+            ("/conta", "Conta", "conta"),
+            ("/sair", "Sair", "sair"),
+        ]),
+    ]
+    if perfil == "administrador":
+        grupos.insert(2, ("Administração", [
+            ("/gestao", "Gestão de ativos", "cliente"),
+            ("/cadastro/cliente", "Cliente", "cliente"),
+            ("/sistema", "Armazenamento e sistema", "sistema"),
+        ]))
+    partes = ["<nav>"]
+    selos = {
+        "/painel/stive": "<i id='selo-stive' class='selo' hidden></i>",
+        "/painel/3": "<i id='selo-alertas' class='selo' hidden></i>",
+        "/painel/risco": "<i id='selo-risco' class='selo' hidden></i>",
+        "/painel/audio": "<i id='selo-audio' class='selo' hidden></i>",
+    }
+    for titulo_grupo, itens in grupos:
+        partes.append(f"<p class='grupo'>{titulo_grupo}</p>")
+        for href, titulo, icone in itens:
+            classe = " class='ativo'" if href == ativo else ""
+            selo = selos.get(href, "")
+            partes.append(
+                f"<a href='{href}'{classe}>{_svg(_ICONES[icone])}<span>{titulo}</span>{selo}</a>"
+            )
     partes.append("</nav>")
     return "".join(partes)
 
 
-def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: str = "", csrf: str = "") -> str:
+def _moldura(
+    titulo: str,
+    miolo: str,
+    ativo: str,
+    parede: bool = False,
+    perfil: str = "",
+    csrf: str = "",
+    usuario: str = "",
+    documento: str = "",
+    vista: str = "",
+) -> str:
     classe = " parede" if parede else ""
     balao = ""
     if csrf and ativo != "/painel/stive":
@@ -520,13 +616,13 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
 <title>{_html_seguro(titulo)}</title>
 <style>{ESTILO}</style>
 </head>
-<body>
+<body data-usuario="{_html_seguro(usuario)}" data-perfil="{_html_seguro(perfil)}" data-documento="{_html_seguro(documento)}" data-csrf="{_html_seguro(csrf)}" data-vista="{_html_seguro(vista)}">
 <div class="app">
 <aside>
 <div class="marca"><span class="logo">C</span><div><strong>C4ISTAR</strong><small>Monitor</small></div></div>
 {_menu(ativo, perfil)}
 </aside>
-<section class="palco{classe}">{miolo}</section>
+<section class="palco{classe}"><div id="faixa-vista" class="faixa-vista" hidden></div>{miolo}</section>
 </div>
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
@@ -536,6 +632,20 @@ def _moldura(titulo: str, miolo: str, ativo: str, parede: bool = False, perfil: 
 </html>"""
 
 
+def _sessao_ui(sessao: dict | None, portal: Portal | None = None) -> dict:
+    sessao = sessao or {}
+    vista = ""
+    if portal is not None and (sessao.get("perfil") or "") == "administrador":
+        vista = portal.ler_vista(sessao.get("email") or "")
+    return {
+        "perfil": sessao.get("perfil") or "",
+        "csrf": sessao.get("csrf") or "",
+        "usuario": sessao.get("email") or "",
+        "documento": sessao.get("documento") or "",
+        "vista": vista,
+    }
+
+
 def _cabeca(titulo: str, texto: str) -> str:
     return (
         f"<header class='topo'><div><h1>{_html_seguro(titulo)}</h1>"
@@ -543,12 +653,62 @@ def _cabeca(titulo: str, texto: str) -> str:
     )
 
 
-def _inicio(sessao: dict) -> str:
+def _opcoes_vista_admin() -> list[dict]:
+    saida = [
+        {"valor": "", "rotulo": "Geral (toda a instalação)"},
+        {"valor": "__admin__", "rotulo": "Somente câmeras do administrador"},
+    ]
+    for item in cadastro.listar_clientes():
+        doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
+        if not doc or doc == "".join(c for c in str(cadastro.DOCUMENTO_ADMIN) if c.isdigit()):
+            continue
+        nome = str(item.get("nome") or "") or doc
+        ativo = item.get("ativo") is not False
+        saida.append({
+            "valor": doc,
+            "rotulo": f"{nome} · {doc}" + ("" if ativo else " (inativo)"),
+        })
+    return saida
+
+
+def _info_vista_admin(portal: Portal, sessao: dict) -> dict:
+    atual = portal.ler_vista(sessao.get("email") or "")
+    if not atual:
+        modo, rotulo = "geral", "Geral (toda a instalação)"
+    elif atual == "__admin__":
+        modo, rotulo = "admin", "Somente câmeras do administrador"
+    else:
+        modo = "cliente"
+        cli = cadastro.cliente_por_documento(atual) or {}
+        rotulo = f"{cli.get('nome') or atual} · {atual}"
+    return {
+        "valor": atual,
+        "modo": modo,
+        "rotulo": rotulo,
+        "opcoes": _opcoes_vista_admin(),
+    }
+
+
+def _escopo_analise(portal: Portal, sessao: dict) -> tuple[str, str]:
+    """Documento/perfil usados nos painéis. Admin pode segmentar a vista do portal."""
+    perfil = sessao.get("perfil") or ""
+    documento = sessao.get("documento") or ""
+    if perfil != "administrador":
+        return documento, perfil
+    vista = portal.ler_vista(sessao.get("email") or "")
+    if not vista:
+        return "", "administrador"
+    if vista == "__admin__":
+        return cadastro.DOCUMENTO_ADMIN, "usuario"
+    return vista, "usuario"
+
+
+def _inicio(sessao: dict, portal: Portal | None = None) -> str:
     miolo = _cabeca(
         "Dashboard",
         f"{_html_seguro(sessao.get('email') or '')} · {_html_seguro(_documento_visivel(sessao.get('documento') or ''))}",
     ) + "<main id='tela' data-tela='inicio'></main>"
-    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("C4ISTAR MONITOR", miolo, "/", **_sessao_ui(sessao, portal))
 
 
 def _ranking_html() -> str:
@@ -585,7 +745,7 @@ setInterval(ranking, 1000);
 </script>"""
 
 
-def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "", csrf: str = "") -> str:
+def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
     telas = {"1": "contagens", "2": "comportamento", "3": "alertas", "4": "mapas"}
     comandos = ""
     if mapas:
@@ -598,15 +758,21 @@ def _painel(numero: str, titulo: str, chave: str, mapas: bool, perfil: str = "",
 <button type="button" data-desenho="mancha">{_svg(_ICONES["mapa"])}Mancha</button>
 </div>"""
     miolo = _cabeca(titulo, "Os quadros seguem o mesmo padrão da tela de início.") + comandos + f"<main id='tela' data-tela='{telas[numero]}'></main>"
-    return _moldura(f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}", perfil=perfil, csrf=csrf)
+    return _moldura(
+        f"C4ISTAR MONITOR · {titulo}", miolo, f"/painel/{numero}",
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+    )
 
 
-def _risco(perfil: str = "", csrf: str = "") -> str:
+def _risco(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
     miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
-    return _moldura("C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco", perfil=perfil, csrf=csrf)
+    return _moldura(
+        "C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco",
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+    )
 
 
-def _audio(perfil: str = "", csrf: str = "") -> str:
+def _audio(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
     miolo = (
         _cabeca(
             "Áudio e transcrição",
@@ -614,10 +780,13 @@ def _audio(perfil: str = "", csrf: str = "") -> str:
         )
         + "<main id='tela' data-tela='audio'></main>"
     )
-    return _moldura("C4ISTAR MONITOR · Áudio e transcrição", miolo, "/painel/audio", perfil=perfil, csrf=csrf)
+    return _moldura(
+        "C4ISTAR MONITOR · Áudio e transcrição", miolo, "/painel/audio",
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+    )
 
 
-def _ao_vivo(cameras, perfil: str = "", csrf: str = "") -> str:
+def _ao_vivo(cameras, perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
     blocos = []
     for slug, nome, rua in cameras:
         legenda = _html_seguro(f"{nome} {rua}".strip())
@@ -625,29 +794,46 @@ def _ao_vivo(cameras, perfil: str = "", csrf: str = "") -> str:
             f"<figure class='video' data-camera='{_html_seguro(nome)}'>"
             f"<figcaption>{_svg(_ICONES['camera'])}{legenda}</figcaption>"
             f"<img alt='{legenda}' src='/video/camera-{_html_seguro(slug)}'>"
-            f"<div class='placar-camera'></div></figure>"
+            f"</figure>"
         )
-    grade = "".join(blocos) or "<p>Nenhuma câmera com imagem agora.</p>"
-    miolo = _cabeca("Ao vivo", "O placar mostra a cena agora e o acumulado de cada câmera.") + f"<main data-tela='vivo'><section class='grade'>{grade}</section></main>"
-    return _moldura("C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras", perfil=perfil, csrf=csrf)
+    grade = "".join(blocos) or (
+        "<p>Nenhuma câmera nesta conta. Cadastre em <a class='texto' href='/cadastro/cameras'>Câmeras</a> "
+        "ou aguarde a análise local desta conta.</p>"
+    )
+    miolo = (
+        _cabeca("Ao vivo", "Só aparecem as câmeras do CPF/CNPJ com o qual você entrou.")
+        + f"<main id='tela' data-tela='vivo'><section class='grade'>{grade}</section></main>"
+    )
+    return _moldura(
+        "C4ISTAR MONITOR · Ao vivo", miolo, "/painel/cameras",
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento,
+    )
 
 
-def _stive(sessao: dict) -> str:
+def _stive(sessao: dict, portal: Portal | None = None) -> str:
     script = """
 <script>
-const CHAVE_CHAT = "stive-chat";
 const chat = document.getElementById("chat-stive");
 const quadro = document.getElementById("quadro-stive");
 const form = document.getElementById("form-stive");
 const SAUDACAO = "Posso cruzar pessoa, horário e local como analista criminal. Pergunte a chance de invasão, padrões de madrugada, ou me conte uma ocorrência.";
+function chaveChatStive() {
+  const u = (document.body.dataset.usuario || "").trim().toLowerCase() || "anon";
+  return "stive-chat:" + u;
+}
+function chaveVisualStive() {
+  const u = (document.body.dataset.usuario || "").trim().toLowerCase() || "anon";
+  return "stive-visual:" + u;
+}
 function lerHistorico() {
   try {
-    const bruto = JSON.parse(sessionStorage.getItem(CHAVE_CHAT) || "[]");
+    sessionStorage.removeItem("stive-chat");
+    const bruto = JSON.parse(sessionStorage.getItem(chaveChatStive()) || "[]");
     return Array.isArray(bruto) ? bruto.filter((item) => item && item.papel && item.texto).slice(-80) : [];
   } catch (erro) { return []; }
 }
 function gravarHistorico(lista) {
-  try { sessionStorage.setItem(CHAVE_CHAT, JSON.stringify((lista || []).slice(-80))); } catch (erro) {}
+  try { sessionStorage.setItem(chaveChatStive(), JSON.stringify((lista || []).slice(-80))); } catch (erro) {}
 }
 function bolha(papel, texto, gravar) {
   const p = document.createElement("p");
@@ -688,20 +874,59 @@ function desenharVisual(visual) {
     }));
     if (tipo === "rosca" && typeof roscaLivre === "function") roscaLivre(canvas, serie);
     else if (typeof barrasVerticais === "function") barrasVerticais(canvas, serie);
-    try { sessionStorage.setItem("stive-visual", JSON.stringify(visual)); } catch (erro) {}
+    try { sessionStorage.setItem(chaveVisualStive(), JSON.stringify(visual)); } catch (erro) {}
     return;
   }
   quadro.innerHTML = "<h2>" + titulo.replace(/[&<>]/g, "") + "</h2>" + (itens.map((item) =>
     "<div class='linha-face'><span>" + String(item.rotulo || "") + "</span><strong>" + String(item.total ?? "") + "</strong></div>"
   ).join("") || "<p>O quadro acompanha o que você pedir na conversa.</p>");
-  try { sessionStorage.setItem("stive-visual", JSON.stringify(visual || {})); } catch (erro) {}
+  try { sessionStorage.setItem(chaveVisualStive(), JSON.stringify(visual || {})); } catch (erro) {}
 }
-window.addEventListener("load", () => {
+function limparQuadro() {
+  if (!quadro) return;
+  quadro.innerHTML = "<h2>Quadro do Stive</h2><p>O que você pedir na conversa aparece aqui.</p>";
+  try {
+    sessionStorage.removeItem("stive-visual");
+    sessionStorage.removeItem(chaveVisualStive());
+  } catch (erro) {}
+}
+window.addEventListener("load", async () => {
+  let visualServidor = null;
+  try {
+    const resp = await fetch("/agente/stive/historico.json");
+    if (resp.ok) {
+      const pacote = await resp.json();
+      if (Array.isArray(pacote.itens) && pacote.itens.length) {
+        gravarHistorico(pacote.itens.map((item) => ({ papel: item.papel, texto: item.texto })));
+      }
+      if (pacote.visual && typeof pacote.visual === "object") visualServidor = pacote.visual;
+    }
+  } catch (erro) {}
   restaurarChat();
   try {
-    const salvo = sessionStorage.getItem("stive-visual");
-    if (salvo) desenharVisual(JSON.parse(salvo));
-  } catch (erro) {}
+    sessionStorage.removeItem("stive-visual");
+    const temItens = visualServidor && Array.isArray(visualServidor.itens) && visualServidor.itens.length;
+    if (temItens) desenharVisual(visualServidor);
+    else limparQuadro();
+  } catch (erro) { limparQuadro(); }
+  const caixaAdmin = document.getElementById("historico-stive-admin");
+  if (caixaAdmin && document.body.dataset.perfil === "administrador") {
+    try {
+      const resp = await fetch("/agente/stive/historico.json?todos=1");
+      if (!resp.ok) return;
+      const pacote = await resp.json();
+      const itens = Array.isArray(pacote.itens) ? pacote.itens : [];
+      if (!itens.length) {
+        caixaAdmin.innerHTML = "<p>Ainda não há conversas registradas.</p>";
+        return;
+      }
+      caixaAdmin.innerHTML = itens.map((item) => {
+        const quem = item.email || item.origem || "usuário";
+        const papel = item.papel === "eu" ? "Usuário" : "Stive";
+        return "<div class='linha-face'><span>" + String(quem) + " · " + papel + "</span><strong>" + String(item.texto || "").slice(0, 240) + "</strong></div>";
+      }).join("");
+    } catch (erro) {}
+  }
 });
 form.addEventListener("submit", async (evento) => {
   evento.preventDefault();
@@ -767,16 +992,25 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 <button type="submit">Enviar</button>
 </form>
 </section>
+{('<section class="cartao"><h2>Histórico de todos os usuários</h2><div id="historico-stive-admin"><p>Carregando…</p></div></section>' if (sessao.get('perfil') or '') == 'administrador' else '')}
 </div>
 </main>
 {script}"""
-    return _moldura("Agente Stive · C4ISTAR MONITOR", miolo, "/painel/stive", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("Agente Stive · C4ISTAR MONITOR", miolo, "/painel/stive", **_sessao_ui(sessao, portal))
 
 
-def _sem_analise(perfil: str = "", csrf: str = "") -> str:
+def _sem_analise(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "") -> str:
     miolo = """<header class="topo"><div><h1>Painéis</h1>
 <p>As câmeras em análise nesta máquina pertencem a outro CPF. O seu cadastro continua disponível.</p></div></header>"""
-    return _moldura("C4ISTAR MONITOR", miolo, "/", perfil=perfil, csrf=csrf)
+    return _moldura(
+        "C4ISTAR MONITOR",
+        miolo,
+        "/",
+        perfil=perfil,
+        csrf=csrf,
+        usuario=usuario,
+        documento=documento,
+    )
 
 
 def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool = False) -> str:
@@ -839,7 +1073,7 @@ classe.addEventListener("change", filtrarMotivo);
 filtrarMotivo();
 </script>
 </main>"""
-    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas", **_sessao_ui(sessao))
 
 
 def _aviso_html(texto: str, ok: bool = False) -> str:
@@ -988,7 +1222,7 @@ window.addEventListener("load", () => {{
 </form>
 {novo}
 </main>"""
-    return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("Cliente · C4ISTAR MONITOR", miolo, "/cadastro/cliente", **_sessao_ui(sessao))
 
 
 def _gestao(sessao: dict, portal, aviso: str = "", ok: bool = False) -> str:
@@ -1019,27 +1253,78 @@ def _gestao(sessao: dict, portal, aviso: str = "", ok: bool = False) -> str:
             f"<td>{_html_seguro(item.get('email'))}</td>"
             f"<td>{item.get('cameras')}</td>"
             f"<td>{estado}</td>"
-            "<td>"
+            "<td class='acoes-gestao'>"
+            f"<a class='texto' href='/gestao/editar?documento={documento}'>Editar</a>"
+            f"<form method='post' action='/gestao/reset-senha'>{_csrf(sessao)}"
+            f"<input type='hidden' name='documento' value='{documento}'>"
+            "<button type='submit'>Reset senha</button></form>"
             f"<form method='post' action='/gestao/{acao}'>{_csrf(sessao)}"
             f"<input type='hidden' name='documento' value='{documento}'>"
             f"<button type='submit'>{acao.capitalize()}</button></form>"
-            f"<form method='post' action='/gestao/excluir'>{_csrf(sessao)}"
+            f"<form method='post' action='/gestao/excluir' onsubmit=\"return confirm('Excluir este cliente?');\">{_csrf(sessao)}"
             f"<input type='hidden' name='documento' value='{documento}'>"
             "<button type='submit'>Excluir</button></form>"
             "</td></tr>"
         )
     tabela = (
-        "<table><tr><th>Cliente</th><th>Documento</th><th>E-mail</th><th>Câmeras</th><th></th><th></th></tr>"
+        "<table><tr><th>Cliente</th><th>Documento</th><th>E-mail</th><th>Câmeras</th><th>Status</th><th>Ações</th></tr>"
         + "".join(linhas) + "</table>"
     ) if linhas else "<p>Nenhum cliente cadastrado.</p>"
     miolo = f"""<main>
 <h1>Gestão de ativos</h1>
-<p>Visão de todas as contas. A análise desta máquina continua na conta do administrador.</p>
+<p>Visão de todas as contas. Edite dados, reenvie senha provisória por e-mail, ative ou exclua clientes.</p>
 {_aviso_html(aviso, ok)}
 <section class="cartoes">{cards}</section>
 {tabela}
 </main>"""
-    return _moldura("Gestão de ativos · C4ISTAR MONITOR", miolo, "/gestao", perfil="administrador", csrf=sessao.get("csrf") or "")
+    return _moldura("Gestão de ativos · C4ISTAR MONITOR", miolo, "/gestao", **{**_sessao_ui(sessao), "perfil": "administrador"})
+
+
+def _gestao_editar(sessao: dict, documento: str, aviso: str = "", ok: bool = False) -> str:
+    cliente = cadastro.cliente_por_documento(documento) or {}
+    if not cliente:
+        miolo = "<main><p class='aviso'>Cliente não encontrado.</p><p><a class='texto' href='/gestao'>Voltar</a></p></main>"
+        return _moldura(
+            "Gestão de ativos · C4ISTAR MONITOR",
+            miolo,
+            "/gestao",
+            **{**_sessao_ui(sessao), "perfil": "administrador"},
+        )
+    usuarios = acesso.da_conta(documento)
+    opcoes = "".join(
+        f"<option value='{_html_seguro(item.get('email') or '')}'>{_html_seguro(item.get('nome') or item.get('email') or '')} · {_html_seguro(item.get('email') or '')}</option>"
+        for item in usuarios
+    ) or f"<option value='{_html_seguro(cliente.get('email') or '')}'>{_html_seguro(cliente.get('email') or '')}</option>"
+    miolo = f"""<main>
+<h1>Editar cliente</h1>
+<p><a class="texto" href="/gestao">← Voltar à gestão</a></p>
+{_aviso_html(aviso, ok)}
+<form method="post" action="/gestao/editar">
+{_csrf(sessao)}
+<input type="hidden" name="documento_atual" value="{_html_seguro(cliente.get('documento') or documento)}">
+{_campo("Nome", "nome", cliente.get("nome") or "")}
+{_campo("RG", "rg", cliente.get("rg") or "")}
+{_campo("CPF ou CNPJ", "documento", _documento_visivel(cliente.get("documento") or ""), obrigatorio=True)}
+{_campo("E-mail da conta", "email", cliente.get("email") or "", tipo="email", obrigatorio=True)}
+<button type="submit">{_svg(_ICONES["mais"])}Salvar alterações</button>
+</form>
+<h2>Reset de senha</h2>
+<p>Gera senha provisória e envia ao e-mail escolhido. No próximo acesso a troca será obrigatória.</p>
+<form method="post" action="/gestao/reset-senha">
+{_csrf(sessao)}
+<input type="hidden" name="documento" value="{_html_seguro(cliente.get('documento') or documento)}">
+<label>Usuário / e-mail
+<select name="email">{opcoes}</select>
+</label>
+<button type="submit">Enviar reset de senha</button>
+</form>
+</main>"""
+    return _moldura(
+        "Editar cliente · C4ISTAR MONITOR",
+        miolo,
+        "/gestao",
+        **{**_sessao_ui(sessao), "perfil": "administrador"},
+    )
 
 
 def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: str = "", ok: bool = False) -> str:
@@ -1096,7 +1381,7 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 <button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>
 </form>
 </main>"""
-    return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras", **_sessao_ui(sessao))
 
 
 def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = False) -> str:
@@ -1146,7 +1431,83 @@ def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = 
 <button type="submit">{_svg(_ICONES["mais"])}Salvar aviso</button>
 </form>
 </main>"""
-    return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("Avisos · C4ISTAR MONITOR", miolo, "/cadastro/avisos", **_sessao_ui(sessao))
+
+
+def _sistema(sessao: dict) -> str:
+    miolo = _cabeca(
+        "Armazenamento e sistema",
+        "Monitoramento do host, segmentação por cliente, tokens/custos GPT e preparação para espaço em nuvem. Somente administrador.",
+    ) + "<main id='tela' data-tela='sistema'></main>"
+    return _moldura(
+        "Sistema · C4ISTAR MONITOR",
+        miolo,
+        "/sistema",
+        **_sessao_ui(sessao),
+    )
+
+
+def _sistema_json(documento_filtro: str = "") -> dict:
+    """Pacote admin: host + filtro por cliente + custos GPT + placeholder de nuvem."""
+    import monitor_sistema
+
+    digitos = "".join(c for c in str(documento_filtro or "") if c.isdigit())
+    pacote = monitor_sistema.resumo()
+    clientes = []
+    for item in cadastro.listar_clientes():
+        doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
+        if not doc:
+            continue
+        clientes.append({
+            "documento": doc,
+            "nome": str(item.get("nome") or "") or doc,
+            "ativo": item.get("ativo") is not False,
+        })
+    clientes.sort(key=lambda c: (c.get("nome") or "").lower())
+
+    total_cams = 0
+    cams_cliente = 0
+    pessoas_cliente = 0
+    nome_cliente = ""
+    for item in cadastro.listar_clientes():
+        doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
+        nomes = cadastro.nomes_cameras_conta(doc) if doc else set()
+        total_cams += len(nomes)
+        if digitos and doc == digitos:
+            cams_cliente = len(nomes)
+            pessoas_cliente = len(item.get("pessoas") or [])
+            nome_cliente = str(item.get("nome") or "") or digitos
+
+    total_mb = float(pacote.get("total_armazenado_mb") or (pacote.get("agora") or {}).get("tabelas_mb") or 0)
+    mb_estimado = round(total_mb * (cams_cliente / total_cams), 2) if digitos and total_cams else (total_mb if not digitos else 0.0)
+
+    try:
+        from db import custos as ledger
+
+        financeiro = ledger.monitor_financeiro(digitos, dias=30)
+    except Exception as exc:
+        financeiro = {"erro": str(exc), "gpt_usd_diario": [], "gpt_tokens_diario": [], "por_cliente_mes": []}
+
+    return {
+        **pacote,
+        "filtro_documento": digitos,
+        "clientes": clientes,
+        "cliente": {
+            "documento": digitos,
+            "nome": nome_cliente,
+            "cameras": cams_cliente,
+            "pessoas": pessoas_cliente,
+            "mb_estimado_local": mb_estimado,
+            "monitoramento": bool(digitos),
+        } if digitos else None,
+        "custos": financeiro,
+        "nuvem": {
+            "status": "preparado",
+            "usado_mb": None,
+            "cota_mb": None,
+            "aviso": "Espaço em nuvem será medido por cliente quando o provedor estiver ligado.",
+        },
+    }
 
 
 def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
@@ -1158,6 +1519,7 @@ def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     miolo = f"""<main>
 <h1>Conta</h1>
 <p>Usuários deste CPF/CNPJ {_html_seguro(_documento_visivel(sessao.get("documento") or ""))}.</p>
+<p>Cada usuário navega em Início, Contagens, Comportamento, Alertas, Mapas, Detector de risco, Agente Stive e Ao vivo — somente com as câmeras deste CPF/CNPJ. Também acessa Cadastros (Câmeras, Pessoas, Avisos) e Conta. A detecção de áudio segue ativa no modelo; a página de áudio e transcrição fica só com o administrador.</p>
 <table><tr><th>Nome</th><th>E-mail</th></tr>{linhas}</table>
 {_aviso_html(aviso, ok)}
 <h2>Nova senha</h2>
@@ -1178,7 +1540,7 @@ def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 <button type="submit">{_svg(_ICONES["mais"])}Criar usuário</button>
 </form>
 </main>"""
-    return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta", perfil=sessao.get("perfil") or "", csrf=sessao.get("csrf") or "")
+    return _moldura("Conta · C4ISTAR MONITOR", miolo, "/conta", **_sessao_ui(sessao))
 
 
 def np_from(foto: bytes):
@@ -1274,7 +1636,172 @@ def _rastros_rf_lpr(nomes: dict) -> list[dict]:
 _CACHE_DADOS = {"quando": 0.0, "extra": None, "nomes_chave": ""}
 
 
-def _dados_json(portal) -> dict:
+_PERIODO_ZERO = {
+    "Pessoa": 0, "Veiculo": 0, "Animal": 0, "Objeto": 0,
+    "Comportamento": 0, "MatchFace": 0, "MatchPlaca": 0,
+}
+
+
+def _resumo_vazio_cliente(resumo: dict, documento: str = "") -> dict:
+    """Painéis do cliente sem câmeras/dados locais: cards zerados, sem alertas."""
+    base = dict(resumo or {})
+    zero = dict(_PERIODO_ZERO)
+    base.update({
+        "periodos": {
+            "dia": dict(zero),
+            "semana": dict(zero),
+            "mes": dict(zero),
+            "total": dict(zero),
+        },
+        "cameras_vivo": [],
+        "serie": [],
+        "serie_dias": [],
+        "dias_empilhados": [],
+        "horas": {},
+        "horas_prioridade": {},
+        "classes": [],
+        "classes_web": [],
+        "tipos": [],
+        "geo": [],
+        "riscos": {},
+        "pontos": [],
+        "app_linhas": [],
+        "cubo": [],
+        "pendencias": [],
+        "led": "branco",
+        "match": None,
+        "narracao": "",
+        "narracao_ia": "",
+        "historico": [],
+        "memorias": [],
+        "informes": [],
+        "insights": [],
+        "app": [],
+        "voz": "",
+        "audio": {"esteira": [], "alertas": [], "cameras": {}, "risco_aberto": 0},
+        "passagens": [],
+        "pessoas_interesse": [],
+        "rastros_rf": [],
+        "itens": 0,
+        "faces": 0,
+        "topo": 0,
+        "cameras": 0,
+        "resumo": "",
+        "assessoramento": "",
+        "aprendizado": "",
+        "relatorio": "",
+        "fonte_dados": "cliente",
+        "cliente_documento": documento or "",
+    })
+    return base
+
+
+def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
+    """Cliente só vê dados das próprias câmeras/CPF; nunca dados de outro documento."""
+    digitos = "".join(c for c in str(documento or "") if c.isdigit())
+    if perfil == "administrador" or not digitos:
+        saida = dict(resumo or {})
+        saida["cliente_documento"] = digitos or (saida.get("cliente_documento") or "")
+        saida["perfil_sessao"] = perfil or ""
+        return saida
+    permitidas = cadastro.nomes_cameras_conta(digitos)
+    em_analise = cadastro.eh_conta_em_analise(digitos)
+    if not em_analise or not permitidas:
+        vazio = _resumo_vazio_cliente(resumo, digitos)
+        vazio["perfil_sessao"] = perfil or ""
+        return vazio
+    vivo = [
+        item for item in (resumo.get("cameras_vivo") or [])
+        if (item.get("nome") or "") in permitidas
+    ]
+    if not vivo and not permitidas.intersection(
+        {(item.get("nome") or "") for item in (resumo.get("cameras_vivo") or [])}
+    ):
+        vazio = _resumo_vazio_cliente(resumo, digitos)
+        vazio["pessoas_interesse"] = list(resumo.get("pessoas_interesse") or [])
+        vazio["perfil_sessao"] = perfil or ""
+        return vazio
+    resumo = dict(resumo)
+    resumo["cameras_vivo"] = vivo
+    resumo["cameras"] = len(vivo)
+    audio = dict(resumo.get("audio") or {})
+    if audio.get("esteira"):
+        audio["esteira"] = [item for item in audio["esteira"] if (item.get("camera") or "") in permitidas]
+    if audio.get("alertas"):
+        audio["alertas"] = [item for item in audio["alertas"] if (item.get("camera") or "") in permitidas]
+    if isinstance(audio.get("cameras"), dict):
+        audio["cameras"] = {k: v for k, v in audio["cameras"].items() if k in permitidas}
+    audio["risco_aberto"] = len(audio.get("alertas") or [])
+    resumo["audio"] = audio
+    resumo["pendencias"] = [
+        item for item in (resumo.get("pendencias") or [])
+        if (item.get("camera") or "") in permitidas
+    ]
+    cubo = [item for item in (resumo.get("cubo") or []) if (item.get("c") or "") in permitidas]
+    resumo["cubo"] = cubo
+    if cubo:
+        totais = {}
+        for item in cubo:
+            classe = str(item.get("k") or "") or "Outro"
+            totais[classe] = totais.get(classe, 0) + int(item.get("n") or 0)
+        periodos = dict(resumo.get("periodos") or {})
+        periodos["total"] = totais
+        resumo["periodos"] = periodos
+    resumo["historico"] = [
+        item for item in (resumo.get("historico") or [])
+        if (item.get("camera") or "") in permitidas or not item.get("camera")
+    ]
+    resumo["geo"] = [
+        item for item in (resumo.get("geo") or [])
+        if (item.get("camera") or item.get("nome") or "") in permitidas
+    ]
+    resumo["informes"] = [
+        item for item in (resumo.get("informes") or [])
+        if "".join(c for c in str(item.get("documento") or "") if c.isdigit()) in ("", digitos)
+        and (not item.get("camera") or (item.get("camera") or "") in permitidas)
+    ]
+    resumo["insights"] = [
+        item for item in (resumo.get("insights") or [])
+        if "".join(c for c in str(item.get("documento") or "") if c.isdigit()) in ("", digitos)
+    ]
+    resumo["app_linhas"] = [
+        item for item in (resumo.get("app_linhas") or [])
+        if "".join(c for c in str(item.get("documento") or "") if c.isdigit()) in ("", digitos)
+    ]
+    resumo["led"] = "branco"
+    for camera in vivo:
+        risco = camera.get("risco") or "branco"
+        if {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}.get(risco, 0) > {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}.get(resumo["led"], 0):
+            resumo["led"] = risco
+    match = resumo.get("match")
+    if isinstance(match, dict) and (match.get("camera") or "") not in permitidas:
+        resumo["match"] = None
+        resumo["narracao"] = ""
+        resumo["narracao_ia"] = ""
+        resumo["voz"] = ""
+    resumo["cliente_documento"] = digitos
+    resumo["perfil_sessao"] = perfil or ""
+    return resumo
+
+
+def _cameras_ao_vivo(portal, documento: str, perfil: str) -> list:
+    cameras = list(portal.cameras() or [])
+    if perfil == "administrador":
+        return cameras
+    if not cadastro.eh_conta_em_analise(documento):
+        return []
+    permitidas = cadastro.nomes_cameras_conta(documento)
+    if not permitidas:
+        return []
+    return [item for item in cameras if (item.get("nome") or "") in permitidas]
+
+
+def _cameras_sessao(portal, sessao: dict) -> list:
+    doc, perfil = _escopo_analise(portal, sessao)
+    return _cameras_ao_vivo(portal, doc, perfil)
+
+
+def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
     import time
     from identidade import contar_passagens_faces
 
@@ -1284,6 +1811,13 @@ def _dados_json(portal) -> dict:
         interesse = cadastro.interesse_ativo() or {}
     except Exception:
         interesse = {}
+    # Interesse: admin vê o da instalação; usuário vê pessoas do próprio cadastro.
+    if perfil != "administrador" and documento:
+        try:
+            conta = cadastro.consultar(documento)
+            interesse = {"pessoas": list(conta.get("pessoas") or [])}
+        except Exception:
+            interesse = {"pessoas": []}
     for pessoa in interesse.get("pessoas") or []:
         ident = str(pessoa.get("face_id") or "").upper()
         if not ident:
@@ -1292,8 +1826,23 @@ def _dados_json(portal) -> dict:
         classes[ident] = cadastro.classe_pessoa(pessoa)
 
     resumo = dict(portal.resumo())
+    # Cliente que não é a conta em análise nesta máquina: painéis vazios.
+    if perfil and perfil != "administrador" and documento and not cadastro.eh_conta_em_analise(documento):
+        vazio = _resumo_vazio_cliente(resumo, documento)
+        vazio["pessoas_interesse"] = [
+            {
+                "id": ident,
+                "nome": nomes.get(ident, ""),
+                "classe": classes.get(ident, ""),
+                "foto": f"/rosto/{ident}.jpg",
+                "total": 0,
+            }
+            for ident in nomes
+        ]
+        return vazio
+
     agora = time.time()
-    chave_nomes = ",".join(sorted(nomes))
+    chave_nomes = f"{perfil}|{documento}|" + ",".join(sorted(nomes))
     # Cache 2s das leituras pesadas (Postgres/CSV): o poll do portal é 1s.
     extra = _CACHE_DADOS.get("extra")
     if (
@@ -1426,7 +1975,7 @@ def _dados_json(portal) -> dict:
         "rastros_rf": extra["rastros_rf"],
         "fonte_dados": extra.get("fonte_dados") or (resumo.get("fonte_dados") or "csv"),
     })
-    return resumo
+    return _filtrar_resumo_conta(resumo, documento, perfil)
 
 
 def _tratador(portal: Portal):
@@ -1488,7 +2037,10 @@ def _tratador(portal: Portal):
                 self._html(_pagina_senha(), 200)
                 return
             if caminho != "/comando" and not _csrf_confere(sessao, campos):
-                self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Atualize a página e tente de novo.</p></main>", "/"), 403)
+                if caminho == "/vista" or caminho.startswith("/agente/"):
+                    self._json_status(403, {"ok": False, "erro": "Atualize a página e tente de novo."})
+                else:
+                    self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Atualize a página e tente de novo.</p></main>", "/"), 403)
                 return
             if caminho == "/comando":
                 if cadastro.pode_ver_analise(sessao.get("documento") or ""):
@@ -1512,6 +2064,12 @@ def _tratador(portal: Portal):
             if caminho in ("/gestao/ativar", "/gestao/inativar", "/gestao/excluir"):
                 self._gerir_cliente(sessao, campos, caminho.rsplit("/", 1)[-1])
                 return
+            if caminho == "/gestao/editar":
+                self._editar_cliente_gestao(sessao, campos)
+                return
+            if caminho == "/gestao/reset-senha":
+                self._reset_senha_gestao(sessao, campos)
+                return
             if caminho == "/cadastro/avisos":
                 self._salvar_aviso(sessao, campos)
                 return
@@ -1527,6 +2085,9 @@ def _tratador(portal: Portal):
             if caminho == "/conta/usuario":
                 self._criar_usuario(sessao, campos)
                 return
+            if caminho == "/vista":
+                self._definir_vista(sessao, campos)
+                return
             if caminho == "/agente/stive":
                 self._falar_stive(sessao, campos)
                 return
@@ -1538,42 +2099,121 @@ def _tratador(portal: Portal):
                 return
             self.send_error(404)
 
+        def _definir_vista(self, sessao: dict, campos: dict):
+            if (sessao.get("perfil") or "") != "administrador":
+                self._json_status(403, {"ok": False, "erro": "Somente o administrador segmenta a vista."})
+                return
+            valor = _um(campos, "documento") or _um(campos, "vista")
+            if valor not in ("", "__admin__"):
+                digitos = "".join(c for c in valor if c.isdigit())
+                if digitos == "".join(c for c in str(cadastro.DOCUMENTO_ADMIN) if c.isdigit()):
+                    valor = "__admin__"
+                elif cadastro.cliente_por_documento(digitos) is None:
+                    self._json_status(400, {"ok": False, "erro": "Cliente não encontrado."})
+                    return
+                else:
+                    valor = digitos
+            aplicado = portal.definir_vista(sessao.get("email") or "", valor)
+            self._json({
+                "ok": True,
+                "vista_portal": _info_vista_admin(portal, sessao),
+                "valor": aplicado,
+            })
+
         def _pagina_autenticada(self, caminho: str, consulta: dict, sessao: dict):
             documento = sessao.get("documento") or ""
             perfil = sessao.get("perfil") or ""
             if sessao.get("trocar_no_acesso") and caminho not in ("/conta", "/sair") and not caminho.startswith("/conta"):
-                self._html(_form_conta(sessao, "No primeiro acesso, troque a senha enviada por e-mail."), 200)
+                # Redireciona de verdade para /conta (antes a URL mudava e o HTML continuava em Conta).
+                self._redirecionar("/conta?ok=primeiro")
                 return
             ver = cadastro.pode_ver_analise(documento)
             if caminho == "/agente/stive.png":
                 self._avatar_stive()
                 return
+            if caminho == "/agente/stive/historico.json":
+                from agente.stive import historico as historico_stive
+                from agente.stive import visual_usuario
+
+                email = sessao.get("email") or ""
+                perfil = sessao.get("perfil") or ""
+                quer_todos = (consulta.get("todos") or [""])[0] in ("1", "true", "sim")
+                if quer_todos and perfil != "administrador":
+                    self._json_status(403, {"itens": [], "visual": {}, "erro": "Somente o administrador vê o histórico completo."})
+                    return
+                itens = historico_stive(
+                    documento=documento,
+                    email="" if quer_todos else email,
+                    perfil=perfil,
+                    todos=quer_todos and perfil == "administrador",
+                )
+                # Quadro sempre do usuário logado — nunca o visual de outro.
+                visual = {} if quer_todos else visual_usuario(documento=documento, email=email)
+                self._json({
+                    "itens": itens,
+                    "visual": visual,
+                    "escopo": "todos" if quer_todos else "usuario",
+                })
+                return
             if caminho == "/painel.js":
                 self._bytes(Path("painel_web.js").read_bytes(), "text/javascript; charset=utf-8")
                 return
             if caminho == "/":
-                self._html(_inicio(sessao), 200)
+                self._html(_inicio(sessao, portal), 200)
                 return
             if caminho.startswith("/painel/"):
                 if not ver:
-                    self._html(_sem_analise(perfil, sessao.get("csrf") or ""), 200)
+                    ui = _sessao_ui(sessao, portal)
+                    self._html(
+                        _sem_analise(
+                            perfil,
+                            sessao.get("csrf") or "",
+                            usuario=ui["usuario"],
+                            documento=ui["documento"],
+                        ),
+                        200,
+                    )
                     return
                 numero = caminho.removeprefix("/painel/")
+                ui = _sessao_ui(sessao, portal)
                 if numero == "cameras":
-                    self._html(_ao_vivo(portal.cameras(), perfil, sessao.get("csrf") or ""), 200)
+                    self._html(
+                        _ao_vivo(
+                            _cameras_sessao(portal, sessao),
+                            perfil=ui["perfil"],
+                            csrf=ui["csrf"],
+                            usuario=ui["usuario"],
+                            documento=ui["documento"],
+                        ),
+                        200,
+                    )
                     return
                 if numero == "risco":
-                    self._html(_risco(perfil, sessao.get("csrf") or ""), 200)
+                    self._html(_risco(**ui), 200)
                     return
                 if numero == "audio":
-                    self._html(_audio(perfil, sessao.get("csrf") or ""), 200)
+                    if perfil != "administrador":
+                        self._html(
+                            _moldura(
+                                "C4ISTAR MONITOR",
+                                "<main><p class='aviso'>Áudio e transcrição é tela do administrador. A detecção de áudio continua ativa para a sua conta.</p></main>",
+                                "/",
+                                **ui,
+                            ),
+                            403,
+                        )
+                        return
+                    self._html(_audio(**ui), 200)
                     return
                 if numero == "stive":
-                    self._html(_stive(sessao), 200)
+                    self._html(_stive(sessao, portal), 200)
                     return
                 for item, chave, titulo in PAINEIS:
                     if item == numero:
-                        self._html(_painel(item, titulo, chave, mapas=item == "4", perfil=perfil, csrf=sessao.get("csrf") or ""), 200)
+                        self._html(
+                            _painel(item, titulo, chave, mapas=item == "4", **ui),
+                            200,
+                        )
                         return
                 self.send_error(404)
                 return
@@ -1629,6 +2269,29 @@ def _tratador(portal: Portal):
                     return
                 self._html(_gestao(sessao, portal, aviso, ok), 200)
                 return
+            if caminho == "/gestao/editar":
+                if perfil != "administrador":
+                    self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta tela é do administrador.</p></main>", "/", perfil=perfil), 403)
+                    return
+                documento_edit = (consulta.get("documento") or [""])[0]
+                self._html(_gestao_editar(sessao, documento_edit, aviso, ok), 200)
+                return
+            if caminho == "/sistema":
+                if perfil != "administrador":
+                    self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta tela é do administrador.</p></main>", "/", perfil=perfil), 403)
+                    return
+                self._html(_sistema(sessao), 200)
+                return
+            if caminho == "/sistema.json":
+                if perfil != "administrador":
+                    self.send_error(403)
+                    return
+                try:
+                    filtro = (consulta.get("documento") or [""])[0]
+                    self._json(_sistema_json(filtro))
+                except Exception as exc:
+                    self._json({"erro": str(exc)})
+                return
             if caminho == "/cadastro/cliente":
                 cliente = cadastro.cliente_por_documento(documento) or {}
                 self._html(_form_cliente(sessao, cliente, aviso, ok), 200)
@@ -1646,7 +2309,11 @@ def _tratador(portal: Portal):
                 if not ver:
                     self.send_error(404)
                     return
-                self._json(_dados_json(portal))
+                doc_escopo, perfil_escopo = _escopo_analise(portal, sessao)
+                pacote = _dados_json(portal, doc_escopo, perfil_escopo)
+                if perfil == "administrador":
+                    pacote["vista_portal"] = _info_vista_admin(portal, sessao)
+                self._json(pacote)
                 return
             if caminho.startswith("/video/"):
                 if not ver:
@@ -1819,7 +2486,17 @@ def _tratador(portal: Portal):
                 self._json_status(401, {"ok": False, "erro": "Faça login."})
                 return
             if caminho == "/api/mobile/stive":
-                status, corpo = api_mobile.stive(portal, sessao, payload.get("pergunta") or "")
+                resumo = _dados_json(
+                    portal,
+                    sessao.get("documento") or "",
+                    sessao.get("perfil") or "",
+                )
+                status, corpo = api_mobile.stive(
+                    portal,
+                    sessao,
+                    payload.get("pergunta") or "",
+                    resumo=resumo,
+                )
                 self._json_status(status, corpo)
                 return
             self._json_status(404, {"ok": False, "erro": "Rota mobile desconhecida."})
@@ -1969,6 +2646,61 @@ def _tratador(portal: Portal):
                 return
             self._redirecionar(f"/gestao?ok={acao}")
 
+        def _editar_cliente_gestao(self, sessao: dict, campos: dict):
+            if sessao.get("perfil") != "administrador":
+                self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta ação é do administrador.</p></main>", "/", perfil=sessao.get("perfil") or ""), 403)
+                return
+            documento_atual = _um(campos, "documento_atual")
+            nome = _um(campos, "nome")
+            rg = _um(campos, "rg")
+            documento = _um(campos, "documento")
+            email = _um(campos, "email").strip().lower()
+            atual = cadastro.cliente_por_documento(documento_atual) or {}
+            email_antigo = str(atual.get("email") or "").strip().lower()
+            try:
+                cliente = cadastro.salvar_cliente(documento_atual, nome, rg, documento, email)
+                acesso.atualizar_usuario_principal(
+                    cliente.get("documento") or documento,
+                    nome=nome,
+                    email_novo=email,
+                    email_antigo=email_antigo or email,
+                )
+            except ValueError as exc:
+                self._html(_gestao_editar(sessao, documento_atual or documento, str(exc)), 400)
+                return
+            digitos = "".join(c for c in str(cliente.get("documento") or documento) if c.isdigit())
+            self._redirecionar(f"/gestao/editar?documento={digitos}&ok=salvo")
+
+        def _reset_senha_gestao(self, sessao: dict, campos: dict):
+            if sessao.get("perfil") != "administrador":
+                self._html(_moldura("C4ISTAR MONITOR", "<main><p class='aviso'>Esta ação é do administrador.</p></main>", "/", perfil=sessao.get("perfil") or ""), 403)
+                return
+            from agente.envio import enviar_email
+
+            documento = _um(campos, "documento")
+            email = _um(campos, "email").strip().lower()
+            digitos = "".join(c for c in str(documento) if c.isdigit())
+            try:
+                reset = acesso.resetar_senha(documento, email)
+            except ValueError as exc:
+                if "editar" in (self.headers.get("Referer") or ""):
+                    self._html(_gestao_editar(sessao, digitos, str(exc)), 400)
+                else:
+                    self._html(_gestao(sessao, portal, str(exc)), 400)
+                return
+            enviado = enviar_email(
+                "Reset de senha · C4ISTAR MONITOR",
+                "Seu acesso ao C4ISTAR MONITOR teve a senha redefinida pelo administrador.\n\n"
+                f"Login: {reset.get('email')}\n"
+                f"Senha provisória: {reset.get('senha')}\n\n"
+                "No próximo acesso, troque esta senha.",
+                destinos=[reset.get("email")],
+            )
+            if not enviado:
+                self._html(_gestao_editar(sessao, digitos, "A senha foi gerada, mas o e-mail não saiu. Verifique o SMTP."), 400)
+                return
+            self._redirecionar(f"/gestao/editar?documento={digitos}&ok=reset")
+
         def _avatar_stive(self):
             from agente.stive import caminho_avatar
 
@@ -1988,15 +2720,32 @@ def _tratador(portal: Portal):
 
         def _falar_stive(self, sessao: dict, campos: dict):
             from agente.stive import responder
+            from custos.estimativa import registrar_envio
 
+            documento = sessao.get("documento") or ""
+            perfil = sessao.get("perfil") or ""
+            email = sessao.get("email") or ""
+            doc_escopo, perfil_escopo = _escopo_analise(portal, sessao)
+            # Cliente: CPF da sessão. Admin: geral ou vista segmentada.
+            resumo = _dados_json(portal, doc_escopo, perfil_escopo)
             try:
-                saida = responder(sessao.get("documento") or "", _um(campos, "pergunta"), portal.resumo())
+                saida = responder(
+                    doc_escopo or documento,
+                    _um(campos, "pergunta"),
+                    resumo,
+                    email=email,
+                    perfil=perfil if not doc_escopo else perfil_escopo,
+                )
             except ValueError as exc:
                 self._json({"fala": str(exc), "visual": {}})
                 return
             except Exception:
                 self._json({"fala": "A base respondeu com erro. Tente de novo em instantes.", "visual": {}})
                 return
+            try:
+                registrar_envio("openai", "out", unidades=1.0, detalhe="stive-web", documento=documento)
+            except Exception:
+                pass
             self._json({"fala": saida.get("fala") or "", "visual": saida.get("visual") or {}})
 
         def _confirmar_stive(self, sessao: dict, campos: dict):
@@ -2168,6 +2917,8 @@ def _mensagem(consulta: dict) -> tuple[str, bool]:
         "excluir": "Cliente excluído.",
         "senha": "Senha atualizada. Os outros acessos desta conta precisam entrar de novo.",
         "usuario": "Usuário criado. Ele entra com o e-mail e a senha informados.",
+        "reset": "Senha provisória gerada e enviada por e-mail. No próximo acesso a troca será obrigatória.",
+        "primeiro": "No primeiro acesso, troque a senha enviada por e-mail. Depois as telas do seu CPF/CNPJ ficam liberadas.",
     }
     return textos.get(codigo, ""), bool(codigo in textos)
 

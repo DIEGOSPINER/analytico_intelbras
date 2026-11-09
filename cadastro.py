@@ -813,12 +813,46 @@ def emails_do_alerta(camera_ref: str) -> list[str]:
     return _emails_da_conta(cliente)
 
 
-def pode_ver_analise(documento: str) -> bool:
-    cliente = cliente_ativo()
+def nomes_cameras_conta(documento: str) -> set[str]:
+    """Nomes das câmeras do CPF/CNPJ (para filtrar ao vivo e painéis)."""
     digitos = _digitos(documento)
-    if cliente is None or not digitos:
+    if not digitos:
+        return set()
+    cliente = cliente_por_documento(digitos)
+    if cliente is None:
+        return set()
+    nomes = set()
+    for item in cliente.get("cameras") or []:
+        if not isinstance(item, dict) or item.get("ativa") is False:
+            continue
+        nome = str(item.get("nome") or "").strip()
+        if nome:
+            nomes.add(nome)
+    return nomes
+
+
+def pode_ver_analise(documento: str) -> bool:
+    """Usuário com conta ativa navega nos painéis; o conteúdo é filtrado pelas câmeras do CPF/CNPJ."""
+    digitos = _digitos(documento)
+    if not digitos:
         return False
-    return _digitos(cliente.get("documento")) == digitos
+    if digitos == _digitos(DOCUMENTO_ADMIN):
+        return True
+    cliente = cliente_por_documento(digitos)
+    return cliente is not None and cliente.get("ativo") is not False
+
+
+def eh_conta_em_analise(documento: str) -> bool:
+    """True se este CPF/CNPJ é a conta cujas câmeras rodam nesta máquina."""
+    digitos = _digitos(documento)
+    if not digitos:
+        return False
+    if digitos == _digitos(DOCUMENTO_ADMIN):
+        return True
+    ativo = cliente_ativo()
+    if ativo is None:
+        return False
+    return _digitos(ativo.get("documento")) == digitos
 
 
 def consultar(documento: str) -> dict:
