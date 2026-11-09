@@ -1130,8 +1130,8 @@ class Acervo:
             for dia, camera, categoria, classe, hora in registros:
                 chave_cat = (dia, camera, categoria)
                 self.cat[chave_cat] = self.cat.get(chave_cat, 0) + 1
-                self.classe[(dia, classe)] = self.classe.get((dia, classe), 0) + 1
-                chave_hora = (dia, categoria, hora)
+                self.classe[(dia, classe, camera)] = self.classe.get((dia, classe, camera), 0) + 1
+                chave_hora = (dia, categoria, hora, camera)
                 self.hora[chave_hora] = self.hora.get(chave_hora, 0) + 1
                 chave_cubo = (dia, hora, camera, categoria)
                 self.cubo[chave_cubo] = self.cubo.get(chave_cubo, 0) + 1
@@ -1168,10 +1168,10 @@ class Acervo:
             ))
         with self._trava:
             for dia, camera, _categoria, classe, ident, risco, faixa, hora in registros:
-                self.risco[(dia, risco)] = self.risco.get((dia, risco), 0) + 1
+                self.risco[(dia, risco, camera)] = self.risco.get((dia, risco, camera), 0) + 1
                 self.faixa[(dia, faixa, camera)] = self.faixa.get((dia, faixa, camera), 0) + 1
                 self.tipo[(dia, classe, camera)] = self.tipo.get((dia, classe, camera), 0) + 1
-                self.hora_faixa[(dia, faixa, hora)] = self.hora_faixa.get((dia, faixa, hora), 0) + 1
+                self.hora_faixa[(dia, faixa, hora, camera)] = self.hora_faixa.get((dia, faixa, hora, camera), 0) + 1
                 if ident:
                     self.ids.add((dia, camera, classe, ident))
 
@@ -1179,8 +1179,8 @@ class Acervo:
         if time.time() - self._interesse_em < 2 and self._interesse_em:
             return
         try:
-            from cadastro import interesse_ativo
-            interesse = interesse_ativo() or {}
+            from cadastro import interesse_deteccao_global
+            interesse = interesse_deteccao_global() or {}
         except Exception:
             interesse = {}
         self._faces_interesse = {
@@ -1499,17 +1499,21 @@ class Acervo:
                 grupo = por_categoria.setdefault(camera, {})
                 grupo[categoria] = grupo.get(categoria, 0) + valor
             classes = {}
-            for (dia, classe), valor in self.classe.items():
-                if dia == hoje:
+            for chave, valor in self.classe.items():
+                if len(chave) >= 2 and chave[0] == hoje:
+                    classe = chave[1]
                     classes[classe] = classes.get(classe, 0) + valor
             horas = {nome: [0] * 24 for nome in CATEGORIAS}
-            for (dia, categoria, hora), valor in self.hora.items():
-                if dia == hoje and categoria in horas and 0 <= hora <= 23:
-                    horas[categoria][hora] = valor
+            for chave, valor in self.hora.items():
+                if len(chave) < 3 or chave[0] != hoje:
+                    continue
+                categoria, hora = chave[1], chave[2]
+                if categoria in horas and 0 <= hora <= 23:
+                    horas[categoria][hora] += valor
             riscos = {nome: 0 for nome in RISCOS}
-            for (dia, risco), valor in self.risco.items():
-                if dia == hoje and risco in riscos:
-                    riscos[risco] += valor
+            for chave, valor in self.risco.items():
+                if len(chave) >= 2 and chave[0] == hoje and chave[1] in riscos:
+                    riscos[chave[1]] += valor
             nomes = []
             vistos = set()
             for camera in cameras_online or []:
@@ -1607,8 +1611,8 @@ class Acervo:
 
             def somar_comportamento(inicio):
                 return sum(
-                    valor for (dia, _classe), valor in self.classe.items()
-                    if not inicio or dia >= inicio
+                    valor for chave, valor in self.classe.items()
+                    if (not inicio or chave[0] >= inicio)
                 )
 
             def somar_match(inicio, tipo):
@@ -1646,9 +1650,28 @@ class Acervo:
                 serie_dias.append(item)
                 dias_empilhados.append({"rotulo": item["rotulo"], "cameras": por_cam})
             horas_prioridade = {nome: [0] * 24 for nome in FAIXAS}
-            for (dia, faixa, hora), valor in self.hora_faixa.items():
-                if dia == hoje and faixa in horas_prioridade and 0 <= hora <= 23:
-                    horas_prioridade[faixa][hora] = valor
+            for chave, valor in self.hora_faixa.items():
+                if len(chave) < 3 or chave[0] != hoje:
+                    continue
+                faixa, hora = chave[1], chave[2]
+                if faixa in horas_prioridade and 0 <= hora <= 23:
+                    horas_prioridade[faixa][hora] += valor
+            cubo_risco = [
+                {"d": chave[0], "r": chave[1], "c": chave[2] if len(chave) > 2 else "", "n": int(valor)}
+                for chave, valor in self.risco.items()
+                if len(chave) >= 2
+            ]
+            cubo_faixa = [
+                {
+                    "d": chave[0],
+                    "f": chave[1],
+                    "h": chave[2],
+                    "c": chave[3] if len(chave) > 3 else "",
+                    "n": int(valor),
+                }
+                for chave, valor in self.hora_faixa.items()
+                if len(chave) >= 3
+            ]
             classes_lista = [
                 {"nome": nome, "total": total}
                 for nome, total in sorted(classes.items(), key=lambda item: -item[1])[:8]
@@ -1742,6 +1765,8 @@ class Acervo:
             "pontos": pontos_mapa,
             "app_linhas": app_linhas,
             "cubo": cubo,
+            "cubo_risco": cubo_risco,
+            "cubo_faixa": cubo_faixa,
             "mapa": mapa,
             "legenda_mapa": legenda_mapa,
             "mapa_painel": mapa_painel,

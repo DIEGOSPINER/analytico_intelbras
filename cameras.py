@@ -50,6 +50,12 @@ def montar_url_rtsp(camera: dict) -> str:
         raise ValueError("host ausente")
 
     porta = int(camera.get("porta") or 554)
+    # Host no formulário às vezes vem como "IP:554"; evita rtsp://...:554:554/...
+    if ":" in host and not host.startswith("["):
+        base, _, sufixo = host.rpartition(":")
+        if base and sufixo.isdigit():
+            host = base
+            porta = int(sufixo)
     canal = int(camera.get("canal") or 1)
     subtype = camera.get("subtype")
     subtype = 0 if subtype is None or subtype == "" else int(subtype)

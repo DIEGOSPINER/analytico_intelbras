@@ -1399,8 +1399,8 @@ class CameraAnalitica:
         if self._match and agora > self._match.get("ate", 0):
             self._match = None
         try:
-            from cadastro import interesse_ativo
-            interesse = interesse_ativo()
+            from cadastro import interesse_para_camera
+            interesse = interesse_para_camera(self.nome)
         except Exception:
             return
         nomes_face = {
@@ -1849,6 +1849,8 @@ def _quadro_portal(quadro, largura=960):
         copia = quadro.copy()
     except Exception:
         return None
+    if copia.ndim < 2 or copia.shape[0] < 2 or copia.shape[1] < 2:
+        return None
     altura, atual = copia.shape[:2]
     if atual > largura and atual > 0:
         nova = max(1, int(round(altura * largura / atual)))
@@ -1867,6 +1869,9 @@ def _publicar_cameras(portal, estado, parar):
             catalogo.append((slug, item["nome"], item.get("rua") or ""))
             stream = item["analitica"].stream
             quadro = _quadro_portal(getattr(stream, "frame", None))
+            if quadro is None:
+                # Fallback: preview da análise (evita tela preta se o frame cheio falhar).
+                quadro = _quadro_portal(getattr(stream, "preview", None))
             if quadro is None:
                 continue
             portal.publicar(f"camera-{slug}", quadro)
@@ -2469,6 +2474,8 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "pontos": pacote.get("pontos") or [],
         "app_linhas": pacote.get("app_linhas") or [],
         "cubo": pacote.get("cubo") or [],
+        "cubo_risco": pacote.get("cubo_risco") or [],
+        "cubo_faixa": pacote.get("cubo_faixa") or [],
         "pendencias": _pendencias_vivas(cameras),
         "led": led,
         "cameras_vivo": cameras,

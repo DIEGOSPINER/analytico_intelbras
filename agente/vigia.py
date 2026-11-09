@@ -334,25 +334,41 @@ class Vigia:
             novos_alertas.append(alerta)
 
     def _avisar(self, alertas: list[dict]):
-        from cadastro import emails_do_alerta
+        from cadastro import (
+            emails_alerta_interesse,
+            emails_do_alerta,
+            emails_ocorrencia_rua,
+        )
 
-        grupos = {}
         for alerta in alertas:
-            grupos.setdefault(str(alerta.get("camera") or ""), []).append(alerta)
-        for camera, grupo in grupos.items():
-            linhas = ["Alerta do analítico"]
-            for alerta in grupo:
-                linhas.append(
-                    f"{alerta.get('nivel', '')}: {alerta.get('nome', '')} ({alerta.get('id', '')}) | "
-                    f"{alerta.get('camera', '')} {alerta.get('data', '')} {alerta.get('hora', '')}"
-                )
-                if alerta.get("descricao"):
-                    linhas.append(alerta["descricao"])
-            texto = "\n".join(linhas)
-            if any(alerta.get("origem") == "Cidadao" for alerta in grupo):
+            origem = str(alerta.get("origem") or "")
+            camera = str(alerta.get("camera") or "")
+            if origem == "Cidadao":
+                destinos = emails_ocorrencia_rua(camera)
                 assunto = "Ocorrência emergente recebida"
+            elif origem in ("Interesse", "Ocorrencia") or str(alerta.get("tipo") or "").upper() in (
+                "FACE",
+                "PLACA",
+                "face",
+                "placa",
+            ):
+                destinos = emails_alerta_interesse(
+                    alerta.get("tipo") or "FACE",
+                    alerta.get("id") or "",
+                    camera,
+                )
+                assunto = f"Alerta analítico: {alerta.get('nome') or alerta.get('tipo')}"
             else:
-                assunto = f"Alerta analítico: {grupo[0].get('nome') or grupo[0].get('tipo')}"
-            enviar_email(assunto, texto, destinos=emails_do_alerta(camera))
+                destinos = emails_do_alerta(camera)
+                assunto = f"Alerta analítico: {alerta.get('nome') or alerta.get('tipo')}"
+            linhas = [
+                "Alerta do analítico",
+                f"{alerta.get('nivel', '')}: {alerta.get('nome', '')} ({alerta.get('id', '')}) | "
+                f"{alerta.get('camera', '')} {alerta.get('data', '')} {alerta.get('hora', '')}",
+            ]
+            if alerta.get("descricao"):
+                linhas.append(str(alerta["descricao"]))
+            texto = "\n".join(linhas)
+            enviar_email(assunto, texto, destinos=destinos)
             if whatsapp_configurado():
                 enviar_whatsapp(texto)

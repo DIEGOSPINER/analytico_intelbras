@@ -295,8 +295,15 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 
 
 def slug_camera(nome: str) -> str:
-    texto = "".join(caractere if caractere.isalnum() else "-" for caractere in str(nome or ""))
-    return texto.strip("-").lower() or "camera"
+    """Slug ASCII estável para URLs /video/camera-... (evita â/ç quebrando o fluxo)."""
+    import unicodedata
+
+    texto = unicodedata.normalize("NFKD", str(nome or ""))
+    texto = "".join(caractere for caractere in texto if not unicodedata.combining(caractere))
+    texto = "".join(caractere if caractere.isalnum() else "-" for caractere in texto.lower())
+    while "--" in texto:
+        texto = texto.replace("--", "-")
+    return texto.strip("-") or "camera"
 
 
 _ARQUIVO_VISTAS = Path("vista_admin.json")
@@ -807,11 +814,14 @@ def _ao_vivo(cameras, perfil: str = "", csrf: str = "", usuario: str = "", docum
             f"</figure>"
         )
     grade = "".join(blocos) or (
-        "<p>Nenhuma câmera nesta conta. Cadastre em <a class='texto' href='/cadastro/cameras'>Câmeras</a> "
-        "ou aguarde a análise local desta conta.</p>"
+        "<p>Nenhuma câmera visível. Cadastre ao menos uma câmera em "
+        "<a class='texto' href='/cadastro/cameras'>Câmeras</a> para ver a sua rua.</p>"
     )
     miolo = (
-        _cabeca("Ao vivo", "Só aparecem as câmeras do CPF/CNPJ com o qual você entrou.")
+        _cabeca(
+            "Ao vivo",
+            "Suas câmeras e as do mesmo logradouro, se você estiver compartilhando ao menos uma.",
+        )
         + f"<main id='tela' data-tela='vivo'><section class='grade'>{grade}</section></main>"
     )
     return _moldura(
@@ -1109,6 +1119,25 @@ def _campo(rotulo: str, nome: str, valor="", tipo: str = "text", obrigatorio: bo
     )
 
 
+def _campo_logradouro(valor: str = "", obrigatorio: bool = True) -> str:
+    req = " required" if obrigatorio else ""
+    atual = str(valor or "").strip()
+    opcoes = ["<option value=''>Escolha o logradouro</option>"]
+    vistos = set()
+    for rua in cadastro.LOGRADOUROS_STELLA_MARIS:
+        vistos.add(cadastro.normalizar_rua(rua))
+        marcado = " selected" if cadastro.normalizar_rua(rua) == cadastro.normalizar_rua(atual) else ""
+        opcoes.append(f"<option value='{_html_seguro(rua)}'{marcado}>{_html_seguro(rua)}</option>")
+    if atual and cadastro.normalizar_rua(atual) not in vistos:
+        opcoes.append(
+            f"<option value='{_html_seguro(atual)}' selected>{_html_seguro(atual)}</option>"
+        )
+    return (
+        "<label>Logradouro (Stella Maris)"
+        f"<select name='rua'{req}>{''.join(opcoes)}</select></label>"
+    )
+
+
 def _csrf(sessao: dict) -> str:
     return f"<input type='hidden' name='csrf' value='{_html_seguro(sessao.get('csrf') or '')}'>"
 
@@ -1366,6 +1395,7 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
     ident = atual.get("id") or ""
     miolo = f"""<main>
 <h1>Câmeras</h1>
+<p>Com pelo menos uma câmera cadastrada, você compartilha e vê os dados das câmeras do mesmo logradouro. Sem câmera, a rua permanece oculta.</p>
 {tabela}
 <h2>{'Editar câmera' if ident else 'Nova câmera'}</h2>
 {_aviso_html(aviso, ok)}
@@ -1384,9 +1414,9 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 {_campo("Senha", "senha", tipo="password")}
 {_campo("Canal", "canal", _valor_campo(atual, "canal", 1))}
 {_campo("Subtype", "subtype", _valor_campo(atual, "subtype", 0))}
-{_campo("Rua", "rua", atual.get("rua") or "")}
-{_campo("Bairro", "bairro", atual.get("bairro") or "")}
-{_campo("Cidade", "cidade", atual.get("cidade") or "")}
+{_campo_logradouro(atual.get("rua") or "")}
+{_campo("Bairro", "bairro", atual.get("bairro") or "Stella Maris")}
+{_campo("Cidade", "cidade", atual.get("cidade") or "Salvador")}
 {_campo("Latitude", "latitude", atual.get("latitude") if atual.get("latitude") != "" else "")}
 {_campo("Longitude", "longitude", atual.get("longitude") if atual.get("longitude") != "" else "")}
 <button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>
@@ -1721,34 +1751,198 @@ def _resumo_vazio_cliente(resumo: dict, documento: str = "") -> dict:
     return base
 
 
+_RISCO_POR_CLASSE = {
+    "Em_Pe": "Informativo",
+    "Sentado": "Informativo",
+    "Caminhando": "Informativo",
+    "Bracos_Levantados": "Informativo",
+    "Agachado": "Atencao",
+    "Deitado": "Atencao",
+    "Correndo": "Atencao",
+    "Permanencia": "Atencao",
+    "Interacao_Proxima": "Atencao",
+    "Aglomeracao": "Atencao",
+    "Levantando": "Atencao",
+    "Possivel_Queda": "Prioritario",
+    "Possivel_Briga": "Prioritario",
+    "Possivel_Arma_Fogo": "Critico",
+}
+
+
+def _reconstruir_periodos(cubo: list, tipos: list) -> dict:
+    from datetime import date, timedelta
+
+    hoje = date.today().isoformat()
+    inicio_semana = (date.today() - timedelta(days=6)).isoformat()
+    inicio_mes = hoje[:8] + "01"
+    zero = dict(_PERIODO_ZERO)
+    # tipos no painel é o recorte de hoje; usa o mesmo valor nos períodos que incluem hoje.
+    comportamento_hoje = sum(
+        int(total or 0)
+        for item in tipos
+        for total in (item.get("cameras") or {}).values()
+    )
+
+    def bloco(inicio: str) -> dict:
+        base = dict(zero)
+        for item in cubo:
+            dia = str(item.get("d") or "")
+            if inicio and dia < inicio:
+                continue
+            chave = str(item.get("k") or "") or "Outro"
+            if chave in base:
+                base[chave] = int(base.get(chave) or 0) + int(item.get("n") or 0)
+        if not inicio or inicio <= hoje:
+            base["Comportamento"] = comportamento_hoje
+        return base
+
+    return {
+        "dia": bloco(hoje),
+        "semana": bloco(inicio_semana),
+        "mes": bloco(inicio_mes),
+        "total": bloco(""),
+    }
+
+
+def _reconstruir_horas(cubo: list) -> dict:
+    from datetime import date
+
+    hoje = date.today().isoformat()
+    horas = {nome: [0] * 24 for nome in ("Veiculo", "Pessoa", "Objeto", "Animal")}
+    for item in cubo:
+        if str(item.get("d") or "") != hoje:
+            continue
+        chave = str(item.get("k") or "")
+        if chave not in horas:
+            continue
+        try:
+            hora = int(item.get("h") or 0)
+        except (TypeError, ValueError):
+            hora = 0
+        if 0 <= hora <= 23:
+            horas[chave][hora] += int(item.get("n") or 0)
+    return horas
+
+
+def _reconstruir_series(cubo: list) -> tuple[list, list]:
+    from datetime import date, timedelta
+
+    categorias = ("Veiculo", "Pessoa", "Objeto", "Animal")
+    dias = [(date.today() - timedelta(days=offset)).isoformat() for offset in range(6, -1, -1)]
+    serie_dias = []
+    dias_empilhados = []
+    for dia in dias:
+        item = {"rotulo": f"{dia[8:10]}/{dia[5:7]}"}
+        por_cam = {}
+        for reg in cubo:
+            if str(reg.get("d") or "") != dia:
+                continue
+            cat = str(reg.get("k") or "")
+            if cat not in categorias:
+                continue
+            item[cat] = int(item.get(cat) or 0) + int(reg.get("n") or 0)
+            cam = str(reg.get("c") or "")
+            slot = por_cam.setdefault(cam, {nome: 0 for nome in categorias})
+            slot[cat] = int(slot.get(cat) or 0) + int(reg.get("n") or 0)
+        for nome in categorias:
+            item.setdefault(nome, 0)
+        serie_dias.append(item)
+        dias_empilhados.append({"rotulo": item["rotulo"], "cameras": por_cam})
+    return serie_dias, dias_empilhados
+
+
 def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
-    """Cliente só vê dados das próprias câmeras/CPF; nunca dados de outro documento."""
+    """Cliente só vê dados das próprias câmeras/CPF; admin vê tudo."""
     digitos = "".join(c for c in str(documento or "") if c.isdigit())
     if perfil == "administrador" or not digitos:
         saida = dict(resumo or {})
         saida["cliente_documento"] = digitos or (saida.get("cliente_documento") or "")
         saida["perfil_sessao"] = perfil or ""
         return saida
-    permitidas = cadastro.nomes_cameras_conta(digitos)
-    em_analise = cadastro.eh_conta_em_analise(digitos)
-    if not em_analise or not permitidas:
+    permitidas = cadastro.nomes_cameras_visiveis(digitos, perfil)
+    if not permitidas:
         vazio = _resumo_vazio_cliente(resumo, digitos)
         vazio["perfil_sessao"] = perfil or ""
         return vazio
+
+    resumo = dict(resumo or {})
     vivo = [
         item for item in (resumo.get("cameras_vivo") or [])
         if (item.get("nome") or "") in permitidas
     ]
-    if not vivo and not permitidas.intersection(
-        {(item.get("nome") or "") for item in (resumo.get("cameras_vivo") or [])}
-    ):
-        vazio = _resumo_vazio_cliente(resumo, digitos)
-        vazio["pessoas_interesse"] = list(resumo.get("pessoas_interesse") or [])
-        vazio["perfil_sessao"] = perfil or ""
-        return vazio
-    resumo = dict(resumo)
     resumo["cameras_vivo"] = vivo
     resumo["cameras"] = len(vivo)
+
+    cubo = [item for item in (resumo.get("cubo") or []) if (item.get("c") or "") in permitidas]
+    resumo["cubo"] = cubo
+    cubo_risco = [item for item in (resumo.get("cubo_risco") or []) if (item.get("c") or "") in permitidas]
+    resumo["cubo_risco"] = cubo_risco
+    cubo_faixa = [item for item in (resumo.get("cubo_faixa") or []) if (item.get("c") or "") in permitidas]
+    resumo["cubo_faixa"] = cubo_faixa
+
+    tipos = []
+    for item in resumo.get("tipos") or []:
+        cams = {
+            nome: int(total or 0)
+            for nome, total in (item.get("cameras") or {}).items()
+            if nome in permitidas
+        }
+        if cams:
+            tipos.append({"classe": item.get("classe") or "", "cameras": cams})
+    resumo["tipos"] = tipos
+
+    resumo["periodos"] = _reconstruir_periodos(cubo, tipos)
+    resumo["horas"] = _reconstruir_horas(cubo)
+    serie_dias, dias_empilhados = _reconstruir_series(cubo)
+    resumo["serie_dias"] = serie_dias
+    resumo["dias_empilhados"] = dias_empilhados
+
+    riscos = {nome: 0 for nome in ("Informativo", "Atencao", "Prioritario", "Critico")}
+    if cubo_risco:
+        from datetime import date as _date
+
+        hoje = _date.today().isoformat()
+        for item in cubo_risco:
+            if str(item.get("d") or "") != hoje:
+                continue
+            nome = str(item.get("r") or "")
+            if nome in riscos:
+                riscos[nome] += int(item.get("n") or 0)
+    else:
+        for item in tipos:
+            nome = _RISCO_POR_CLASSE.get(str(item.get("classe") or ""), "Informativo")
+            riscos[nome] = riscos.get(nome, 0) + sum(int(v or 0) for v in (item.get("cameras") or {}).values())
+    resumo["riscos"] = riscos
+
+    horas_prioridade = {nome: [0] * 24 for nome in ("Comportamento", "Interacao", "Alerta")}
+    from datetime import date as _date
+
+    hoje = _date.today().isoformat()
+    for item in cubo_faixa:
+        if str(item.get("d") or "") != hoje:
+            continue
+        faixa = str(item.get("f") or "")
+        if faixa not in horas_prioridade:
+            continue
+        try:
+            hora = int(item.get("h") or 0)
+        except (TypeError, ValueError):
+            hora = 0
+        if 0 <= hora <= 23:
+            horas_prioridade[faixa][hora] += int(item.get("n") or 0)
+    resumo["horas_prioridade"] = horas_prioridade
+
+    classes = {}
+    for item in tipos:
+        classe = str(item.get("classe") or "")
+        if not classe:
+            continue
+        classes[classe] = classes.get(classe, 0) + sum(int(v or 0) for v in (item.get("cameras") or {}).values())
+    resumo["classes"] = [
+        {"nome": nome, "total": total}
+        for nome, total in sorted(classes.items(), key=lambda par: -par[1])[:8]
+    ]
+
     audio = dict(resumo.get("audio") or {})
     if audio.get("esteira"):
         audio["esteira"] = [item for item in audio["esteira"] if (item.get("camera") or "") in permitidas]
@@ -1758,48 +1952,52 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
         audio["cameras"] = {k: v for k, v in audio["cameras"].items() if k in permitidas}
     audio["risco_aberto"] = len(audio.get("alertas") or [])
     resumo["audio"] = audio
+
     resumo["pendencias"] = [
         item for item in (resumo.get("pendencias") or [])
         if (item.get("camera") or "") in permitidas
     ]
-    cubo = [item for item in (resumo.get("cubo") or []) if (item.get("c") or "") in permitidas]
-    resumo["cubo"] = cubo
-    if cubo:
-        totais = {}
-        for item in cubo:
-            classe = str(item.get("k") or "") or "Outro"
-            totais[classe] = totais.get(classe, 0) + int(item.get("n") or 0)
-        periodos = dict(resumo.get("periodos") or {})
-        periodos["total"] = totais
-        resumo["periodos"] = periodos
     resumo["historico"] = [
         item for item in (resumo.get("historico") or [])
-        if (item.get("camera") or "") in permitidas or not item.get("camera")
+        if (item.get("camera") or "") in permitidas
+        and cadastro.pode_ver_match_interesse(digitos, item)
     ]
     resumo["geo"] = [
         item for item in (resumo.get("geo") or [])
         if (item.get("camera") or item.get("nome") or "") in permitidas
     ]
-    resumo["informes"] = [
-        item for item in (resumo.get("informes") or [])
-        if "".join(c for c in str(item.get("documento") or "") if c.isdigit()) in ("", digitos)
-        and (not item.get("camera") or (item.get("camera") or "") in permitidas)
-    ]
-    resumo["insights"] = [
-        item for item in (resumo.get("insights") or [])
-        if "".join(c for c in str(item.get("documento") or "") if c.isdigit()) in ("", digitos)
+    resumo["pontos"] = [
+        item for item in (resumo.get("pontos") or [])
+        if cadastro.item_na_rua_visivel(
+            digitos, item.get("camera") or "", item.get("rua") or item.get("bairro") or "",
+        )
     ]
     resumo["app_linhas"] = [
         item for item in (resumo.get("app_linhas") or [])
-        if "".join(c for c in str(item.get("documento") or "") if c.isdigit()) in ("", digitos)
+        if cadastro.item_na_rua_visivel(
+            digitos,
+            item.get("camera") or "",
+            item.get("rua") or item.get("endereco") or item.get("bairro") or "",
+        )
     ]
+    resumo["informes"] = [
+        item for item in (resumo.get("informes") or [])
+        if (not item.get("camera") or (item.get("camera") or "") in permitidas)
+    ]
+    resumo["insights"] = list(resumo.get("insights") or [])
+    resumo["itens"] = sum(int(item.get("n") or 0) for item in cubo if str(item.get("d") or "") == hoje)
+
     resumo["led"] = "branco"
+    ordem_led = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
     for camera in vivo:
         risco = camera.get("risco") or "branco"
-        if {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}.get(risco, 0) > {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}.get(resumo["led"], 0):
+        if ordem_led.get(risco, 0) > ordem_led.get(resumo["led"], 0):
             resumo["led"] = risco
     match = resumo.get("match")
-    if isinstance(match, dict) and (match.get("camera") or "") not in permitidas:
+    if isinstance(match, dict) and (
+        (match.get("camera") or "") not in permitidas
+        or not cadastro.pode_ver_match_interesse(digitos, match)
+    ):
         resumo["match"] = None
         resumo["narracao"] = ""
         resumo["narracao_ia"] = ""
@@ -1809,16 +2007,23 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     return resumo
 
 
+def _nome_camera_item(item) -> str:
+    if isinstance(item, dict):
+        return str(item.get("nome") or "").strip()
+    if isinstance(item, (list, tuple)) and len(item) >= 2:
+        return str(item[1] or "").strip()
+    return ""
+
+
 def _cameras_ao_vivo(portal, documento: str, perfil: str) -> list:
+    # Catalogo do portal: [(slug, nome, rua), ...]
     cameras = list(portal.cameras() or [])
     if perfil == "administrador":
         return cameras
-    if not cadastro.eh_conta_em_analise(documento):
-        return []
-    permitidas = cadastro.nomes_cameras_conta(documento)
+    permitidas = cadastro.nomes_cameras_visiveis(documento, perfil)
     if not permitidas:
         return []
-    return [item for item in cameras if (item.get("nome") or "") in permitidas]
+    return [item for item in cameras if _nome_camera_item(item) in permitidas]
 
 
 def _cameras_sessao(portal, sessao: dict) -> list:
@@ -1851,21 +2056,6 @@ def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
         classes[ident] = cadastro.classe_pessoa(pessoa)
 
     resumo = dict(portal.resumo())
-    # Cliente que não é a conta em análise nesta máquina: painéis vazios.
-    if perfil and perfil != "administrador" and documento and not cadastro.eh_conta_em_analise(documento):
-        vazio = _resumo_vazio_cliente(resumo, documento)
-        vazio["pessoas_interesse"] = [
-            {
-                "id": ident,
-                "nome": nomes.get(ident, ""),
-                "classe": classes.get(ident, ""),
-                "foto": f"/rosto/{ident}.jpg",
-                "total": 0,
-            }
-            for ident in nomes
-        ]
-        return vazio
-
     agora = time.time()
     chave_nomes = f"{perfil}|{documento}|" + ",".join(sorted(nomes))
     # Cache 2s das leituras pesadas (Postgres/CSV): o poll do portal é 1s.

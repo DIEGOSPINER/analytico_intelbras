@@ -1,18 +1,18 @@
-"""Conta do cliente.
+"""Conta do cliente e política de acesso colaborativo por rua.
 
-Cada CPF ou CNPJ enxerga só o próprio mundo: dados pessoais, câmeras,
-pessoas e veículos de interesse, contatos de apoio e relatórios.
-O WhatsApp e o aplicativo futuro chamam estas funções depois que a
-pessoa se identifica pelo documento. Um cliente não recebe dados de outro.
+Admin vê tudo. Cliente com pelo menos uma câmera compartilhada vê as próprias
+câmeras e as da mesma rua/logradouro. Sem câmera cadastrada, não enxerga a rua.
 
-Pessoa de interesse entra com uma classe: morador, prestador, visitante,
-desaparecida, comportamento de risco, mandado, ex-detento ou medida protetiva.
+Pessoas de risco (mandado, suspeito, ex-detento…) são detectadas em qualquer
+câmera; o alerta vai só para quem cadastrou e para o administrador.
+Morador, prestador e visitante só entram na detecção/alerta do cliente dono.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from pathlib import Path
 
 
@@ -41,7 +41,37 @@ MOTIVOS_PESSOA = {
         "violencia_geral": "Violência geral",
     },
 }
-CLASSES_RISCO = {"comportamento_suspeito", "mandado", "ex_detento", "mandado_judicial"}
+CLASSES_RISCO = {
+    "comportamento_suspeito",
+    "mandado",
+    "ex_detento",
+    "mandado_judicial",
+    "medida_protetiva",
+    "pessoa_desaparecida",
+}
+CLASSES_LOCAIS = {
+    "morador",
+    "prestador_servico",
+    "visitante",
+    "acompanhamento_familiar",
+}
+# Logradouros do bairro Stella Maris (Salvador/BA) para o cadastro de câmeras.
+LOGRADOUROS_STELLA_MARIS = (
+    "Rua Lidia Borja",
+    "Rua Professor Carlos Ott",
+    "Rua Hamilton Drumond Frank",
+    "Rua Alameda do Sol",
+    "Rua das Garças",
+    "Rua dos Flamingos",
+    "Rua dos Beija-Flores",
+    "Rua das Gaivotas",
+    "Rua das Orquídeas",
+    "Rua das Bromélias",
+    "Rua Professora Dulce Zarzur",
+    "Rua Doutor José Eduardo Freire",
+    "Avenida Pinto de Aguiar",
+    "Rua Praia de Stella Maris",
+)
 
 
 def classe_pessoa(pessoa: dict) -> str:
@@ -50,6 +80,33 @@ def classe_pessoa(pessoa: dict) -> str:
 
 def pessoa_de_risco(pessoa: dict) -> bool:
     return classe_pessoa(pessoa) in CLASSES_RISCO
+
+
+def pessoa_local(pessoa: dict) -> bool:
+    return classe_pessoa(pessoa) in CLASSES_LOCAIS
+
+
+def _sem_acento(texto: str) -> str:
+    normalizado = unicodedata.normalize("NFKD", str(texto or ""))
+    return "".join(caractere for caractere in normalizado if not unicodedata.combining(caractere))
+
+
+def normalizar_rua(rua: str) -> str:
+    """Chave comparável de logradouro (sem acento, minúscula, espaços colapsados)."""
+    texto = _sem_acento(rua).lower().replace(".", " ")
+    texto = " ".join(texto.split())
+    return texto
+
+
+def rua_canonica(rua: str) -> str:
+    """Devolve o rótulo oficial da lista Stella Maris quando houver correspondência."""
+    chave = normalizar_rua(rua)
+    if not chave:
+        return str(rua or "").strip()
+    for item in LOGRADOUROS_STELLA_MARIS:
+        if normalizar_rua(item) == chave:
+            return item
+    return str(rua or "").strip()
 
 
 def _digitos(valor) -> str:
@@ -454,14 +511,27 @@ def cameras_publicas(documento: str) -> list[dict]:
     return [camera_publica(item) for item in cliente.get("cameras") or [] if isinstance(item, dict)]
 
 
-def _espelhar_cameras(cliente: dict):
-    ativo = cliente_ativo()
-    if ativo is None or ativo.get("id") != cliente.get("id"):
-        return
+def _espelhar_cameras(cliente: dict | None = None):
+    """Espelha todas as câmeras ativas das contas em cameras.json."""
     from cameras import ARQUIVO_CAMERAS
 
+    registros = []
+    vistos = set()
+    for conta in listar_clientes():
+        if conta.get("ativo") is False:
+            continue
+        for item in conta.get("cameras") or []:
+            if not isinstance(item, dict):
+                continue
+            ident = str(item.get("id") or "").strip()
+            nome = str(item.get("nome") or "").strip()
+            chave = ident or nome
+            if not chave or chave in vistos:
+                continue
+            vistos.add(chave)
+            registros.append(item)
     Path(ARQUIVO_CAMERAS).write_text(
-        json.dumps({"cameras": list(cliente.get("cameras") or [])}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"cameras": registros}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -511,16 +581,26 @@ def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
         "marca": marca,
         "modelo": modelo,
         "ativa": campos.get("ativa", True) is not False,
-        "rua": str(campos.get("rua") or "").strip(),
-        "bairro": str(campos.get("bairro") or "").strip(),
-        "cidade": str(campos.get("cidade") or "").strip(),
+        "rua": rua_canonica(str(campos.get("rua") or "").strip()),
+        "bairro": str(campos.get("bairro") or "").strip() or "Stella Maris",
+        "cidade": str(campos.get("cidade") or "").strip() or "Salvador",
         "latitude": _coordenada_campo(campos.get("latitude"), "a latitude"),
         "longitude": _coordenada_campo(campos.get("longitude"), "a longitude"),
     })
+    if not registro["rua"]:
+        raise ValueError("Informe o logradouro da câmera.")
     host = str(campos.get("host") or "").strip()
     if host:
+        porta = _inteiro(campos.get("porta"), 554, "a porta")
+        # Formulário às vezes manda "IP:554" no host.
+        if ":" in host and not host.startswith("["):
+            base, _, sufixo = host.rpartition(":")
+            if base and sufixo.isdigit():
+                host = base
+                if str(campos.get("porta") or "").strip() == "":
+                    porta = int(sufixo)
         registro["host"] = host
-        registro["porta"] = _inteiro(campos.get("porta"), 554, "a porta")
+        registro["porta"] = porta
         registro["canal"] = _inteiro(campos.get("canal"), 1, "o canal")
         registro["subtype"] = _inteiro(campos.get("subtype"), 0, "o subtype")
         registro["usuario"] = str(campos.get("usuario") or registro.get("usuario") or "").strip()
@@ -690,10 +770,21 @@ def _exigir(documento: str) -> dict:
 
 
 def locais_cameras() -> list[dict]:
-    """Rua e coordenadas das câmeras ativas, sem endereço de acesso."""
+    """Rua e coordenadas das câmeras ativas de todas as contas, sem endereço de acesso."""
     garantir_cliente_local()
-    cliente = cliente_ativo()
-    registros = list((cliente or {}).get("cameras") or [])
+    registros = []
+    vistos = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        for item in cliente.get("cameras") or []:
+            if not isinstance(item, dict) or item.get("ativa") is False:
+                continue
+            nome = str(item.get("nome") or "").strip()
+            if not nome or nome in vistos:
+                continue
+            vistos.add(nome)
+            registros.append(item)
     if not registros:
         caminho = Path("cameras.json")
         if caminho.exists():
@@ -726,16 +817,32 @@ def locais_cameras() -> list[dict]:
 
 
 def cameras_para_analise() -> list[dict]:
+    """Todas as câmeras ativas das contas desta instalação (admin + clientes)."""
     from cameras import filtrar_ativas, ler_cameras
 
     garantir_cliente_local()
-    cliente = cliente_ativo()
-    if cliente is not None and cliente.get("cameras"):
-        return filtrar_ativas(cliente["cameras"])
+    registros = []
+    vistos = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        for item in cliente.get("cameras") or []:
+            if not isinstance(item, dict):
+                continue
+            ident = str(item.get("id") or "").strip()
+            nome = str(item.get("nome") or "").strip()
+            chave = ident or nome
+            if not chave or chave in vistos:
+                continue
+            vistos.add(chave)
+            registros.append(item)
+    if registros:
+        return filtrar_ativas(registros)
     return ler_cameras()
 
 
 def interesse_ativo() -> dict:
+    """Interesse da conta em análise local (compatibilidade). Prefira interesse_para_camera."""
     from agente.fontes import carregar_interesse
 
     garantir_cliente_local()
@@ -746,6 +853,180 @@ def interesse_ativo() -> dict:
         "pessoas": list(cliente.get("pessoas") or []),
         "veiculos": list(cliente.get("veiculos") or []),
     }
+
+
+def _anexar_dono(pessoa: dict, documento: str) -> dict:
+    saida = dict(pessoa or {})
+    saida["documento_dono"] = _digitos(documento)
+    return saida
+
+
+def dono_da_camera(camera_ref: str) -> dict | None:
+    ref = str(camera_ref or "").strip().lower()
+    if not ref:
+        return None
+    for cliente in listar_clientes():
+        for item in cliente.get("cameras") or []:
+            if not isinstance(item, dict):
+                continue
+            nome = str(item.get("nome") or "").strip().lower()
+            ident = str(item.get("id") or "").strip().lower()
+            if ref in (nome, ident):
+                return cliente
+    return None
+
+
+def interesse_para_camera(camera_ref: str) -> dict:
+    """POI de risco: todas as câmeras. Morador/prestador/visitante: só câmeras do dono."""
+    garantir_cliente_local()
+    dono = dono_da_camera(camera_ref)
+    dono_id = (dono or {}).get("id")
+    pessoas = []
+    veiculos = []
+    vistos_face = set()
+    vistos_placa = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        digitos = _digitos(cliente.get("documento"))
+        for pessoa in cliente.get("pessoas") or []:
+            if not isinstance(pessoa, dict):
+                continue
+            face = str(pessoa.get("face_id") or "").strip().upper()
+            if not face or face in vistos_face:
+                continue
+            if pessoa_de_risco(pessoa) or (dono_id and cliente.get("id") == dono_id):
+                vistos_face.add(face)
+                pessoas.append(_anexar_dono(pessoa, digitos))
+        if dono_id and cliente.get("id") == dono_id:
+            for veiculo in cliente.get("veiculos") or []:
+                if not isinstance(veiculo, dict):
+                    continue
+                placa = str(veiculo.get("placa") or "").strip().upper()
+                if not placa or placa in vistos_placa:
+                    continue
+                vistos_placa.add(placa)
+                item = dict(veiculo)
+                item["documento_dono"] = digitos
+                veiculos.append(item)
+    return {"pessoas": pessoas, "veiculos": veiculos}
+
+
+def interesse_deteccao_global() -> dict:
+    """Todas as faces/placas cadastradas (para histórico e painéis agregados)."""
+    garantir_cliente_local()
+    pessoas = []
+    veiculos = []
+    vistos_face = set()
+    vistos_placa = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        digitos = _digitos(cliente.get("documento"))
+        for pessoa in cliente.get("pessoas") or []:
+            if not isinstance(pessoa, dict):
+                continue
+            face = str(pessoa.get("face_id") or "").strip().upper()
+            if not face or face in vistos_face:
+                continue
+            vistos_face.add(face)
+            pessoas.append(_anexar_dono(pessoa, digitos))
+        for veiculo in cliente.get("veiculos") or []:
+            if not isinstance(veiculo, dict):
+                continue
+            placa = str(veiculo.get("placa") or "").strip().upper()
+            if not placa or placa in vistos_placa:
+                continue
+            vistos_placa.add(placa)
+            item = dict(veiculo)
+            item["documento_dono"] = digitos
+            veiculos.append(item)
+    return {"pessoas": pessoas, "veiculos": veiculos}
+
+
+def pessoa_por_face(face_id: str) -> tuple[dict | None, dict | None]:
+    ident = str(face_id or "").strip().upper()
+    if not ident:
+        return None, None
+    for cliente in listar_clientes():
+        for pessoa in cliente.get("pessoas") or []:
+            if str((pessoa or {}).get("face_id") or "").strip().upper() == ident:
+                return cliente, pessoa
+    return None, None
+
+
+def veiculo_por_placa(placa: str) -> tuple[dict | None, dict | None]:
+    ident = str(placa or "").strip().upper()
+    if not ident:
+        return None, None
+    for cliente in listar_clientes():
+        for veiculo in cliente.get("veiculos") or []:
+            if str((veiculo or {}).get("placa") or "").strip().upper() == ident:
+                return cliente, veiculo
+    return None, None
+
+
+def emails_admin() -> list[str]:
+    return _emails_da_conta(cliente_por_documento(DOCUMENTO_ADMIN))
+
+
+def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list[str]:
+    """Risco → dono + admin. Local/placa → só o cliente que cadastrou."""
+    emails = []
+    if str(tipo or "").upper() == "PLACA":
+        cliente, _veiculo = veiculo_por_placa(ident)
+        if cliente:
+            emails.extend(_emails_da_conta(cliente))
+            emails.extend(_emails_avisos(cliente, camera_ref, somente_alerta=True))
+        return _emails_unicos(emails)
+    cliente, pessoa = pessoa_por_face(ident)
+    if cliente is None:
+        return emails_do_alerta(camera_ref)
+    emails.extend(_emails_da_conta(cliente))
+    emails.extend(_emails_avisos(cliente, camera_ref, somente_alerta=True))
+    if pessoa is not None and pessoa_de_risco(pessoa):
+        emails.extend(emails_admin())
+    return _emails_unicos(emails)
+
+
+def emails_ocorrencia_rua(endereco_ou_rua: str) -> list[str]:
+    """Ocorrências do app: avisa quem compartilha câmera na mesma rua + admin."""
+    chave = normalizar_rua(endereco_ou_rua)
+    emails = list(emails_admin())
+    if not chave:
+        return _emails_unicos(emails)
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        digitos = _digitos(cliente.get("documento"))
+        if not compartilha_camera(digitos):
+            continue
+        for camera in cliente.get("cameras") or []:
+            if not isinstance(camera, dict) or camera.get("ativa") is False:
+                continue
+            rua = normalizar_rua(camera.get("rua"))
+            if rua and (rua in chave or chave in rua):
+                emails.extend(_emails_da_conta(cliente))
+                break
+    return _emails_unicos(emails)
+
+
+def pode_ver_match_interesse(documento: str, match: dict | None) -> bool:
+    """POI de outro cliente não aparece no portal do vizinho da rua."""
+    digitos = _digitos(documento)
+    if not digitos or not isinstance(match, dict):
+        return False
+    if digitos == _digitos(DOCUMENTO_ADMIN):
+        return True
+    tipo = str(match.get("tipo") or "").upper()
+    ident = str(match.get("id") or "")
+    if tipo == "PLACA":
+        cliente, _veiculo = veiculo_por_placa(ident)
+    else:
+        cliente, _pessoa = pessoa_por_face(ident)
+    if cliente is None:
+        return True
+    return _digitos(cliente.get("documento")) == digitos
 
 
 def _emails_unicos(emails) -> list[str]:
@@ -814,7 +1095,7 @@ def emails_do_alerta(camera_ref: str) -> list[str]:
 
 
 def nomes_cameras_conta(documento: str) -> set[str]:
-    """Nomes das câmeras do CPF/CNPJ (para filtrar ao vivo e painéis)."""
+    """Nomes das câmeras do CPF/CNPJ (próprias)."""
     digitos = _digitos(documento)
     if not digitos:
         return set()
@@ -831,8 +1112,85 @@ def nomes_cameras_conta(documento: str) -> set[str]:
     return nomes
 
 
+def compartilha_camera(documento: str) -> bool:
+    """Condição da política: só enxerga a rua quem cadastrou ao menos uma câmera."""
+    return bool(nomes_cameras_conta(documento))
+
+
+def ruas_compartilhadas(documento: str) -> set[str]:
+    """Logradouros normalizados das câmeras ativas da conta."""
+    digitos = _digitos(documento)
+    if not digitos:
+        return set()
+    cliente = cliente_por_documento(digitos)
+    if cliente is None:
+        return set()
+    ruas = set()
+    for item in cliente.get("cameras") or []:
+        if not isinstance(item, dict) or item.get("ativa") is False:
+            continue
+        chave = normalizar_rua(item.get("rua"))
+        if chave:
+            ruas.add(chave)
+    return ruas
+
+
+def nomes_cameras_visiveis(documento: str, perfil: str = "") -> set[str]:
+    """Admin: todas. Cliente com câmera: próprias + mesma rua. Sem câmera: vazio."""
+    digitos = _digitos(documento)
+    if perfil == "administrador" or digitos == _digitos(DOCUMENTO_ADMIN):
+        nomes = set()
+        for cliente in listar_clientes():
+            if cliente.get("ativo") is False:
+                continue
+            for item in cliente.get("cameras") or []:
+                if not isinstance(item, dict) or item.get("ativa") is False:
+                    continue
+                nome = str(item.get("nome") or "").strip()
+                if nome:
+                    nomes.add(nome)
+        return nomes
+    proprias = nomes_cameras_conta(digitos)
+    if not proprias:
+        return set()
+    ruas = ruas_compartilhadas(digitos)
+    visiveis = set(proprias)
+    if not ruas:
+        return visiveis
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        for item in cliente.get("cameras") or []:
+            if not isinstance(item, dict) or item.get("ativa") is False:
+                continue
+            if normalizar_rua(item.get("rua")) not in ruas:
+                continue
+            nome = str(item.get("nome") or "").strip()
+            if nome:
+                visiveis.add(nome)
+    return visiveis
+
+
+def item_na_rua_visivel(documento: str, camera: str = "", rua: str = "") -> bool:
+    """True se câmera ou logradouro do item está no escopo de rua do CPF."""
+    digitos = _digitos(documento)
+    if digitos == _digitos(DOCUMENTO_ADMIN):
+        return True
+    permitidas = nomes_cameras_visiveis(digitos)
+    cam = str(camera or "").strip()
+    if cam and cam in permitidas:
+        return True
+    ruas = ruas_compartilhadas(digitos)
+    if not ruas:
+        return False
+    chave = normalizar_rua(rua) or normalizar_rua(cam)
+    if not chave:
+        return False
+    return any(rua_conta in chave or chave in rua_conta for rua_conta in ruas)
+
+
 def pode_ver_analise(documento: str) -> bool:
-    """Usuário com conta ativa navega nos painéis; o conteúdo é filtrado pelas câmeras do CPF/CNPJ."""
+    """Usuário com conta ativa navega nos painéis; o conteúdo é filtrado pela política de rua."""
     digitos = _digitos(documento)
     if not digitos:
         return False
