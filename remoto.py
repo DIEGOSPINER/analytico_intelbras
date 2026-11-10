@@ -46,7 +46,7 @@ ESTILO = """
 body { margin: 0; min-height: 100vh; color: var(--texto); font-family: Segoe UI, sans-serif; font-size: 16px;
   background: radial-gradient(1200px 500px at 80% -10%, rgba(76, 141, 255, 0.18), transparent 55%), var(--fundo); }
 .app { display: flex; min-height: 100vh; align-items: flex-start; }
-aside { width: 248px; flex: none; position: sticky; top: 0; height: 100vh; overflow: auto;
+aside { width: 248px; flex: none; position: sticky; top: 0; height: 100vh; overflow: auto; z-index: 1;
   padding: 22px 16px; background: rgba(10, 14, 28, 0.82);
   border-right: 1px solid var(--linha); backdrop-filter: blur(16px); }
 .marca { display: flex; gap: 12px; align-items: center; margin-bottom: 28px; }
@@ -59,12 +59,12 @@ nav a { display: flex; align-items: center; gap: 10px; color: var(--mudo); text-
   border-radius: 12px; padding: 11px 12px; margin-bottom: 4px; font-size: 15px; }
 nav a svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; flex: none; }
 nav a.ativo, nav a:hover { color: var(--texto); background: rgba(76, 141, 255, 0.16); }
-.palco { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.palco { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; z-index: 40; }
 .palco.parede { height: 100vh; }
 .topo { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 22px 0; }
 .topo h1 { margin: 0; font-size: 28px; font-weight: 600; }
 .topo p { margin: 4px 0 0; color: var(--mudo); font-size: 15px; }
-main { padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 22px; }
+main { padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 22px; position: relative; z-index: 2; overflow: visible; }
 .acoes-gestao { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .acoes-gestao form { margin: 0; display: inline; }
 .acoes-gestao button { padding: 8px 12px; font-size: 13px; }
@@ -82,7 +82,7 @@ button svg { stroke: currentColor; width: 16px; height: 16px; }
 .atalho { display: flex; align-items: center; gap: 12px; min-height: 92px; padding: 18px; font-size: 18px;
   color: var(--texto); text-decoration: none; }
 .atalho svg { width: 22px; height: 22px; stroke: var(--ciano); fill: none; stroke-width: 1.8; }
-.tela { flex: 1; min-height: 0; margin: 12px 22px 18px; overflow: hidden; }
+.tela { flex: 1; min-height: 0; margin: 12px 22px 18px; overflow: visible; }
 .tela img, .video img { width: 100%; height: 100%; object-fit: contain; display: block; background: transparent; }
 .parede .miolo { display: flex; flex-direction: column; height: 100%; }
 .comandos { display: flex; gap: 8px; padding: 0 22px; }
@@ -90,8 +90,15 @@ button svg { stroke: currentColor; width: 16px; height: 16px; }
   background: linear-gradient(180deg, #5b97ff, #3d74f0); color: white; border: 0;
   border-radius: 12px; padding: 11px 16px; font-size: 15px; cursor: pointer; }
 label { display: block; margin: 12px 0; color: var(--mudo); font-size: 14px; }
-input, select { width: 100%; margin-top: 6px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--linha);
+input { width: 100%; margin-top: 6px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--linha);
   background: rgba(8, 12, 24, 0.65); color: var(--texto); font-size: 16px; }
+select { width: 100%; margin-top: 6px; min-height: 48px; line-height: 1.35; appearance: auto;
+  padding: 12px 14px; border-radius: 12px; font-size: 16px; color-scheme: light;
+  background: #f4f7fb; color: #0b1220; border: 1px solid #c5d0e0; }
+select option, select optgroup { color: #0b1220; background: #ffffff; }
+.campo-lista { display: block; overflow: visible; position: relative; z-index: 1; }
+.campo-lista input[list] { color-scheme: light; background: #f4f7fb; color: #0b1220; border: 1px solid #c5d0e0; }
+.cartao { overflow: visible; }
 .aviso { color: var(--ambar); } .ok { color: var(--verde); }
 table { width: 100%; border-collapse: collapse; margin: 8px 0 20px; }
 td, th { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--linha); font-size: 15px; }
@@ -125,10 +132,10 @@ iframe#mapa { height: 520px; }
 main[data-tela="inicio"] .cartao span { font-size: 18px; gap: 12px; }
 main[data-tela="inicio"] .cartao span svg { width: 40px; height: 40px; }
 main[data-tela="inicio"] .cartao strong { font-size: 40px; }
-.segmentador-portal { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: end; margin-bottom: 16px; }
+.segmentador-portal { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: start; margin-bottom: 16px; }
 .segmentador-portal label { display: grid; gap: 6px; min-width: min(100%, 420px); flex: 1; color: var(--mudo); font-size: 13px; }
 .segmentador-portal select { width: 100%; }
-.segmentador-portal .estado { margin: 0; color: var(--ciano); font-size: 14px; }
+.segmentador-portal .estado { margin: 8px 0 0; color: var(--ciano); font-size: 14px; flex: 1 1 100%; }
 .faixa-vista { position: sticky; top: 0; z-index: 12; margin: 0 0 12px; padding: 10px 14px; border-radius: 12px; border: 1px solid rgba(76,141,255,.35); background: rgba(76,141,255,.12); color: #dce8ff; font-size: 14px; display: none; }
 .faixa-vista.ativa { display: block; }
 .faixa-vista a { color: var(--ciano); }
@@ -634,7 +641,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js"></script>
+<script src="/painel.js?v=listas6"></script>
 </body>
 </html>"""
 
@@ -1119,22 +1126,81 @@ def _campo(rotulo: str, nome: str, valor="", tipo: str = "text", obrigatorio: bo
     )
 
 
-def _campo_logradouro(valor: str = "", obrigatorio: bool = True) -> str:
+def _campo_lista(
+    rotulo: str,
+    nome: str,
+    valor: str = "",
+    opcoes: list | tuple = (),
+    obrigatorio: bool = False,
+    grupo: str = "",
+    placeholder: str = "",
+) -> str:
+    """Campo com sugestões (datalist): evita bug do <select> no Chrome com aside sticky."""
+    del grupo  # datalist não tem optgroup; mantido só por compatibilidade de chamada
     req = " required" if obrigatorio else ""
     atual = str(valor or "").strip()
-    opcoes = ["<option value=''>Escolha o logradouro</option>"]
+    lista_id = f"lista-{nome}"
+    dica = placeholder or f"Escolha ou digite {rotulo.lower()}"
     vistos = set()
-    for rua in cadastro.LOGRADOUROS_STELLA_MARIS:
-        vistos.add(cadastro.normalizar_rua(rua))
-        marcado = " selected" if cadastro.normalizar_rua(rua) == cadastro.normalizar_rua(atual) else ""
-        opcoes.append(f"<option value='{_html_seguro(rua)}'{marcado}>{_html_seguro(rua)}</option>")
+    corpo = []
+    for item in opcoes:
+        texto = str(item or "").strip()
+        if not texto:
+            continue
+        chave = cadastro.normalizar_rua(texto)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        corpo.append(f"<option value='{_html_seguro(texto)}'>")
     if atual and cadastro.normalizar_rua(atual) not in vistos:
-        opcoes.append(
-            f"<option value='{_html_seguro(atual)}' selected>{_html_seguro(atual)}</option>"
-        )
+        corpo.insert(0, f"<option value='{_html_seguro(atual)}'>")
     return (
-        "<label>Logradouro (Stella Maris)"
-        f"<select name='rua'{req}>{''.join(opcoes)}</select></label>"
+        f"<label class='campo-lista'>{_html_seguro(rotulo)}"
+        f"<input type='text' name='{nome}' list='{lista_id}' value='{_html_seguro(atual)}'"
+        f" autocomplete='off' placeholder='{_html_seguro(dica)}'{req}>"
+        f"<datalist id='{lista_id}'>{''.join(corpo)}</datalist></label>"
+    )
+
+
+def _campo_logradouro(valor: str = "", obrigatorio: bool = True) -> str:
+    stella = list(cadastro.LOGRADOUROS_STELLA_MARIS)
+    demais = [item for item in cadastro.LOGRADOUROS_SALVADOR if item not in stella]
+    return _campo_lista(
+        "Logradouro",
+        "rua",
+        valor or "",
+        stella + demais,
+        obrigatorio=obrigatorio,
+        placeholder="Escolha ou digite o logradouro",
+    )
+
+
+def _campo_bairro(valor: str = "") -> str:
+    return _campo_lista("Bairro", "bairro", valor or "Stella Maris", cadastro.BAIRROS_SALVADOR)
+
+
+def _campo_municipio(valor: str = "") -> str:
+    return _campo_lista("Município", "cidade", valor or "Salvador", cadastro.MUNICIPIOS_BAHIA)
+
+
+def _campo_marca(valor: str = "") -> str:
+    return _campo_lista(
+        "Marca",
+        "marca",
+        valor or "Intelbras",
+        cadastro.MARCAS_CAMERA,
+        placeholder="Escolha ou digite a marca",
+    )
+
+
+def _campo_modelo(valor: str = "") -> str:
+    return _campo_lista(
+        "Modelo",
+        "modelo",
+        valor or "",
+        cadastro.MODELOS_CAMERA,
+        obrigatorio=True,
+        placeholder="Escolha ou digite o modelo",
     )
 
 
@@ -1405,8 +1471,8 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 <input type="hidden" name="id_anterior" value="{_html_seguro(ident)}">
 {_campo("Identificador", "id", ident)}
 {_campo("Nome", "nome", atual.get("nome") or "", obrigatorio=True)}
-{_campo("Marca", "marca", atual.get("marca") or "Intelbras")}
-{_campo("Modelo", "modelo", atual.get("modelo") or "", obrigatorio=True)}
+{_campo_marca(atual.get("marca") or "Intelbras")}
+{_campo_modelo(atual.get("modelo") or "")}
 {_check("ativa", "Câmera ativa", atual.get("ativa", True))}
 {_campo("Host", "host", atual.get("host") or "")}
 {_campo("Porta", "porta", _valor_campo(atual, "porta", 554))}
@@ -1415,8 +1481,8 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 {_campo("Canal", "canal", _valor_campo(atual, "canal", 1))}
 {_campo("Subtype", "subtype", _valor_campo(atual, "subtype", 0))}
 {_campo_logradouro(atual.get("rua") or "")}
-{_campo("Bairro", "bairro", atual.get("bairro") or "Stella Maris")}
-{_campo("Cidade", "cidade", atual.get("cidade") or "Salvador")}
+{_campo_bairro(atual.get("bairro") or "Stella Maris")}
+{_campo_municipio(atual.get("cidade") or "Salvador")}
 {_campo("Latitude", "latitude", atual.get("latitude") if atual.get("latitude") != "" else "")}
 {_campo("Longitude", "longitude", atual.get("longitude") if atual.get("longitude") != "" else "")}
 <button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>

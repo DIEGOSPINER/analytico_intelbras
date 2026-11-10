@@ -1603,6 +1603,20 @@ def salvar_ocorrencia(
 JANELA_CONTROLE = "ANALITICO"
 
 
+def _titulo_ascii(texto: str) -> str:
+    """OpenCV HighGui no Windows quebra título com acento e deixa janela órfã."""
+    import unicodedata
+
+    limpo = unicodedata.normalize("NFKD", str(texto or ""))
+    limpo = "".join(caractere for caractere in limpo if not unicodedata.combining(caractere))
+    limpo = "".join(
+        caractere if (caractere.isalnum() or caractere in " -_") else " "
+        for caractere in limpo
+    )
+    limpo = " ".join(limpo.split())
+    return limpo or "camera"
+
+
 _JANELAS_PREPARADAS = set()
 
 
@@ -1676,17 +1690,23 @@ def _fechar_janelas(titulos):
 
 
 def titulo_janela(nome):
-    return f"Analitico - {nome}"
+    return f"Analitico - {_titulo_ascii(nome)}"
 
 
-def _encerrar_camera(item):
+def _encerrar_camera(item, video_cameras=None, janelas_video=None):
     analitica = item["analitica"]
     print(f"Câmera encerrada: {analitica.nome}")
     audio = item.get("audio")
     if audio is not None:
         audio.stop()
     analitica.stop()
-    fechar_janela(titulo_janela(item["janela"]))
+    titulo = titulo_janela(item["janela"])
+    fechar_janela(titulo)
+    if janelas_video is not None:
+        janelas_video.discard(titulo)
+    if video_cameras is not None:
+        video_cameras.pop(item.get("nome") or "", None)
+        video_cameras.pop(item.get("janela") or "", None)
 
 
 def _copiar_local(destino, cfg):
@@ -1697,7 +1717,24 @@ def _copiar_local(destino, cfg):
     destino["longitude"] = cfg.get("longitude")
 
 
-def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, avisos_offline):
+def _limpar_janelas_orfas(titulos_vivos):
+    vivos = set(titulos_vivos or ())
+    vivos.add(JANELA_CONTROLE)
+    for titulo in list(_JANELAS_PREPARADAS):
+        if titulo not in vivos:
+            fechar_janela(titulo)
+
+
+def aplicar_cameras(
+    desejadas,
+    estado,
+    detector_arma,
+    id_faces,
+    id_placas,
+    avisos_offline,
+    video_cameras=None,
+    janelas_video=None,
+):
     """Abre câmeras novas e fecha as que saíram da lista ou trocaram de acesso."""
     por_id = {camera["id"]: camera for camera in desejadas}
 
@@ -1705,7 +1742,7 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, aviso
         atual = estado[ident]
         nova = por_id.get(ident)
         if nova is None or nova["url"] != atual["url"]:
-            _encerrar_camera(atual)
+            _encerrar_camera(atual, video_cameras, janelas_video)
             del estado[ident]
 
     for ident, cfg in por_id.items():
@@ -1717,7 +1754,13 @@ def aplicar_cameras(desejadas, estado, detector_arma, id_faces, id_placas, aviso
                 atual["analitica"].modelo = atual["modelo"]
                 atual["analitica"].perfil = perfil_camera(atual["modelo"])
             if cfg["nome"] != atual["nome"]:
+                antigo = atual["nome"]
                 fechar_janela(titulo_janela(atual["janela"]))
+                if janelas_video is not None:
+                    janelas_video.discard(titulo_janela(atual["janela"]))
+                if video_cameras is not None:
+                    ligado = video_cameras.pop(antigo, False)
+                    video_cameras[cfg["nome"]] = bool(ligado)
                 atual["analitica"].nome = cfg["nome"]
                 atual["analitica"].comportamento.nome = cfg["nome"]
                 atual["nome"] = cfg["nome"]
@@ -2540,7 +2583,8 @@ def main():
     print("Risco: Informativo(1) | Atencao(2) | Prioritario(3) | Critico(4)")
     print("Identidade: faces próximas + placas de veículos")
     print("Câmeras: clientes.json (a conta do cliente é relida durante a execução).")
-    print("V mostra ou oculta o vídeo. O monitoramento continua oculto.")
+    print("Vídeo das câmeras começa oculto. 5, 6... abrem ou fecham cada uma.")
+    print("V mostra ou oculta todas. O monitoramento continua sem a janela.")
     print("1 abre ou fecha Contagens.")
     print("2 abre ou fecha Comportamento.")
     print("3 abre ou fecha Alertas de RF e LPR.")
@@ -2573,6 +2617,11 @@ def main():
     proxima_tela = 0.0
     proxima_remota = 0.0
     versao_mapa_vista = 0
+    try:
+        cv2.destroyAllWindows()
+    except Exception:
+        pass
+    _JANELAS_PREPARADAS.clear()
 
     try:
         while True:
@@ -2589,12 +2638,26 @@ def main():
                     print("Mantendo as câmeras já em análise.")
                 else:
                     aplicar_cameras(
-                        lista, estado, detector_arma, id_faces, id_placas, avisos_offline
+                        lista,
+                        estado,
+                        detector_arma,
+                        id_faces,
+                        id_placas,
+                        avisos_offline,
+                        video_cameras,
+                        janelas_video,
                     )
                     proxima_sonda = time.time() + SONDA_OFFLINE_SEG
             elif lista and time.time() >= proxima_sonda:
                 aplicar_cameras(
-                    lista, estado, detector_arma, id_faces, id_placas, avisos_offline
+                    lista,
+                    estado,
+                    detector_arma,
+                    id_faces,
+                    id_placas,
+                    avisos_offline,
+                    video_cameras,
+                    janelas_video,
                 )
                 proxima_sonda = time.time() + SONDA_OFFLINE_SEG
 
@@ -2615,11 +2678,13 @@ def main():
 
             ativas = {titulo_janela(item["janela"]) for item in estado.values()}
             janelas_video.intersection_update(ativas)
+            _limpar_janelas_orfas(ativas | janelas_painel | janelas_video)
 
             for item in list(estado.values()):
-                video_cameras.setdefault(item["nome"], True)
+                # Começa oculta: o operador abre com 5/6/... (evita janelas fixas duplicadas).
+                video_cameras.setdefault(item["nome"], False)
                 titulo = titulo_janela(item["janela"])
-                if titulo not in janelas_video or not video_cameras.get(item["nome"], True):
+                if titulo not in janelas_video or not video_cameras.get(item["nome"], False):
                     continue
                 try:
                     visivel = cv2.getWindowProperty(titulo, cv2.WND_PROP_VISIBLE) >= 1
@@ -2659,7 +2724,7 @@ def main():
                     for reg in placas:
                         salvar_passagem_placa(reg)
                 titulo = titulo_janela(item["janela"])
-                if video_cameras.get(cam.nome, True) and cam.stream.preview is not None:
+                if video_cameras.get(cam.nome, False) and cam.stream.preview is not None:
                     tela = cam.stream.preview.copy()
                     if time.time() - visao["quando"] < 0.6:
                         for x1, y1, x2, y2, rotulo, cor in visao["anotacoes"]:
@@ -2743,7 +2808,7 @@ def main():
                     "nome": item["nome"],
                     "rua": item.get("rua") or "",
                     "tecla": str(4 + indice),
-                    "aberto": video_cameras.get(item["nome"], True),
+                    "aberto": video_cameras.get(item["nome"], False),
                 }
                 for indice, item in enumerate(ordem, start=1)
                 if indice <= 5
@@ -2767,7 +2832,7 @@ def main():
             if tecla in (ord("f"), ord("F")):
                 alternar_tela_cheia()
             if tecla in (ord("v"), ord("V")):
-                ligar = not any(video_cameras.get(item["nome"], True) for item in estado.values())
+                ligar = not any(video_cameras.get(item["nome"], False) for item in estado.values())
                 for item in estado.values():
                     video_cameras[item["nome"]] = ligar
                 if ligar:
@@ -2779,7 +2844,7 @@ def main():
                 ordem = list(estado.values())
                 if posicao < len(ordem):
                     nome = ordem[posicao]["nome"]
-                    video_cameras[nome] = not video_cameras.get(nome, True)
+                    video_cameras[nome] = not video_cameras.get(nome, False)
                     estado_camera = "ativa" if video_cameras[nome] else "oculta"
                     print(f"Camera {posicao + 1} {estado_camera}. O monitoramento continua.")
             if tecla in (ord("1"), ord("2"), ord("3"), ord("4")):

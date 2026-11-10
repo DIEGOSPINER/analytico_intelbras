@@ -55,7 +55,7 @@ CLASSES_LOCAIS = {
     "visitante",
     "acompanhamento_familiar",
 }
-# Logradouros do bairro Stella Maris (Salvador/BA) para o cadastro de câmeras.
+# Stella Maris primeiro (piloto); em seguida outros logradouros de Salvador.
 LOGRADOUROS_STELLA_MARIS = (
     "Rua Lidia Borja",
     "Rua Professor Carlos Ott",
@@ -71,6 +71,138 @@ LOGRADOUROS_STELLA_MARIS = (
     "Rua Doutor José Eduardo Freire",
     "Avenida Pinto de Aguiar",
     "Rua Praia de Stella Maris",
+)
+LOGRADOUROS_SALVADOR = LOGRADOUROS_STELLA_MARIS + (
+    "Avenida Oceânica",
+    "Avenida Octávio Mangabeira",
+    "Avenida Paralela",
+    "Avenida Antônio Carlos Magalhães",
+    "Avenida Sete de Setembro",
+    "Avenida Tancredo Neves",
+    "Avenida Centenário",
+    "Avenida Vasco da Gama",
+    "Avenida Garibaldi",
+    "Avenida Joana Angélica",
+    "Avenida Contorno",
+    "Avenida Lafayete Coutinho",
+    "Avenida Juracy Magalhães Júnior",
+    "Avenida Luís Viana Filho",
+    "Avenida San Martin",
+    "Avenida Suburbana",
+    "Rua Chile",
+    "Rua Carlos Gomes",
+    "Rua da Graça",
+    "Rua do Imperador",
+    "Rua Direita de Santo Antônio",
+    "Rua Miguel Calmon",
+    "Rua Portão da Atalaia",
+    "Rua Dias d'Ávila",
+    "Rua Ceará",
+    "Rua Amazonas",
+    "Rua Pará",
+    "Rua Bahia",
+    "Rua Alagoinhas",
+    "Rua Aristides Caire",
+    "Rua Conselheiro Pedro Luís",
+    "Rua Saldanha da Gama",
+    "Rua Tertuliano Sales",
+    "Ladeira da Barra",
+    "Ladeira do Bomfim",
+    "Praça da Sé",
+    "Praça Municipal",
+    "Praça Castro Alves",
+)
+BAIRROS_SALVADOR = (
+    "Stella Maris",
+    "Itapuã",
+    "Praia do Flamengo",
+    "Patamares",
+    "Piatã",
+    "Boca do Rio",
+    "Imbuí",
+    "Pituba",
+    "Costa Azul",
+    "Itaigara",
+    "Caminho das Árvores",
+    "Parque Bela Vista",
+    "Brotas",
+    "Garcia",
+    "Graça",
+    "Barra",
+    "Ondina",
+    "Rio Vermelho",
+    "Federação",
+    "Campo Grande",
+    "Centro",
+    "Comércio",
+    "Nazaré",
+    "Tororó",
+    "Barris",
+    "Vitória",
+    "Canela",
+    "Engenho Velho de Brotas",
+    "São Caetano",
+    "Pau da Lima",
+    "Cajazeiras",
+    "Paripe",
+    "Periperi",
+    "São Tomé de Paripe",
+    "Plataforma",
+    "Lobato",
+    "Alto de Coutos",
+    "São Cristóvão",
+    "Valéria",
+    "Mussurunga",
+    "São Marcos",
+    "Tancredo Neves",
+    "Sussuarana",
+    "Cabula",
+    "Narandiba",
+    "Beiru",
+    "Arenoso",
+    "Resgate",
+)
+MUNICIPIOS_BAHIA = (
+    "Salvador",
+    "Lauro de Freitas",
+    "Camaçari",
+    "Simões Filho",
+    "Candeias",
+    "Dias d'Ávila",
+    "Madre de Deus",
+    "São Francisco do Conde",
+    "Vera Cruz",
+    "Itaparica",
+    "Mata de São João",
+    "Catu",
+    "Alagoinhas",
+    "Feira de Santana",
+)
+MARCAS_CAMERA = (
+    "Intelbras",
+    "Hikvision",
+    "Dahua",
+    "Axis",
+    "Bosch",
+    "Hanwha",
+    "Uniview",
+    "Giga",
+    "Vivotek",
+    "TP-Link",
+)
+MODELOS_CAMERA = (
+    "IM3",
+    "IM5",
+    "VIP 1130 B G2",
+    "VIP 1220 B G3",
+    "VIP 1230 B G4",
+    "VIP 3240 B IA",
+    "VIP 3430 B IA",
+    "VIP 5450 B IA",
+    "VIP S 4020",
+    "VIP S 4430",
+    "iM4 Plus",
+    "iM5 SC",
 )
 
 
@@ -98,15 +230,27 @@ def normalizar_rua(rua: str) -> str:
     return texto
 
 
-def rua_canonica(rua: str) -> str:
-    """Devolve o rótulo oficial da lista Stella Maris quando houver correspondência."""
-    chave = normalizar_rua(rua)
+def _canonico_lista(valor: str, opcoes: tuple[str, ...] | list[str]) -> str:
+    chave = normalizar_rua(valor)
     if not chave:
-        return str(rua or "").strip()
-    for item in LOGRADOUROS_STELLA_MARIS:
+        return str(valor or "").strip()
+    for item in opcoes:
         if normalizar_rua(item) == chave:
             return item
-    return str(rua or "").strip()
+    return str(valor or "").strip()
+
+
+def rua_canonica(rua: str) -> str:
+    """Devolve o rótulo oficial da lista de logradouros quando houver correspondência."""
+    return _canonico_lista(rua, LOGRADOUROS_SALVADOR)
+
+
+def bairro_canonico(bairro: str) -> str:
+    return _canonico_lista(bairro, BAIRROS_SALVADOR) or "Stella Maris"
+
+
+def municipio_canonico(cidade: str) -> str:
+    return _canonico_lista(cidade, MUNICIPIOS_BAHIA) or "Salvador"
 
 
 def _digitos(valor) -> str:
@@ -582,8 +726,8 @@ def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
         "modelo": modelo,
         "ativa": campos.get("ativa", True) is not False,
         "rua": rua_canonica(str(campos.get("rua") or "").strip()),
-        "bairro": str(campos.get("bairro") or "").strip() or "Stella Maris",
-        "cidade": str(campos.get("cidade") or "").strip() or "Salvador",
+        "bairro": bairro_canonico(str(campos.get("bairro") or "").strip()),
+        "cidade": municipio_canonico(str(campos.get("cidade") or "").strip()),
         "latitude": _coordenada_campo(campos.get("latitude"), "a latitude"),
         "longitude": _coordenada_campo(campos.get("longitude"), "a longitude"),
     })

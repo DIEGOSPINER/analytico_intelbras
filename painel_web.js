@@ -1097,11 +1097,12 @@ function montarSegmentadorInicio(tela, dados) {
     caixa = document.createElement("section");
     caixa.id = "segmentador-portal";
     caixa.className = "cartao segmentador-portal";
-    caixa.innerHTML = `<label>Segmentar dados do portal
-<select id="vista-portal-sel"></select>
+    caixa.innerHTML = `<label class="campo-lista">Segmentar dados do portal
+<select id="vista-portal-sel" title="Segmentar dados do portal"></select>
 </label>
 <p class="estado" id="vista-portal-estado"></p>`;
-    tela.insertBefore(caixa, tela.firstChild);
+    if (tela.firstChild) tela.insertBefore(caixa, tela.firstChild);
+    else tela.appendChild(caixa);
     const sel = caixa.querySelector("#vista-portal-sel");
     sel.addEventListener("change", async () => {
       const estado = document.getElementById("vista-portal-estado");
