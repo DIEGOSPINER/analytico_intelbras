@@ -78,8 +78,8 @@ _SISTEMA = (
     "Quando perguntarem o que ocorreu no dia, na semana ou no mês, use os blocos Totais do dia / "
     "da semana / do mês, a série diária, ocorrências, matches, áudio, informes, insights e "
     "variações de fluxo (pessoas/veículos por minuto com percentual) do contexto. "
-    "Se houver aumento repentino de fluxo, cite câmera, período (minuto/hora/dia), "
-    "de→para (/min, /h ou /dia) e a variação percentual. "
+    "Se houver aumento ou redução de fluxo, cite câmera, compare com a média da hora, "
+    "informe de→para e a variação percentual (também hora/dia quando houver). "
     "Regra de probabilidade: cada passagem de pessoa de risco no histórico = 1 risco de invasão. "
     "Entre 20h e 06h aumente a chance (ladrões preferem a madrugada); sexta a domingo também eleva. "
     "Quando pedirem chance, probabilidade, invasão, cruzamento ou padrão, use o briefing criminal "
@@ -784,7 +784,7 @@ def _contexto(resumo: dict, documento: str = "", perfil: str = "") -> str:
             f"{nome} {qtd}" for nome, qtd in sorted(por_camera.items(), key=lambda par: -par[1])[:8]
         ),
         "Câmeras neste instante: " + ("; ".join(cameras_agora) or "nenhuma"),
-        "Variações de fluxo (faixas minuto/hora/dia com %): " + fluxo_txt,
+        "Variações de fluxo (vs média da hora, com % ↑/↓): " + fluxo_txt,
         f"Ocorrências do aplicativo: {len(app)}. Naturezas: {naturezas}. Logradouros: {ruas}.",
         "Alertas de interesse: " + hist_txt,
         "Informes: " + inf_txt,

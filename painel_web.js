@@ -2320,11 +2320,11 @@ function chavesFalaBase(dados) {
   });
   (dados.fluxo_eventos || []).forEach((evento) => {
     if (!evento || !evento.texto) return;
-    chaves.push(`fluxo:${evento.camera || ""}|${evento.tipo || ""}|${evento.periodo || "minuto"}|${evento.faixa_para}|${evento.quando || ""}|${evento.de}->${evento.para}`);
+    chaves.push(`fluxo:${evento.camera || ""}|${evento.tipo || ""}|${evento.periodo || "minuto"}|${evento.sentido || ""}|${evento.quando || ""}|${evento.de}->${evento.para}|${evento.variacao_pct}`);
   });
   (dados.cameras_vivo || []).forEach((camera) => {
     if (camera.fluxo_anormal) {
-      chaves.push(`fluxo:anormal:${camera.nome}:${Math.floor(Date.now() / 120000)}`);
+      chaves.push(`fluxo:anormal:${camera.nome}:${Math.floor(Date.now() / 600000)}`);
     }
   });
   return chaves;
@@ -2345,14 +2345,11 @@ function falarFluxoAnormalStive(dados) {
     const texto = String(evento.texto || "").trim();
     if (!texto) continue;
     const periodo = evento.periodo || "minuto";
-    const chave = `fluxo:${evento.camera || ""}|${evento.tipo || ""}|${periodo}|${evento.faixa_para}|${evento.quando || ""}|${evento.de}->${evento.para}`;
-    const para = Number(evento.para || 0);
-    const classe = (
-      (periodo === "minuto" && para >= 10)
-      || (periodo === "hora" && para >= 120)
-      || (periodo === "dia" && para >= 500)
-      || (evento.tipo === "pessoa" && periodo === "minuto" && para >= 30)
-    ) ? "risco" : "info";
+    const pct = Number(evento.variacao_pct);
+    const chave = `fluxo:${evento.camera || ""}|${evento.tipo || ""}|${periodo}|${evento.sentido || ""}|${evento.quando || ""}|${evento.de}->${evento.para}|${evento.variacao_pct}`;
+    const classe = (Number.isFinite(pct) && pct >= 50) || String(evento.sentido || "") === "aumento"
+      ? "risco"
+      : "info";
     if (enfileirarFalaStive(chave, "Variação de fluxo", texto, {
       tipo: "fluxo",
       classe,
@@ -2366,7 +2363,7 @@ function falarFluxoAnormalStive(dados) {
     if (!camera.fluxo_anormal) continue;
     const nome = camera.nome || "câmera";
     const minuto = Number((camera.fluxo || {}).minuto || 0);
-    const chave = `fluxo:anormal:${nome}:${Math.floor(Date.now() / 120000)}`;
+    const chave = `fluxo:anormal:${nome}:${Math.floor(Date.now() / 600000)}`;
     const texto = `Fluxo de pessoas fora do normal identificado na ${nome}${minuto ? ` (${minuto}/min)` : ""}.`;
     if (enfileirarFalaStive(chave, "Fluxo anormal", texto, {
       tipo: "fluxo",

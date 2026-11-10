@@ -645,7 +645,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=fluxo2"></script>
+<script src="/painel.js?v=fluxo4"></script>
 </body>
 </html>"""
 

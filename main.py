@@ -1926,7 +1926,10 @@ def _publicar_cameras(portal, estado, parar):
 _FLUXO = {}
 _FLUXO_AVISO = {}
 _FLUXO_PERIODO = {}  # (nome, tipo) -> totais calendário hora/dia + baseline anterior
+_FLUXO_COOLDOWN_CAMERA = {}  # nome -> timestamp do último aviso (↑/↓)
 _FLUXO_EVENTOS = deque(maxlen=60)
+_INTERVALO_AVISO_FLUXO_SEG = 600  # no máximo 1 informativo a cada 10 min/câmera
+_FLUXO_PCT_LIMIAR = 25  # variação mínima vs média da hora (ou dia) para avisar
 _SERIE = deque(maxlen=90)
 _NARRACAO = {"chave": "", "texto": "", "pedido": ""}
 _ORDEM_LED = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
@@ -2224,18 +2227,9 @@ def _fluxo_pessoa(nome, passagens):
     return _fluxo_serie(nome, "pessoa", passagens)
 
 
-# Limiares de fluxo: superlotação e faixas de volume para o Stive narrar.
+# Limiares de fluxo: superlotação absoluta + variação % vs média da hora.
 _FLUXO_ANORMAL_SEGUNDO = 3
 _FLUXO_ANORMAL_MINUTO = 30  # superlotação: 30 pessoas/minuto
-_FAIXAS_FLUXO = {
-    ("pessoa", "minuto"): (0, 1, 2, 5, 10, 20, 30),
-    ("veiculo", "minuto"): (0, 1, 2, 5, 10),
-    ("pessoa", "hora"): (0, 10, 30, 60, 120, 300, 600),
-    ("veiculo", "hora"): (0, 5, 15, 30, 60, 120),
-    ("pessoa", "dia"): (0, 50, 100, 200, 500, 1000, 2000),
-    ("veiculo", "dia"): (0, 20, 50, 100, 200, 500),
-}
-_UNIDADE_FLUXO = {"minuto": "/min", "hora": "/h", "dia": "/dia"}
 # Permanência de pessoa: conta desde o 1º frame; só avisa no balão após 2 min.
 _AVISO_PERMANENCIA_PESSOA_SEG = 120
 
@@ -2249,115 +2243,152 @@ def _fluxo_pessoas_anormal(fluxo: dict) -> bool:
     )
 
 
-def _faixa_fluxo(valor: int, faixas: tuple[int, ...]) -> int:
-    atual = 0
-    numero = max(0, int(valor or 0))
-    for limiar in faixas:
-        if numero >= int(limiar):
-            atual = int(limiar)
-    return atual
+def _minutos_decorridos_hora() -> float:
+    agora = datetime.now()
+    return max(1.0, agora.minute + (agora.second / 60.0))
 
 
-def _variacao_fluxo_pct(antes: int, agora: int) -> int | None:
-    antes = max(0, int(antes or 0))
-    agora = max(0, int(agora or 0))
-    if antes <= 0:
-        return None
-    return int(round(((agora - antes) / float(antes)) * 100))
+def _media_fluxo_hora(hora_total: int) -> float:
+    """Média de público por minuto na hora civil atual."""
+    return max(0.0, float(hora_total or 0) / _minutos_decorridos_hora())
 
 
-def _texto_variacao_fluxo(
+def _variacao_fluxo_pct(base: float, atual: float) -> int | None:
+    base = float(base or 0)
+    atual = float(atual or 0)
+    if base <= 0:
+        if atual <= 0:
+            return None
+        return 100
+    return int(round(((atual - base) / base) * 100))
+
+
+def _candidato_variacao_fluxo(
     tipo: str,
     nome: str,
     periodo: str,
-    de: int,
-    para: int,
-    pct: int | None,
-) -> str:
-    sujeito = "pessoas" if tipo == "pessoa" else "veículos"
-    unidade = _UNIDADE_FLUXO.get(periodo, "/min")
-    escala = {"minuto": "no minuto", "hora": "na hora", "dia": "no dia"}.get(periodo, "")
-    if de <= 0 and para > 0:
-        return (
-            f"Fluxo de {sujeito} {escala} na {nome}: saiu de nenhuma para {para}{unidade} "
-            f"(+100% a partir do zero; início de movimento)."
-        )
-    if pct is None:
-        return f"Fluxo de {sujeito} {escala} na {nome}: de {de}{unidade} para {para}{unidade}."
-    sinal = f"+{pct}%" if pct >= 0 else f"{pct}%"
-    return (
-        f"Fluxo de {sujeito} {escala} na {nome}: de {de}{unidade} para {para}{unidade} "
-        f"({sinal} de variação)."
-    )
-
-
-def _emitir_variacao_fluxo(
-    nome: str,
-    tipo: str,
-    periodo: str,
-    valor: int,
-    baseline: int | None = None,
+    base: float,
+    atual: float,
+    unidade_base: str,
+    unidade_atual: str,
 ) -> dict | None:
-    """Detecta mudança de faixa por período (minuto/hora/dia) e guarda evento."""
-    faixas = _FAIXAS_FLUXO.get((tipo, periodo)) or _FAIXAS_FLUXO.get(("pessoa", "minuto"))
-    valor = max(0, int(valor or 0))
-    faixa = _faixa_fluxo(valor, faixas)
-    chave = (str(nome or ""), tipo, periodo)
-    agora = time.time()
-    anterior = _FLUXO_AVISO.get(chave) or {"faixa": 0, "valor": 0, "em": 0.0}
-    faixa_ant = int(anterior.get("faixa") or 0)
-    valor_ant = int(anterior.get("valor") or 0)
-    if baseline is not None and valor_ant <= 0 and int(baseline or 0) > 0:
-        valor_ant = int(baseline)
-    if faixa < faixa_ant:
-        _FLUXO_AVISO[chave] = {"faixa": faixa, "valor": valor, "em": agora}
+    pct = _variacao_fluxo_pct(base, atual)
+    if pct is None:
         return None
-    if faixa == faixa_ant:
-        _FLUXO_AVISO[chave] = {
-            "faixa": faixa,
-            "valor": valor,
-            "em": float(anterior.get("em") or agora),
-        }
+    if abs(int(pct)) < _FLUXO_PCT_LIMIAR:
         return None
-    if faixa <= 0:
-        _FLUXO_AVISO[chave] = {"faixa": 0, "valor": valor, "em": agora}
+    # Evita ruído com volumes irrisórios dos dois lados.
+    if float(base or 0) < 0.5 and float(atual or 0) < 1:
         return None
-    pct = _variacao_fluxo_pct(valor_ant, valor)
-    texto = _texto_variacao_fluxo(tipo, nome, periodo, valor_ant, valor, pct)
-    if periodo == "minuto" and faixa >= _FLUXO_ANORMAL_MINUTO and tipo == "pessoa":
-        texto += f" Superlotação: {valor}/min (limiar {_FLUXO_ANORMAL_MINUTO}/min)."
-    evento = {
-        "quando": datetime.now().strftime("%H:%M:%S"),
-        "camera": str(nome or ""),
+    sujeito = "pessoas" if tipo == "pessoa" else "veículos"
+    sentido = "aumento" if pct > 0 else "redução"
+    sinal = f"+{pct}%" if pct >= 0 else f"{pct}%"
+    base_txt = f"{base:.1f}".rstrip("0").rstrip(".") if isinstance(base, float) and not float(base).is_integer() else str(int(round(base)))
+    atual_txt = str(int(round(atual))) if float(atual).is_integer() else f"{atual:.1f}".rstrip("0").rstrip(".")
+    if float(base or 0) <= 0 and float(atual or 0) > 0:
+        texto = (
+            f"{sentido.capitalize()} de fluxo de {sujeito} na {nome}: "
+            f"saiu de nenhuma para {atual_txt}{unidade_atual} "
+            f"(+100% vs média da hora)."
+        )
+    else:
+        texto = (
+            f"{sentido.capitalize()} de fluxo de {sujeito} na {nome}: "
+            f"{atual_txt}{unidade_atual} agora vs média {base_txt}{unidade_base} "
+            f"({sinal})."
+        )
+    if tipo == "pessoa" and periodo == "minuto" and int(round(atual)) >= _FLUXO_ANORMAL_MINUTO:
+        texto += f" Superlotação: {int(round(atual))}/min (limiar {_FLUXO_ANORMAL_MINUTO}/min)."
+    return {
         "tipo": tipo,
         "periodo": periodo,
-        "de": valor_ant,
-        "para": valor,
-        "faixa_de": faixa_ant,
-        "faixa_para": faixa,
-        "variacao_pct": pct,
+        "de": float(base or 0),
+        "para": float(atual or 0),
+        "variacao_pct": int(pct),
+        "sentido": sentido,
         "texto": texto,
+        "peso": abs(int(pct)),
     }
-    _FLUXO_AVISO[chave] = {"faixa": faixa, "valor": valor, "em": agora}
-    _FLUXO_EVENTOS.appendleft(evento)
-    return evento
 
 
 def _registrar_variacao_fluxo(nome: str, tipo: str, fluxo: dict) -> list[dict]:
-    """Registra variações de faixa no minuto, na hora e no dia."""
+    """Compara fluxo atual com a média da hora (e o dia) em %; 1 aviso/10 min/câmera."""
     fluxo = fluxo or {}
-    eventos = []
-    for periodo, chave_valor, chave_base in (
-        ("minuto", "minuto", None),
-        ("hora", "hora_dia", "hora_anterior"),
-        ("dia", "dia", "dia_anterior"),
-    ):
-        valor = int(fluxo.get(chave_valor) or 0)
-        baseline = int(fluxo.get(chave_base) or 0) if chave_base else None
-        evento = _emitir_variacao_fluxo(nome, tipo, periodo, valor, baseline)
-        if evento:
-            eventos.append(evento)
-    return eventos
+    camera = str(nome or "")
+    minuto = max(0, int(fluxo.get("minuto") or 0))
+    hora_total = max(0, int(fluxo.get("hora_dia") or 0))
+    hora_ant = max(0, int(fluxo.get("hora_anterior") or 0))
+    dia = max(0, int(fluxo.get("dia") or 0))
+    dia_ant = max(0, int(fluxo.get("dia_anterior") or 0))
+    media_hora = _media_fluxo_hora(hora_total)
+    # Se a hora ainda está começando, usa a hora anterior como referência de público.
+    if media_hora < 0.5 and hora_ant > 0:
+        media_hora = hora_ant / 60.0
+
+    candidatos = []
+    hora = _candidato_variacao_fluxo(
+        tipo, camera, "minuto", media_hora, float(minuto), "/min", "/min",
+    )
+    if hora:
+        candidatos.append(hora)
+    if hora_ant > 0:
+        cand_h = _candidato_variacao_fluxo(
+            tipo, camera, "hora", float(hora_ant), float(hora_total), "/h", "/h",
+        )
+        if cand_h:
+            candidatos.append(cand_h)
+    if dia_ant > 0:
+        cand_d = _candidato_variacao_fluxo(
+            tipo, camera, "dia", float(dia_ant), float(dia), "/dia", "/dia",
+        )
+        if cand_d:
+            candidatos.append(cand_d)
+
+    chave = (camera, tipo)
+    estado = _FLUXO_AVISO.get(chave) or {"zona": "neutro", "pct": 0}
+    if not candidatos:
+        _FLUXO_AVISO[chave] = {"zona": "neutro", "pct": 0, "media": media_hora, "minuto": minuto}
+        return []
+
+    melhor = max(candidatos, key=lambda item: int(item.get("peso") or 0))
+    zona = "alta" if int(melhor.get("variacao_pct") or 0) > 0 else "baixa"
+    # Só reavisa depois de voltar à faixa neutra ou inverter o sentido.
+    if estado.get("zona") == zona:
+        _FLUXO_AVISO[chave] = {
+            "zona": zona,
+            "pct": melhor.get("variacao_pct") or 0,
+            "media": media_hora,
+            "minuto": minuto,
+        }
+        return []
+
+    agora = time.time()
+    ultimo = float(_FLUXO_COOLDOWN_CAMERA.get(camera) or 0)
+    if agora - ultimo < _INTERVALO_AVISO_FLUXO_SEG:
+        # Mantém zona neutra para tentar de novo após o intervalo.
+        return []
+
+    evento = {
+        "quando": datetime.now().strftime("%H:%M:%S"),
+        "camera": camera,
+        "tipo": tipo,
+        "periodo": melhor.get("periodo") or "minuto",
+        "de": melhor.get("de"),
+        "para": melhor.get("para"),
+        "media_hora": round(media_hora, 2),
+        "variacao_pct": melhor.get("variacao_pct"),
+        "sentido": melhor.get("sentido") or "",
+        "texto": melhor.get("texto") or "",
+    }
+    _FLUXO_AVISO[chave] = {
+        "zona": zona,
+        "pct": melhor.get("variacao_pct") or 0,
+        "media": media_hora,
+        "minuto": minuto,
+    }
+    _FLUXO_COOLDOWN_CAMERA[camera] = agora
+    _FLUXO_EVENTOS.appendleft(evento)
+    return [evento]
 
 
 _TRILHAS = {}
