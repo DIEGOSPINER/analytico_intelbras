@@ -76,7 +76,10 @@ _SISTEMA = (
     "do dia/semana não estão disponíveis. Se o total do período for zero, diga claramente que "
     "na base daquele período não há registros — isso ainda é uma resposta com base nos dados. "
     "Quando perguntarem o que ocorreu no dia, na semana ou no mês, use os blocos Totais do dia / "
-    "da semana / do mês, a série diária, ocorrências, matches e áudio do contexto. "
+    "da semana / do mês, a série diária, ocorrências, matches, áudio, informes, insights e "
+    "variações de fluxo (pessoas/veículos por minuto com percentual) do contexto. "
+    "Se houver aumento repentino de fluxo, cite câmera, período (minuto/hora/dia), "
+    "de→para (/min, /h ou /dia) e a variação percentual. "
     "Regra de probabilidade: cada passagem de pessoa de risco no histórico = 1 risco de invasão. "
     "Entre 20h e 06h aumente a chance (ladrões preferem a madrugada); sexta a domingo também eleva. "
     "Quando pedirem chance, probabilidade, invasão, cruzamento ou padrão, use o briefing criminal "
@@ -586,6 +589,27 @@ def _narrar_periodo(resumo: dict, chave: str) -> dict:
                 f"{a.get('camera') or ''}: {a.get('categoria') or ''}" for a in audio[:3]
             ) + "."
         )
+    eventos_fluxo = (resumo or {}).get("fluxo_eventos") or []
+    if eventos_fluxo and chave == "dia":
+        trechos = [str(e.get("texto") or "").strip() for e in eventos_fluxo[:4] if e.get("texto")]
+        if trechos:
+            partes.append("Variações de fluxo recentes: " + " ".join(trechos))
+    for camera in (resumo or {}).get("cameras_vivo") or []:
+        if chave != "dia":
+            break
+        fluxo_p = camera.get("fluxo") or {}
+        fluxo_v = camera.get("fluxo_veiculo") or {}
+        fp = int(fluxo_p.get("minuto") or 0)
+        fph = int(fluxo_p.get("hora_dia") or fluxo_p.get("hora") or 0)
+        fpd = int(fluxo_p.get("dia") or 0)
+        fv = int(fluxo_v.get("minuto") or 0)
+        fvh = int(fluxo_v.get("hora_dia") or fluxo_v.get("hora") or 0)
+        fvd = int(fluxo_v.get("dia") or 0)
+        if fp or fph or fpd or fv or fvh or fvd:
+            partes.append(
+                f"Agora na {camera.get('nome')}: pessoas {fp}/min, {fph}/h, {fpd}/dia; "
+                f"veículos {fv}/min, {fvh}/h, {fvd}/dia."
+            )
     if top_cams:
         partes.append(
             "Câmeras com mais movimento: "
@@ -619,6 +643,8 @@ def _resposta_periodo(pergunta: str, resumo: dict) -> dict | None:
         "balanço", "balanco", "total", "quantos", "quantas", "movimento",
         "passou", "passaram", "situação", "situacao", "status", "hoje",
         "no dia", "na semana", "no mês", "no mes", "nesta semana", "neste dia",
+        "fluxo", "aumento", "repentin", "lotação", "lotacao", "superlota",
+        "por minuto", "passando", "informe", "alerta",
     )
     if not any(t in baixo for t in gatilhos):
         return None
@@ -685,10 +711,25 @@ def _contexto(resumo: dict, documento: str = "", perfil: str = "") -> str:
     cameras_agora = []
     for camera in resumo.get("cameras_vivo") or []:
         agora = camera.get("agora") or {}
+        fluxo_p = camera.get("fluxo") or {}
+        fluxo_v = camera.get("fluxo_veiculo") or {}
         cameras_agora.append(
-            f"{camera.get('nome')}: pessoas {agora.get('Pessoa', 0)}, "
-            f"veículos {agora.get('Veiculo', 0)}, risco {camera.get('risco') or 'branco'}"
+            f"{camera.get('nome')}: agora P{agora.get('Pessoa', 0)} V{agora.get('Veiculo', 0)}; "
+            f"fluxo pessoas {int(fluxo_p.get('minuto') or 0)}/min, "
+            f"{int(fluxo_p.get('hora_dia') or fluxo_p.get('hora') or 0)}/h, "
+            f"{int(fluxo_p.get('dia') or 0)}/dia; "
+            f"fluxo veículos {int(fluxo_v.get('minuto') or 0)}/min, "
+            f"{int(fluxo_v.get('hora_dia') or fluxo_v.get('hora') or 0)}/h, "
+            f"{int(fluxo_v.get('dia') or 0)}/dia; "
+            f"risco {camera.get('risco') or 'branco'}"
+            + ("; fluxo anormal" if camera.get("fluxo_anormal") else "")
         )
+    eventos_fluxo = resumo.get("fluxo_eventos") or []
+    fluxo_txt = " | ".join(
+        f"{e.get('quando') or ''} [{e.get('periodo') or 'minuto'}] {e.get('texto') or ''}"
+        for e in eventos_fluxo[:12]
+        if e.get("texto")
+    ) or "nenhuma variação recente de faixa"
     pendencias = [item.get("texto") or "" for item in resumo.get("pendencias") or []]
     intervalo = ""
     if datas or datas_app:
@@ -743,6 +784,7 @@ def _contexto(resumo: dict, documento: str = "", perfil: str = "") -> str:
             f"{nome} {qtd}" for nome, qtd in sorted(por_camera.items(), key=lambda par: -par[1])[:8]
         ),
         "Câmeras neste instante: " + ("; ".join(cameras_agora) or "nenhuma"),
+        "Variações de fluxo (faixas minuto/hora/dia com %): " + fluxo_txt,
         f"Ocorrências do aplicativo: {len(app)}. Naturezas: {naturezas}. Logradouros: {ruas}.",
         "Alertas de interesse: " + hist_txt,
         "Informes: " + inf_txt,
@@ -829,8 +871,75 @@ def _quer_registrar(baixo: str) -> bool:
     )) or baixo.startswith(("houve ", "aconteceu "))
 
 
+def _narrar_fluxo(resumo: dict) -> dict:
+    eventos = (resumo or {}).get("fluxo_eventos") or []
+    cameras = (resumo or {}).get("cameras_vivo") or []
+    partes = []
+    itens = []
+    for camera in cameras:
+        nome = camera.get("nome") or "câmera"
+        fluxo_p = camera.get("fluxo") or {}
+        fluxo_v = camera.get("fluxo_veiculo") or {}
+        fp = int(fluxo_p.get("minuto") or 0)
+        fph = int(fluxo_p.get("hora_dia") or fluxo_p.get("hora") or 0)
+        fpd = int(fluxo_p.get("dia") or 0)
+        fv = int(fluxo_v.get("minuto") or 0)
+        fvh = int(fluxo_v.get("hora_dia") or fluxo_v.get("hora") or 0)
+        fvd = int(fluxo_v.get("dia") or 0)
+        itens.extend([
+            {"rotulo": f"{nome} pessoas/min", "total": fp},
+            {"rotulo": f"{nome} pessoas/h", "total": fph},
+            {"rotulo": f"{nome} pessoas/dia", "total": fpd},
+            {"rotulo": f"{nome} veículos/min", "total": fv},
+        ])
+        if fp or fph or fpd or fv or fvh or fvd:
+            partes.append(
+                f"Na {nome} agora: {fp}/min, {fph}/h e {fpd}/dia de pessoas; "
+                f"{fv}/min, {fvh}/h e {fvd}/dia de veículos."
+            )
+        if camera.get("fluxo_anormal"):
+            partes.append(f"Fluxo de pessoas anormal na {nome} ({fp}/min).")
+    unidade = {"minuto": "/min", "hora": "/h", "dia": "/dia"}
+    for evento in eventos[:8]:
+        texto = str(evento.get("texto") or "").strip()
+        if texto:
+            partes.append(texto)
+            pct = evento.get("variacao_pct")
+            periodo = str(evento.get("periodo") or "minuto")
+            itens.append({
+                "rotulo": f"{evento.get('camera') or ''} {evento.get('tipo') or ''} {periodo}",
+                "total": (
+                    f"{evento.get('de', 0)}→{evento.get('para', 0)}"
+                    f"{unidade.get(periodo, '/min')}"
+                    + (f" ({'+' if int(pct) >= 0 else ''}{pct}%)" if pct is not None else "")
+                ),
+            })
+    if not partes:
+        partes.append(
+            "Neste momento não há variação de faixa de fluxo registrada; "
+            "as contagens por minuto, hora e dia seguem nos monitores das câmeras."
+        )
+    return _normalizar({
+        "fala": " ".join(partes),
+        "visual": {
+            "tipo": "barras" if len(itens) > 1 else "lista",
+            "titulo": "Fluxo ao vivo",
+            "itens": itens[:10] or [{"rotulo": "Sem variação", "total": 0}],
+        },
+    })
+
+
 def _local(pergunta: str, resumo: dict, documento: str = "") -> dict:
     baixo = pergunta.lower()
+    if any(trecho in baixo for trecho in (
+        "fluxo", "por minuto", "por hora", "por dia", "/min", "/h",
+        "superlota", "lotação", "lotacao",
+        "aumento de pessoa", "aumento de veícul", "aumento de veicul",
+        "repentin", "volume de pessoa", "volume de veícul", "volume de veicul",
+        "passando agora", "quantas pessoas por", "quantos veículos por",
+        "quantos veiculos por", "variação de fluxo", "variacao de fluxo",
+    )):
+        return _narrar_fluxo(resumo)
     periodo = _resposta_periodo(pergunta, resumo)
     if periodo is not None:
         return periodo

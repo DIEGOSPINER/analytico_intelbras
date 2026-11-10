@@ -157,7 +157,7 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .termo .tubo { height: 96px; border-radius: 12px; background: rgba(255,255,255,0.08); display: flex; align-items: flex-end; overflow: hidden; }
 .termo i { display: block; width: 100%; }
 .termo p { margin: 6px 0 0; font-size: 11px; }
-.voz { margin: 0; text-align: center; font-size: 28px; font-weight: 600; line-height: 1.35; }
+.voz { margin: 0; min-height: 1.35em; text-align: center; font-size: 28px; font-weight: 600; line-height: 1.35; }
 .voz.branco { color: #f4f7fb; }
 .voz.verde { color: #3ddc97; }
 .voz.amarelo { color: #ffb020; }
@@ -221,7 +221,7 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .satisfacao-stive .cartoes { margin-top: 12px; }
 .pendencia { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
 .pendencia button { background: transparent; color: var(--texto); border: 1px solid var(--linha); }
-.avatar-stive { object-position: center 18%; }
+.avatar-stive { object-position: center 22%; }
 .balao-stive { position: fixed !important; right: 18px; bottom: 18px; z-index: 2147483000 !important; width: 400px;
   display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 10px; pointer-events: auto; }
 .balao-stive.fechado { width: auto; }
@@ -230,7 +230,7 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .puxador-stive { width: 124px; height: 124px; border-radius: 50%; padding: 0; overflow: hidden; border: 3px solid #4c8dff; background: #08131f;
   cursor: grab; flex: 0 0 auto; touch-action: none; user-select: none; -webkit-user-drag: none; }
 .puxador-stive:active, .balao-stive.arrastando .puxador-stive { cursor: grabbing; }
-.puxador-stive img { width: 100%; height: 100%; object-fit: cover; object-position: center 18%; display: block; pointer-events: none; }
+.puxador-stive img { width: 100%; height: 100%; object-fit: cover; object-position: center 22%; display: block; pointer-events: none; }
 .puxador-stive.falando { animation: pisca-stive 1.15s ease; }
 @keyframes pisca-stive {
   0%, 100% { opacity: 1; filter: brightness(1); }
@@ -621,7 +621,7 @@ def _moldura(
             "<div class='grupo-puxador' id='grupo-stive'>"
             "<div id='fala-hq' class='fala-hq' hidden></div>"
             "<button type='button' class='puxador-stive' id='abrir-stive' title='Fale com o Agente Stive'>"
-            "<img alt='Stive' src='/agente/stive.png'></button>"
+            "<img alt='Stive' src='/agente/stive.png?v=stive2'></button>"
             "<span class='nome-balao-stive'>Fale com o Agente Stive</span>"
             "</div></div>"
         )
@@ -645,7 +645,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=listas8"></script>
+<script src="/painel.js?v=fluxo2"></script>
 </body>
 </html>"""
 
@@ -1007,7 +1007,7 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
 <article class="cartao">
 <div class="stage-stive" id="grupo-stive">
 <div id="fala-hq" class="fala-hq" hidden></div>
-<img class="avatar-stive" id="abrir-stive" alt="Stive" src="/agente/stive.png" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'avatar-stive',textContent:'S'}}))">
+<img class="avatar-stive" id="abrir-stive" alt="Stive" src="/agente/stive.png?v=stive2" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'avatar-stive',textContent:'S'}}))">
 </div>
 <h2>Stive</h2>
 <p>Agente de segurança. Pergunte sobre as informações do seu ambiente ou informe uma ocorrência.</p>
@@ -2053,6 +2053,10 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     resumo["informes"] = [
         item for item in (resumo.get("informes") or [])
         if (not item.get("camera") or (item.get("camera") or "") in permitidas)
+    ]
+    resumo["fluxo_eventos"] = [
+        item for item in (resumo.get("fluxo_eventos") or [])
+        if (item.get("camera") or "") in permitidas
     ]
     resumo["insights"] = list(resumo.get("insights") or [])
     resumo["itens"] = sum(int(item.get("n") or 0) for item in cubo if str(item.get("d") or "") == hoje)

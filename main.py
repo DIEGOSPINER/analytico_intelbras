@@ -1924,6 +1924,9 @@ def _publicar_cameras(portal, estado, parar):
 
 
 _FLUXO = {}
+_FLUXO_AVISO = {}
+_FLUXO_PERIODO = {}  # (nome, tipo) -> totais calendário hora/dia + baseline anterior
+_FLUXO_EVENTOS = deque(maxlen=60)
 _SERIE = deque(maxlen=90)
 _NARRACAO = {"chave": "", "texto": "", "pedido": ""}
 _ORDEM_LED = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
@@ -2163,6 +2166,41 @@ def _risco_camera(
     return "branco"
 
 
+def _atualizar_fluxo_calendario(nome: str, tipo: str, delta: int) -> tuple[int, int, int, int]:
+    """Totais da hora e do dia civis + baselines da hora/dia anteriores."""
+    agora = datetime.now()
+    chave = (str(nome or ""), tipo)
+    slot = _FLUXO_PERIODO.setdefault(
+        chave,
+        {
+            "hora_chave": "",
+            "hora_total": 0,
+            "hora_anterior": 0,
+            "dia_chave": "",
+            "dia_total": 0,
+            "dia_anterior": 0,
+        },
+    )
+    hora_chave = agora.strftime("%Y-%m-%d-%H")
+    dia_chave = agora.strftime("%Y-%m-%d")
+    if slot["hora_chave"] and slot["hora_chave"] != hora_chave:
+        slot["hora_anterior"] = int(slot.get("hora_total") or 0)
+        slot["hora_total"] = 0
+    if slot["dia_chave"] and slot["dia_chave"] != dia_chave:
+        slot["dia_anterior"] = int(slot.get("dia_total") or 0)
+        slot["dia_total"] = 0
+    slot["hora_chave"] = hora_chave
+    slot["dia_chave"] = dia_chave
+    slot["hora_total"] = int(slot.get("hora_total") or 0) + max(0, int(delta or 0))
+    slot["dia_total"] = int(slot.get("dia_total") or 0) + max(0, int(delta or 0))
+    return (
+        int(slot["hora_total"]),
+        int(slot.get("hora_anterior") or 0),
+        int(slot["dia_total"]),
+        int(slot.get("dia_anterior") or 0),
+    )
+
+
 def _fluxo_serie(nome, tipo, acumulado):
     agora = time.time()
     fila = _FLUXO.setdefault((nome, tipo), deque())
@@ -2170,10 +2208,15 @@ def _fluxo_serie(nome, tipo, acumulado):
     fila.append((agora, int(acumulado), delta))
     while fila and agora - fila[0][0] > 3600:
         fila.popleft()
+    hora_dia, hora_ant, dia_total, dia_ant = _atualizar_fluxo_calendario(nome, tipo, delta)
     return {
         "segundo": sum(item[2] for item in fila if agora - item[0] <= 1),
         "minuto": sum(item[2] for item in fila if agora - item[0] <= 60),
         "hora": sum(item[2] for item in fila),
+        "hora_dia": hora_dia,
+        "hora_anterior": hora_ant,
+        "dia": dia_total,
+        "dia_anterior": dia_ant,
     }
 
 
@@ -2181,9 +2224,20 @@ def _fluxo_pessoa(nome, passagens):
     return _fluxo_serie(nome, "pessoa", passagens)
 
 
-# Limiares alinhados aos odômetros do Detector de risco (topo ~2/s e ~12/min).
+# Limiares de fluxo: superlotação e faixas de volume para o Stive narrar.
 _FLUXO_ANORMAL_SEGUNDO = 3
-_FLUXO_ANORMAL_MINUTO = 8
+_FLUXO_ANORMAL_MINUTO = 30  # superlotação: 30 pessoas/minuto
+_FAIXAS_FLUXO = {
+    ("pessoa", "minuto"): (0, 1, 2, 5, 10, 20, 30),
+    ("veiculo", "minuto"): (0, 1, 2, 5, 10),
+    ("pessoa", "hora"): (0, 10, 30, 60, 120, 300, 600),
+    ("veiculo", "hora"): (0, 5, 15, 30, 60, 120),
+    ("pessoa", "dia"): (0, 50, 100, 200, 500, 1000, 2000),
+    ("veiculo", "dia"): (0, 20, 50, 100, 200, 500),
+}
+_UNIDADE_FLUXO = {"minuto": "/min", "hora": "/h", "dia": "/dia"}
+# Permanência de pessoa: conta desde o 1º frame; só avisa no balão após 2 min.
+_AVISO_PERMANENCIA_PESSOA_SEG = 120
 
 
 def _fluxo_pessoas_anormal(fluxo: dict) -> bool:
@@ -2193,6 +2247,117 @@ def _fluxo_pessoas_anormal(fluxo: dict) -> bool:
         int(fluxo.get("segundo") or 0) >= _FLUXO_ANORMAL_SEGUNDO
         or int(fluxo.get("minuto") or 0) >= _FLUXO_ANORMAL_MINUTO
     )
+
+
+def _faixa_fluxo(valor: int, faixas: tuple[int, ...]) -> int:
+    atual = 0
+    numero = max(0, int(valor or 0))
+    for limiar in faixas:
+        if numero >= int(limiar):
+            atual = int(limiar)
+    return atual
+
+
+def _variacao_fluxo_pct(antes: int, agora: int) -> int | None:
+    antes = max(0, int(antes or 0))
+    agora = max(0, int(agora or 0))
+    if antes <= 0:
+        return None
+    return int(round(((agora - antes) / float(antes)) * 100))
+
+
+def _texto_variacao_fluxo(
+    tipo: str,
+    nome: str,
+    periodo: str,
+    de: int,
+    para: int,
+    pct: int | None,
+) -> str:
+    sujeito = "pessoas" if tipo == "pessoa" else "veículos"
+    unidade = _UNIDADE_FLUXO.get(periodo, "/min")
+    escala = {"minuto": "no minuto", "hora": "na hora", "dia": "no dia"}.get(periodo, "")
+    if de <= 0 and para > 0:
+        return (
+            f"Fluxo de {sujeito} {escala} na {nome}: saiu de nenhuma para {para}{unidade} "
+            f"(+100% a partir do zero; início de movimento)."
+        )
+    if pct is None:
+        return f"Fluxo de {sujeito} {escala} na {nome}: de {de}{unidade} para {para}{unidade}."
+    sinal = f"+{pct}%" if pct >= 0 else f"{pct}%"
+    return (
+        f"Fluxo de {sujeito} {escala} na {nome}: de {de}{unidade} para {para}{unidade} "
+        f"({sinal} de variação)."
+    )
+
+
+def _emitir_variacao_fluxo(
+    nome: str,
+    tipo: str,
+    periodo: str,
+    valor: int,
+    baseline: int | None = None,
+) -> dict | None:
+    """Detecta mudança de faixa por período (minuto/hora/dia) e guarda evento."""
+    faixas = _FAIXAS_FLUXO.get((tipo, periodo)) or _FAIXAS_FLUXO.get(("pessoa", "minuto"))
+    valor = max(0, int(valor or 0))
+    faixa = _faixa_fluxo(valor, faixas)
+    chave = (str(nome or ""), tipo, periodo)
+    agora = time.time()
+    anterior = _FLUXO_AVISO.get(chave) or {"faixa": 0, "valor": 0, "em": 0.0}
+    faixa_ant = int(anterior.get("faixa") or 0)
+    valor_ant = int(anterior.get("valor") or 0)
+    if baseline is not None and valor_ant <= 0 and int(baseline or 0) > 0:
+        valor_ant = int(baseline)
+    if faixa < faixa_ant:
+        _FLUXO_AVISO[chave] = {"faixa": faixa, "valor": valor, "em": agora}
+        return None
+    if faixa == faixa_ant:
+        _FLUXO_AVISO[chave] = {
+            "faixa": faixa,
+            "valor": valor,
+            "em": float(anterior.get("em") or agora),
+        }
+        return None
+    if faixa <= 0:
+        _FLUXO_AVISO[chave] = {"faixa": 0, "valor": valor, "em": agora}
+        return None
+    pct = _variacao_fluxo_pct(valor_ant, valor)
+    texto = _texto_variacao_fluxo(tipo, nome, periodo, valor_ant, valor, pct)
+    if periodo == "minuto" and faixa >= _FLUXO_ANORMAL_MINUTO and tipo == "pessoa":
+        texto += f" Superlotação: {valor}/min (limiar {_FLUXO_ANORMAL_MINUTO}/min)."
+    evento = {
+        "quando": datetime.now().strftime("%H:%M:%S"),
+        "camera": str(nome or ""),
+        "tipo": tipo,
+        "periodo": periodo,
+        "de": valor_ant,
+        "para": valor,
+        "faixa_de": faixa_ant,
+        "faixa_para": faixa,
+        "variacao_pct": pct,
+        "texto": texto,
+    }
+    _FLUXO_AVISO[chave] = {"faixa": faixa, "valor": valor, "em": agora}
+    _FLUXO_EVENTOS.appendleft(evento)
+    return evento
+
+
+def _registrar_variacao_fluxo(nome: str, tipo: str, fluxo: dict) -> list[dict]:
+    """Registra variações de faixa no minuto, na hora e no dia."""
+    fluxo = fluxo or {}
+    eventos = []
+    for periodo, chave_valor, chave_base in (
+        ("minuto", "minuto", None),
+        ("hora", "hora_dia", "hora_anterior"),
+        ("dia", "dia", "dia_anterior"),
+    ):
+        valor = int(fluxo.get(chave_valor) or 0)
+        baseline = int(fluxo.get(chave_base) or 0) if chave_base else None
+        evento = _emitir_variacao_fluxo(nome, tipo, periodo, valor, baseline)
+        if evento:
+            eventos.append(evento)
+    return eventos
 
 
 _TRILHAS = {}
@@ -2223,7 +2388,7 @@ def _formatar_duracao(segundos) -> str:
 
 
 def _permanencias(nome, centros_pessoa, centros_veiculo):
-    """Conta quem permanece na cena e quem fica parado no mesmo ponto."""
+    """Conta quem permanece na cena; pessoa só gera aviso (balão/voz) após 2 min."""
     agora = time.time()
     parado_base, cena_base = 20.0, 10.0
     try:
@@ -2234,7 +2399,7 @@ def _permanencias(nome, centros_pessoa, centros_veiculo):
         pass
     frases = []
     for tipo, centros, parado_seg, cena_seg, sujeito in (
-        ("pessoa", centros_pessoa, parado_base, cena_base, "Uma pessoa"),
+        ("pessoa", centros_pessoa, _AVISO_PERMANENCIA_PESSOA_SEG, _AVISO_PERMANENCIA_PESSOA_SEG, "Uma pessoa"),
         ("veiculo", centros_veiculo, parado_base, cena_base, "Um veículo"),
     ):
         chave = (nome, tipo)
@@ -2464,6 +2629,12 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
             "cena": f"/img/cena-{slug}.jpg" if risco == "preto" else "",
         })
         cameras[-1]["fluxo_anormal"] = _fluxo_pessoas_anormal(cameras[-1]["fluxo"])
+        cameras[-1]["fluxo_eventos"] = _registrar_variacao_fluxo(
+            item["nome"], "pessoa", cameras[-1]["fluxo"]
+        )
+        cameras[-1]["fluxo_veiculo_eventos"] = _registrar_variacao_fluxo(
+            item["nome"], "veiculo", cameras[-1]["fluxo_veiculo"]
+        )
     classe = ""
     risco_match = False
     if match_vivo and match_vivo.get("tipo") == "FACE":
@@ -2537,6 +2708,7 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         "relatorio": _linha_relatorio(pacote),
         "voz": _montar_voz(cameras, match_vivo, narracao, narracao_ia),
         "audio": _pacote_audio(),
+        "fluxo_eventos": [dict(item) for item in list(_FLUXO_EVENTOS)[:20]],
     })
 
 

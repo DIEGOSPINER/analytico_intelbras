@@ -1396,7 +1396,7 @@ function fileiraFluxo(camera) {
   const nome = escapar(camera.nome);
   const relogios = [
     ["pessoa", "segundo", "Pessoas / s", 2],
-    ["pessoa", "minuto", "Pessoas / min", 12],
+    ["pessoa", "minuto", "Pessoas / min", 40],
     ["pessoa", "hora", "Pessoas / h", 120],
     ["veiculo", "segundo", "Veículos / s", 2],
     ["veiculo", "minuto", "Veículos / min", 12],
@@ -1431,7 +1431,7 @@ function posicionarAgulha(artigo, valor, topo) {
 
 function risco(tela, dados) {
   const cameras = dados.cameras_vivo || [];
-  const assinatura = `risco-v4|${cameras.map((camera) => camera.nome).join("|")}`;
+  const assinatura = `risco-v5|${cameras.map((camera) => camera.nome).join("|")}`;
   if (tela.dataset.pronto !== assinatura) {
     tela.innerHTML = `<article class="cartao"><p id="voz" class="voz branco"></p></article>
     <div id="odometros">${cameras.map((camera) => fileiraFluxo(camera)).join("") || "<p>Nenhuma câmera em análise.</p>"}</div>
@@ -1453,11 +1453,11 @@ function risco(tela, dados) {
   if (voz) {
     const texto = String(dados.voz || "").trim();
     const silencio = !texto || /área está em observação|area esta em observacao|nenhum risco acima|a área está|a area esta/i.test(texto);
-    // Em silêncio o card dinâmico fica em branco — não mantém a última mensagem.
-    voz.textContent = silencio ? "" : texto;
+    // Sem alerta: mantém o card no lugar com hífen (não some da posição).
+    voz.textContent = silencio ? "-" : texto;
     voz.className = "voz " + ((silencio ? "branco" : dados.led) || "branco");
   }
-  const topos = { segundo: 2, minuto: 12, hora: 120 };
+  const topos = { segundo: 2, minuto: 40, hora: 120 };
   cameras.forEach((camera) => {
     [["pessoa", camera.fluxo || {}], ["veiculo", camera.fluxo_veiculo || {}]].forEach(([tipo, fluxo]) => {
       ["segundo", "minuto", "hora"].forEach((faixa) => {
@@ -2318,9 +2318,13 @@ function chavesFalaBase(dados) {
     const trecho = String(item.texto || item.detalhe || item.categoria || "").trim();
     if (trecho) chaves.push(`audio:${item.quando}|${item.camera}|${trecho}`);
   });
+  (dados.fluxo_eventos || []).forEach((evento) => {
+    if (!evento || !evento.texto) return;
+    chaves.push(`fluxo:${evento.camera || ""}|${evento.tipo || ""}|${evento.periodo || "minuto"}|${evento.faixa_para}|${evento.quando || ""}|${evento.de}->${evento.para}`);
+  });
   (dados.cameras_vivo || []).forEach((camera) => {
     if (camera.fluxo_anormal) {
-      chaves.push(`fluxo:${camera.nome}:${Math.floor(Date.now() / 120000)}`);
+      chaves.push(`fluxo:anormal:${camera.nome}:${Math.floor(Date.now() / 120000)}`);
     }
   });
   return chaves;
@@ -2336,12 +2340,33 @@ function vozDeBaixoRisco(dados, voz) {
 }
 
 function falarFluxoAnormalStive(dados) {
+  const eventos = dados.fluxo_eventos || [];
+  for (const evento of eventos.slice(0, 10)) {
+    const texto = String(evento.texto || "").trim();
+    if (!texto) continue;
+    const periodo = evento.periodo || "minuto";
+    const chave = `fluxo:${evento.camera || ""}|${evento.tipo || ""}|${periodo}|${evento.faixa_para}|${evento.quando || ""}|${evento.de}->${evento.para}`;
+    const para = Number(evento.para || 0);
+    const classe = (
+      (periodo === "minuto" && para >= 10)
+      || (periodo === "hora" && para >= 120)
+      || (periodo === "dia" && para >= 500)
+      || (evento.tipo === "pessoa" && periodo === "minuto" && para >= 30)
+    ) ? "risco" : "info";
+    if (enfileirarFalaStive(chave, "Variação de fluxo", texto, {
+      tipo: "fluxo",
+      classe,
+      linkVivo: false,
+      linkHref: "/painel/risco",
+      linkTexto: "Acompanhe na tela...",
+    })) return true;
+  }
   const cameras = dados.cameras_vivo || [];
   for (const camera of cameras) {
     if (!camera.fluxo_anormal) continue;
     const nome = camera.nome || "câmera";
     const minuto = Number((camera.fluxo || {}).minuto || 0);
-    const chave = `fluxo:${nome}:${Math.floor(Date.now() / 120000)}`;
+    const chave = `fluxo:anormal:${nome}:${Math.floor(Date.now() / 120000)}`;
     const texto = `Fluxo de pessoas fora do normal identificado na ${nome}${minuto ? ` (${minuto}/min)` : ""}.`;
     if (enfileirarFalaStive(chave, "Fluxo anormal", texto, {
       tipo: "fluxo",
