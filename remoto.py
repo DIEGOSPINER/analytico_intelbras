@@ -59,12 +59,12 @@ nav a { display: flex; align-items: center; gap: 10px; color: var(--mudo); text-
   border-radius: 12px; padding: 11px 12px; margin-bottom: 4px; font-size: 15px; }
 nav a svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; flex: none; }
 nav a.ativo, nav a:hover { color: var(--texto); background: rgba(76, 141, 255, 0.16); }
-.palco { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; z-index: 40; }
+.palco { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .palco.parede { height: 100vh; }
 .topo { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 22px 0; }
 .topo h1 { margin: 0; font-size: 28px; font-weight: 600; }
 .topo p { margin: 4px 0 0; color: var(--mudo); font-size: 15px; }
-main { padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 22px; position: relative; z-index: 2; overflow: visible; }
+main { padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 22px; position: relative; overflow: visible; }
 .acoes-gestao { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .acoes-gestao form { margin: 0; display: inline; }
 .acoes-gestao button { padding: 8px 12px; font-size: 13px; }
@@ -222,11 +222,15 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .pendencia { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
 .pendencia button { background: transparent; color: var(--texto); border: 1px solid var(--linha); }
 .avatar-stive { object-position: center 18%; }
-.balao-stive { position: fixed; right: 18px; bottom: 18px; z-index: 34; width: 400px; display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 10px; }
+.balao-stive { position: fixed !important; right: 18px; bottom: 18px; z-index: 2147483000 !important; width: 400px;
+  display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 10px; pointer-events: auto; }
 .balao-stive.fechado { width: auto; }
-.grupo-puxador { position: relative; display: flex; flex-direction: column; align-items: center; }
-.puxador-stive { width: 124px; height: 124px; border-radius: 50%; padding: 0; overflow: hidden; border: 3px solid #4c8dff; background: #08131f; cursor: grab; flex: 0 0 auto; }
-.puxador-stive img { width: 100%; height: 100%; object-fit: cover; object-position: center 18%; display: block; }
+.balao-stive.arrastando { opacity: 0.96; }
+.grupo-puxador { position: relative; display: flex; flex-direction: column; align-items: center; z-index: 2; }
+.puxador-stive { width: 124px; height: 124px; border-radius: 50%; padding: 0; overflow: hidden; border: 3px solid #4c8dff; background: #08131f;
+  cursor: grab; flex: 0 0 auto; touch-action: none; user-select: none; -webkit-user-drag: none; }
+.puxador-stive:active, .balao-stive.arrastando .puxador-stive { cursor: grabbing; }
+.puxador-stive img { width: 100%; height: 100%; object-fit: cover; object-position: center 18%; display: block; pointer-events: none; }
 .puxador-stive.falando { animation: pisca-stive 1.15s ease; }
 @keyframes pisca-stive {
   0%, 100% { opacity: 1; filter: brightness(1); }
@@ -238,7 +242,7 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .balao-stive form { width: 100%; background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; box-shadow: 0 18px 40px rgba(0,0,0,.35); }
 .chat-balao { max-height: min(42vh, 360px); overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; overscroll-behavior: contain; scroll-behavior: smooth; }
 .chat-balao .bolha { max-width: 100%; }
-.fala-hq { position: absolute; right: calc(100% + 8px); bottom: 72px; width: min(280px, 62vw); background: #fff; color: #141820; border-radius: 22px; padding: 12px 14px 14px; line-height: 1.35; font-size: 14px; font-weight: 550; box-shadow: 0 14px 32px rgba(0,0,0,.35); z-index: 2; animation: sobe .55s ease; }
+.fala-hq { position: absolute; right: calc(100% + 8px); bottom: 72px; width: min(280px, 62vw); background: #fff; color: #141820; border-radius: 22px; padding: 12px 14px 14px; line-height: 1.35; font-size: 14px; font-weight: 550; box-shadow: 0 14px 32px rgba(0,0,0,.35); z-index: 5; animation: sobe .55s ease; pointer-events: auto; }
 .fala-hq::after { content: ""; position: absolute; right: -12px; bottom: 28px; width: 0; height: 0; border: 12px solid transparent; border-left-color: #fff; border-right: 0; }
 .fala-hq strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #4c6fff; margin-bottom: 4px; }
 .fala-hq .pendencia { margin-top: 10px; }
@@ -641,7 +645,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=listas6"></script>
+<script src="/painel.js?v=listas8"></script>
 </body>
 </html>"""
 

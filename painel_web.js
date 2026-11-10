@@ -2618,15 +2618,33 @@ function iniciarBalao() {
   const balao = document.getElementById("balao-stive");
   if (!balao || balao.dataset.pronto) return;
   balao.dataset.pronto = "1";
+  // Garante primeiro plano acima de cards/gráficos (evita disputa com .palco/.cartao).
+  document.body.appendChild(balao);
+  balao.style.position = "fixed";
+  balao.style.zIndex = "2147483000";
+
+  function posicionarBalao(left, top) {
+    const rect = balao.getBoundingClientRect();
+    const largura = rect.width || 140;
+    const altura = rect.height || 160;
+    const maxL = Math.max(8, window.innerWidth - largura - 8);
+    const maxT = Math.max(8, window.innerHeight - altura - 8);
+    const L = Math.min(maxL, Math.max(8, Math.round(left)));
+    const T = Math.min(maxT, Math.max(8, Math.round(top)));
+    balao.style.left = `${L}px`;
+    balao.style.top = `${T}px`;
+    balao.style.right = "auto";
+    balao.style.bottom = "auto";
+    return { left: L, top: T };
+  }
+
   try {
     const pos = JSON.parse(localStorage.getItem("stive-pos") || "null");
     if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
-      balao.style.left = `${pos.left}px`;
-      balao.style.top = `${pos.top}px`;
-      balao.style.right = "auto";
-      balao.style.bottom = "auto";
+      posicionarBalao(pos.left, pos.top);
     }
   } catch (erro) {}
+
   const puxador = document.getElementById("abrir-stive");
   let arrastando = false;
   let moveu = false;
@@ -2635,6 +2653,8 @@ function iniciarBalao() {
   let origemX = 0;
   let origemY = 0;
   puxador.addEventListener("pointerdown", (evento) => {
+    if (evento.button != null && evento.button !== 0) return;
+    evento.preventDefault();
     arrastando = true;
     moveu = false;
     origemX = evento.clientX;
@@ -2642,26 +2662,31 @@ function iniciarBalao() {
     const rect = balao.getBoundingClientRect();
     dx = evento.clientX - rect.left;
     dy = evento.clientY - rect.top;
+    balao.classList.add("arrastando");
     puxador.setPointerCapture(evento.pointerId);
   });
   puxador.addEventListener("pointermove", (evento) => {
     if (!arrastando) return;
     if (Math.hypot(evento.clientX - origemX, evento.clientY - origemY) > 5) moveu = true;
     if (!moveu) return;
-    balao.style.left = `${Math.max(8, evento.clientX - dx)}px`;
-    balao.style.top = `${Math.max(8, evento.clientY - dy)}px`;
-    balao.style.right = "auto";
-    balao.style.bottom = "auto";
+    posicionarBalao(evento.clientX - dx, evento.clientY - dy);
   });
   puxador.addEventListener("pointerup", () => {
     if (!arrastando) return;
     arrastando = false;
+    balao.classList.remove("arrastando");
     if (moveu) {
       const rect = balao.getBoundingClientRect();
-      localStorage.setItem("stive-pos", JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }));
+      const pos = posicionarBalao(rect.left, rect.top);
+      localStorage.setItem("stive-pos", JSON.stringify(pos));
       return;
     }
     balao.classList.toggle("fechado");
+  });
+  puxador.addEventListener("pointercancel", () => {
+    arrastando = false;
+    moveu = false;
+    balao.classList.remove("arrastando");
   });
   const form = document.getElementById("form-balao");
   const chat = document.getElementById("chat-balao");
