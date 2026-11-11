@@ -337,7 +337,13 @@ def _nome_norm(valor: str) -> str:
     return " ".join(texto.casefold().split())
 
 
-def definir_foto_cliente(documento: str, face_id: str, *, eh_proprio: bool = True) -> dict:
+def definir_foto_cliente(
+    documento: str,
+    face_id: str,
+    *,
+    eh_proprio: bool = True,
+    faces_engine=None,
+) -> dict:
     """Associa a foto do próprio cliente (morador da rua) ao cadastro da conta."""
     cliente = _exigir(documento)
     face = str(face_id or "").strip().upper()
@@ -370,10 +376,10 @@ def definir_foto_cliente(documento: str, face_id: str, *, eh_proprio: bool = Tru
         })
     cliente["pessoas"] = pessoas
     _substituir(cliente)
+    digitos = _digitos(cliente.get("documento"))
     try:
-        from grafo_relacoes import garantir_pessoa, garantir_usuario, relacionar
+        from grafo_relacoes import garantir_pessoa, garantir_usuario, relacionar, sincronizar_cadastros
 
-        digitos = _digitos(cliente.get("documento"))
         garantir_usuario(digitos, cliente.get("nome") or "", cliente.get("email") or "")
         garantir_pessoa(
             face,
@@ -391,8 +397,22 @@ def definir_foto_cliente(documento: str, face_id: str, *, eh_proprio: bool = Tru
             email=str(cliente.get("email") or ""),
             meta={"fonte": "foto_cliente", "documento": digitos},
         )
+        sincronizar_cadastros()
     except Exception as exc:
         print(f"Grafo foto cliente: {exc}")
+    cruzamentos = []
+    try:
+        cruzamentos = verificar_e_compilar_cruzamentos(
+            digitos,
+            face,
+            faces_engine,
+            nome=str(cliente.get("nome") or face),
+            classe="morador",
+        )
+    except Exception as exc:
+        print(f"Cruzamento foto cliente: {exc}")
+    cliente = cliente_por_documento(digitos) or cliente
+    cliente["_cruzamentos"] = cruzamentos
     return cliente
 
 
@@ -605,6 +625,269 @@ def associar_rosto_conhecido(
     return resultado
 
 
+def listar_faces_cadastradas(exceto_documento: str = "") -> list[dict]:
+    """Todas as faces de interesse/foto de cliente, exceto a conta informada."""
+    digitos_exc = _digitos(exceto_documento)
+    saida = []
+    vistos = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        digitos = _digitos(cliente.get("documento"))
+        if not digitos or digitos == digitos_exc:
+            continue
+        foto = str(cliente.get("foto_face_id") or "").strip().upper()
+        if foto and foto not in vistos:
+            vistos.add(foto)
+            saida.append({
+                "documento": digitos,
+                "nome_cliente": str(cliente.get("nome") or ""),
+                "face_id": foto,
+                "nome": str(cliente.get("nome") or foto),
+                "classe": "morador",
+                "eh_proprio": True,
+                "origem": "foto_cliente",
+            })
+        for pessoa in cliente.get("pessoas") or []:
+            if not isinstance(pessoa, dict):
+                continue
+            face = str(pessoa.get("face_id") or "").strip().upper()
+            if not face or face in vistos:
+                continue
+            vistos.add(face)
+            saida.append({
+                "documento": digitos,
+                "nome_cliente": str(cliente.get("nome") or ""),
+                "face_id": face,
+                "nome": str(pessoa.get("nome") or face),
+                "classe": str(pessoa.get("classe") or pessoa.get("base_legal") or ""),
+                "eh_proprio": pessoa.get("eh_proprio") is True or face == foto,
+                "origem": "pessoa",
+            })
+    return saida
+
+
+def verificar_rosto_em_outras_contas(
+    documento: str,
+    face_id: str,
+    faces_engine=None,
+    *,
+    limiar: float | None = None,
+) -> list[dict]:
+    """Detecta se o rosto já é pessoa de interesse / foto de outro cliente."""
+    face = str(face_id or "").strip().upper()
+    digitos = _digitos(documento)
+    if not face or not digitos:
+        return []
+    if limiar is None and faces_engine is not None:
+        limiar = getattr(faces_engine, "limiar_fundir", None) or getattr(faces_engine, "limiar_match", 0.55)
+    try:
+        limiar_n = float(limiar if limiar is not None else 0.55)
+    except (TypeError, ValueError):
+        limiar_n = 0.55
+    hits = []
+    for cand in listar_faces_cadastradas(exceto_documento=digitos):
+        outra = str(cand.get("face_id") or "").strip().upper()
+        if not outra:
+            continue
+        score = None
+        motivo = ""
+        if outra == face:
+            score = 1.0
+            motivo = "mesmo_face_id"
+        elif faces_engine is not None:
+            try:
+                score = float(faces_engine.score_entre_ids(face, outra))
+            except Exception:
+                score = -1.0
+            if score < limiar_n:
+                continue
+            motivo = "similaridade"
+        else:
+            continue
+        hits.append({
+            **cand,
+            "score": round(float(score), 4) if score is not None else None,
+            "motivo": motivo,
+            "face_origem": face,
+        })
+    hits.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+    return hits
+
+
+def compilar_vinculos_cruzados(
+    documento: str,
+    face_id: str,
+    hits: list[dict],
+    *,
+    nome: str = "",
+    classe: str = "",
+) -> list[dict]:
+    """Grava no grafo/Neo4j: face↔face (mesmo indivíduo) e usuário↔usuário (interesse compartilhado)."""
+    digitos = _digitos(documento)
+    face = str(face_id or "").strip().upper()
+    if not digitos or not face or not hits:
+        return []
+    cliente = cliente_por_documento(digitos) or {}
+    compilados = []
+    try:
+        from grafo_relacoes import (
+            garantir_pessoa,
+            relacionar,
+            relacionar_faces,
+            relacionar_usuarios,
+        )
+    except Exception as exc:
+        print(f"Grafo cruzado indisponível: {exc}")
+        return []
+
+    garantir_pessoa(face, nome=nome or face, classe=classe or "")
+    relacionar(
+        digitos,
+        face,
+        "monitora",
+        nome_pessoa=nome or face,
+        classe=classe or "",
+        nome_usuario=str(cliente.get("nome") or ""),
+        email=str(cliente.get("email") or ""),
+        meta={"fonte": "cadastro_cruzado", "documento": digitos},
+    )
+
+    for hit in hits:
+        outra = str(hit.get("face_id") or "").strip().upper()
+        doc_outro = _digitos(hit.get("documento"))
+        if not outra or not doc_outro:
+            continue
+        try:
+            if outra != face:
+                relacionar_faces(
+                    face,
+                    outra,
+                    "mesmo_individuo",
+                    nome_a=nome or face,
+                    nome_b=str(hit.get("nome") or outra),
+                    classe_a=classe or "",
+                    classe_b=str(hit.get("classe") or ""),
+                    meta={
+                        "fonte": "cruzamento_cadastro",
+                        "score": hit.get("score"),
+                        "motivo": hit.get("motivo") or "",
+                        "documento_a": digitos,
+                        "documento_b": doc_outro,
+                    },
+                )
+            outro = cliente_por_documento(doc_outro) or {}
+            relacionar_usuarios(
+                digitos,
+                doc_outro,
+                "interesse_compartilhado",
+                nome_origem=str(cliente.get("nome") or ""),
+                email_origem=str(cliente.get("email") or ""),
+                nome_destino=str(outro.get("nome") or hit.get("nome_cliente") or ""),
+                email_destino=str(outro.get("email") or ""),
+                meta={
+                    "fonte": "cruzamento_cadastro",
+                    "face_origem": face,
+                    "face_destino": outra,
+                    "score": hit.get("score"),
+                    "motivo": hit.get("motivo") or "",
+                    "classe": classe or hit.get("classe") or "",
+                },
+            )
+            # Se a face cruzada é o próprio cliente da outra conta, reforça monitoramento.
+            if hit.get("eh_proprio") or hit.get("origem") == "foto_cliente":
+                relacionar(
+                    digitos,
+                    outra,
+                    "conhecido",
+                    nome_pessoa=str(hit.get("nome") or outra),
+                    classe=str(hit.get("classe") or "morador"),
+                    nome_usuario=str(cliente.get("nome") or ""),
+                    email=str(cliente.get("email") or ""),
+                    meta={
+                        "fonte": "cruzamento_foto_cliente",
+                        "cliente_associado": doc_outro,
+                        "score": hit.get("score"),
+                    },
+                )
+            compilados.append({
+                "documento": doc_outro,
+                "nome_cliente": str(hit.get("nome_cliente") or outro.get("nome") or ""),
+                "face_id": outra,
+                "nome": str(hit.get("nome") or outra),
+                "score": hit.get("score"),
+                "motivo": hit.get("motivo") or "",
+            })
+        except Exception as exc:
+            print(f"Cruzamento grafo {face}×{outra}: {exc}")
+    return compilados
+
+
+def verificar_e_compilar_cruzamentos(
+    documento: str,
+    face_id: str,
+    faces_engine=None,
+    *,
+    nome: str = "",
+    classe: str = "",
+) -> list[dict]:
+    """Pipeline completo: detecta overlap entre contas e compila vínculos colaborativos."""
+    hits = verificar_rosto_em_outras_contas(documento, face_id, faces_engine)
+    if not hits:
+        return []
+    return compilar_vinculos_cruzados(
+        documento,
+        face_id,
+        hits,
+        nome=nome,
+        classe=classe,
+    )
+
+
+def indice_geo_colaborativo() -> dict:
+    """Índice rua/bairro/cidade → contas e câmeras (base para escala Stella Maris → mais ruas)."""
+    ruas: dict[str, list[dict]] = {}
+    bairros: dict[str, list[dict]] = {}
+    cidades: dict[str, list[dict]] = {}
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        digitos = _digitos(cliente.get("documento"))
+        if not digitos:
+            continue
+        nome_cli = str(cliente.get("nome") or digitos)
+        for cam in (
+            item for item in (cliente.get("cameras") or [])
+            if isinstance(item, dict) and item.get("ativa") is not False
+        ):
+            entrada = {
+                "documento": digitos,
+                "nome_cliente": nome_cli,
+                "camera_id": str(cam.get("id") or ""),
+                "camera_nome": str(cam.get("nome") or ""),
+                "rua": str(cam.get("rua") or ""),
+                "bairro": str(cam.get("bairro") or ""),
+                "cidade": str(cam.get("cidade") or ""),
+            }
+            chave_rua = normalizar_rua(cam.get("rua"))
+            chave_bairro = normalizar_rua(cam.get("bairro") or "")
+            chave_cidade = normalizar_rua(cam.get("cidade") or "")
+            if chave_rua:
+                ruas.setdefault(chave_rua, []).append(entrada)
+            if chave_bairro:
+                bairros.setdefault(chave_bairro, []).append(entrada)
+            if chave_cidade:
+                cidades.setdefault(chave_cidade, []).append(entrada)
+    return {
+        "ruas": ruas,
+        "bairros": bairros,
+        "cidades": cidades,
+        "logradouros_stella_maris": list(LOGRADOUROS_STELLA_MARIS),
+        "piloto_bairro": "Stella Maris",
+        "piloto_cidade": "Salvador",
+    }
+
+
 def garantir_cliente_local():
     """Cria a conta local a partir de cameras.json e interesse.json, uma vez."""
     if ARQUIVO_CLIENTES.exists():
@@ -746,7 +1029,7 @@ def validar_pessoa(pessoa: dict):
         raise ValueError("Informe o Face_ID reconhecido pelo analítico.")
 
 
-def cadastrar_pessoa(documento: str, pessoa: dict):
+def cadastrar_pessoa(documento: str, pessoa: dict, *, faces_engine=None):
     validar_pessoa(pessoa)
     cliente = _exigir(documento)
     face_id = str(pessoa.get("face_id") or "").strip().upper()
@@ -762,26 +1045,43 @@ def cadastrar_pessoa(documento: str, pessoa: dict):
     pessoas.append(registro)
     cliente["pessoas"] = pessoas
     _substituir(cliente)
-    if registro["classe"] == "medida_protetiva":
-        try:
-            from grafo_relacoes import relacionar
+    digitos = _digitos(documento)
+    try:
+        from grafo_relacoes import relacionar, sincronizar_cadastros
 
-            relacionar(
-                documento,
-                face_id,
-                "medida_protege",
-                nome_pessoa=str(registro.get("nome") or face_id),
-                classe="medida_protetiva",
-                nome_usuario=str(cliente.get("nome") or ""),
-                email=str(cliente.get("email") or ""),
-                meta={
-                    "favorecido": registro.get("favorecido") or "",
-                    "nome_protegido": registro.get("nome_protegido") or "",
-                    "referencia": registro.get("referencia") or "",
-                },
-            )
-        except Exception as exc:
-            print(f"Grafo medida protetiva: {exc}")
+        tipo_vinculo = "medida_protege" if registro["classe"] == "medida_protetiva" else "monitora"
+        meta = {"fonte": "cadastro_pessoa", "documento": digitos, "classe": registro["classe"]}
+        if registro["classe"] == "medida_protetiva":
+            meta.update({
+                "favorecido": registro.get("favorecido") or "",
+                "nome_protegido": registro.get("nome_protegido") or "",
+                "referencia": registro.get("referencia") or "",
+            })
+        relacionar(
+            digitos,
+            face_id,
+            tipo_vinculo,
+            nome_pessoa=str(registro.get("nome") or face_id),
+            classe=registro["classe"],
+            nome_usuario=str(cliente.get("nome") or ""),
+            email=str(cliente.get("email") or ""),
+            meta=meta,
+        )
+        sincronizar_cadastros()
+    except Exception as exc:
+        print(f"Grafo cadastro pessoa: {exc}")
+    cruzamentos = []
+    try:
+        cruzamentos = verificar_e_compilar_cruzamentos(
+            digitos,
+            face_id,
+            faces_engine,
+            nome=str(registro.get("nome") or face_id),
+            classe=registro["classe"],
+        )
+    except Exception as exc:
+        print(f"Cruzamento pessoa: {exc}")
+    registro["_cruzamentos"] = cruzamentos
     return registro
 
 
@@ -1097,6 +1397,12 @@ def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
     cliente["cameras"].append(registro)
     _substituir(cliente)
     _espelhar_cameras(cliente)
+    try:
+        from grafo_relacoes import sincronizar_cadastros
+
+        sincronizar_cadastros()
+    except Exception as exc:
+        print(f"Grafo após câmera: {exc}")
     return camera_publica(registro)
 
 
@@ -1176,6 +1482,13 @@ def criar_cliente(nome: str, documento: str, email: str) -> dict:
     dados = _ler()
     dados["clientes"].append(cliente)
     _gravar(dados)
+    try:
+        from grafo_relacoes import garantir_usuario, sincronizar_cadastros
+
+        garantir_usuario(digitos, cliente.get("nome") or "", cliente.get("email") or "")
+        sincronizar_cadastros()
+    except Exception as exc:
+        print(f"Grafo novo cliente: {exc}")
     return cliente
 
 
@@ -1488,15 +1801,42 @@ def interesse_deteccao_global() -> dict:
     return {"pessoas": pessoas, "veiculos": veiculos}
 
 
-def pessoa_por_face(face_id: str) -> tuple[dict | None, dict | None]:
+def pessoas_por_face(face_id: str) -> list[tuple[dict, dict]]:
+    """Todos os clientes que cadastraram a mesma face (rastreamento colaborativo)."""
     ident = str(face_id or "").strip().upper()
     if not ident:
-        return None, None
+        return []
+    saida = []
     for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        pessoa_hit = None
         for pessoa in cliente.get("pessoas") or []:
             if str((pessoa or {}).get("face_id") or "").strip().upper() == ident:
-                return cliente, pessoa
-    return None, None
+                pessoa_hit = pessoa
+                break
+        foto = str(cliente.get("foto_face_id") or "").strip().upper()
+        if pessoa_hit is not None:
+            if foto == ident:
+                pessoa_hit = dict(pessoa_hit)
+                pessoa_hit["eh_proprio"] = True
+            saida.append((cliente, pessoa_hit))
+        elif foto == ident:
+            saida.append((cliente, {
+                "face_id": ident,
+                "nome": str(cliente.get("nome") or ident),
+                "classe": "morador",
+                "base_legal": "morador",
+                "eh_proprio": True,
+            }))
+    return saida
+
+
+def pessoa_por_face(face_id: str) -> tuple[dict | None, dict | None]:
+    lista = pessoas_por_face(face_id)
+    if not lista:
+        return None, None
+    return lista[0]
 
 
 def veiculo_por_placa(placa: str) -> tuple[dict | None, dict | None]:

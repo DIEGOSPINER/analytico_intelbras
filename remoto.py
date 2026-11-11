@@ -1286,7 +1286,7 @@ def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool =
         )
     grade = f"<div class='rostos'>{''.join(rostos)}</div>" if rostos else "<p>Nenhuma pessoa de interesse nesta conta.</p>"
     miolo = f"""<header class="topo"><div><h1>Pessoas de interesse</h1>
-<p>Cada foto nova recebe o próprio código. Corrigir um código troca só a foto daquela pessoa.</p></div></header>
+<p>Cada foto nova recebe o próprio código. Corrigir um código troca só a foto daquela pessoa. Se o rosto já estiver no interesse de outra conta (ruas/bairros colaborativos), o sistema compila o vínculo no grifo automaticamente.</p></div></header>
 <main>
 {grade}
 {_aviso_html(aviso, ok)}
@@ -3209,7 +3209,7 @@ def _tratador(portal: Portal):
                     portal._faces.substituir_foto(face_id, imagem)
                 else:
                     face_id, _nova = portal._faces.inscrever_foto(imagem)
-                cadastro.cadastrar_pessoa(documento, {
+                registro = cadastro.cadastrar_pessoa(documento, {
                     "face_id": face_id,
                     "nome": _um(campos, "nome"),
                     "classe": _um(campos, "base_legal"),
@@ -3218,11 +3218,15 @@ def _tratador(portal: Portal):
                     "motivo": _um(campos, "motivo"),
                     "favorecido": _um(campos, "favorecido"),
                     "nome_protegido": _um(campos, "nome_protegido"),
-                })
+                }, faces_engine=portal._faces)
             except ValueError as exc:
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
                 return
-            self._redirecionar("/cadastro/pessoas?ok=salvo")
+            cruz = list((registro or {}).get("_cruzamentos") or [])
+            if cruz:
+                self._redirecionar(f"/cadastro/pessoas?ok=cruzado&n={len(cruz)}")
+            else:
+                self._redirecionar("/cadastro/pessoas?ok=salvo")
 
         def _salvar_veiculo(self, sessao: dict, campos: dict):
             documento = sessao.get("documento") or ""
@@ -3455,8 +3459,12 @@ def _tratador(portal: Portal):
                         face_id = face_atual
                     else:
                         face_id, _nova = portal._faces.inscrever_foto(imagem)
-                    cadastro.definir_foto_cliente(cliente.get("documento") or "", face_id, eh_proprio=True)
-                    cliente = cadastro.cliente_por_documento(cliente.get("documento") or "") or cliente
+                    cliente = cadastro.definir_foto_cliente(
+                        cliente.get("documento") or "",
+                        face_id,
+                        eh_proprio=True,
+                        faces_engine=portal._faces,
+                    )
                 except ValueError as exc:
                     self._html(_form_cliente(sessao, cliente, str(exc)), 400)
                     return
@@ -3468,7 +3476,11 @@ def _tratador(portal: Portal):
                     "marca": sessao.get("marca"),
                 }
                 cookie = _cabecalho_cookie(acesso.emitir_cookie(usuario, portal.senha))
-            self._redirecionar("/cadastro/cliente?ok=salvo", cookie)
+            cruz = list((cliente or {}).get("_cruzamentos") or [])
+            if cruz:
+                self._redirecionar(f"/cadastro/cliente?ok=cruzado&n={len(cruz)}", cookie)
+            else:
+                self._redirecionar("/cadastro/cliente?ok=salvo", cookie)
 
         def _criar_cliente(self, sessao: dict, campos: dict):
             if sessao.get("perfil") != "administrador":
@@ -3841,7 +3853,21 @@ def _mensagem(consulta: dict) -> tuple[str, bool]:
         "usuario": "Usuário criado. Ele entra com o e-mail e a senha informados.",
         "reset": "Senha provisória gerada e enviada por e-mail. No próximo acesso a troca será obrigatória.",
         "primeiro": "No primeiro acesso, troque a senha enviada por e-mail. Depois as telas do seu CPF/CNPJ ficam liberadas.",
+        "cruzado": (
+            "Salvo. Este rosto também é pessoa de interesse em outra conta; "
+            "o vínculo colaborativo foi compilado no grifo/Neo4j."
+        ),
     }
+    if codigo == "cruzado":
+        try:
+            n = int((consulta.get("n") or ["0"])[0])
+        except ValueError:
+            n = 0
+        if n > 1:
+            textos["cruzado"] = (
+                f"Salvo. Este rosto corresponde a interesse em {n} outras contas; "
+                "os vínculos colaborativos foram compilados no grifo/Neo4j."
+            )
     return textos.get(codigo, ""), bool(codigo in textos)
 
 

@@ -347,20 +347,36 @@ def confirmar(
         try:
             from cadastro import cadastrar_pessoa
 
-            cadastrar_pessoa(documento, {
+            faces_engine = None
+            try:
+                from remoto import portal as _portal
+
+                faces_engine = getattr(_portal, "_faces", None)
+            except Exception:
+                faces_engine = None
+            registro = cadastrar_pessoa(documento, {
                 "face_id": face_freq,
                 "nome": f"Interesse {face_freq}",
                 "classe": "comportamento_suspeito",
                 "base_legal": "comportamento_suspeito",
                 "motivo": "ameaca",
                 "referencia": "Cadastro automático via Stive (rosto frequente)",
-            })
+            }, faces_engine=faces_engine)
+            cruz = list((registro or {}).get("_cruzamentos") or [])
+            extra = ""
+            if cruz:
+                nomes = ", ".join(
+                    str(item.get("nome_cliente") or item.get("documento") or "")
+                    for item in cruz[:3]
+                )
+                extra = f" Também aparece no interesse de: {nomes}."
             return {
                 "fala": (
                     f"Cadastrado {face_freq} como pessoa de interesse (comportamento suspeito). "
-                    "A partir de agora o monitoramento gera alerta."
+                    f"A partir de agora o monitoramento gera alerta.{extra}"
                 ),
                 "ok": True,
+                "cruzamentos": cruz,
             }
         except Exception as exc:
             return {"fala": f"Não consegui cadastrar automaticamente: {exc}", "ok": False}

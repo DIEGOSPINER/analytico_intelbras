@@ -28,14 +28,23 @@ TIPOS_VINCULO = {
     "vizinho": "Vizinho(a)",
     "colega": "Colega",
     "proprio": "Próprio usuário",
+    "monitora": "Monitora",
+    "mesmo_individuo": "Mesmo indivíduo",
+    "interesse_compartilhado": "Interesse compartilhado",
     "medida_protege": "Medida protetiva (protege)",
 }
 
-# Opções exibidas no Stive (sem medida protetiva / próprio).
+# Opções exibidas no Stive (vínculos pessoais; sem tipos de sistema).
 VINCULOS_STIVE = {
     chave: rotulo
     for chave, rotulo in TIPOS_VINCULO.items()
-    if chave not in {"medida_protege", "proprio"}
+    if chave not in {
+        "medida_protege",
+        "proprio",
+        "monitora",
+        "mesmo_individuo",
+        "interesse_compartilhado",
+    }
 }
 _TRAVA = threading.RLock()
 _neo = None
@@ -251,9 +260,8 @@ def relacionar_usuarios(
 ) -> dict:
     """Vínculo entre duas contas (ex.: Diego —esposa→ Vanessa)."""
     tipo = str(tipo or "").strip().lower()
-    if tipo not in TIPOS_VINCULO or tipo in {"medida_protege", "proprio"}:
-        if tipo not in TIPOS_VINCULO:
-            raise ValueError("Escolha um tipo de vínculo válido.")
+    if tipo not in TIPOS_VINCULO:
+        raise ValueError("Escolha um tipo de vínculo válido.")
     origem = garantir_usuario(documento_origem, nome_origem, email_origem)
     destino = garantir_usuario(documento_destino, nome_destino, email_destino)
     if not origem or not destino:
@@ -270,6 +278,47 @@ def relacionar_usuarios(
         "rotulo": TIPOS_VINCULO.get(tipo, tipo),
         "quando": _agora(),
         "entre_usuarios": True,
+        **meta_limpo,
+    }
+    return _gravar_aresta(origem, destino, tipo, props)
+
+
+def relacionar_faces(
+    face_a: str,
+    face_b: str,
+    tipo: str = "mesmo_individuo",
+    *,
+    nome_a: str = "",
+    nome_b: str = "",
+    classe_a: str = "",
+    classe_b: str = "",
+    meta: dict | None = None,
+) -> dict:
+    """Liga duas faces reconhecidas como o mesmo indivíduo (colaborativo entre contas)."""
+    tipo = str(tipo or "mesmo_individuo").strip().lower() or "mesmo_individuo"
+    if tipo not in TIPOS_VINCULO:
+        raise ValueError("Escolha um tipo de vínculo válido.")
+    a = str(face_a or "").strip().upper()
+    b = str(face_b or "").strip().upper()
+    if not a or not b or a == b:
+        raise ValueError("Informe duas faces distintas.")
+    # Ordem estável evita aresta duplicada invertida.
+    if a > b:
+        a, b = b, a
+        nome_a, nome_b = nome_b, nome_a
+        classe_a, classe_b = classe_b, classe_a
+    origem = garantir_pessoa(a, nome_a, classe_a)
+    destino = garantir_pessoa(b, nome_b, classe_b)
+    meta_limpo = {
+        chave: valor
+        for chave, valor in dict(meta or {}).items()
+        if chave not in {"origem", "destino", "tipo", "rotulo", "from", "to", "id"}
+    }
+    props = {
+        "tipo": tipo,
+        "rotulo": TIPOS_VINCULO.get(tipo, tipo),
+        "quando": _agora(),
+        "entre_faces": True,
         **meta_limpo,
     }
     return _gravar_aresta(origem, destino, tipo, props)
@@ -303,11 +352,13 @@ def _reparar_arestas(dados: dict) -> bool:
 
 
 def sincronizar_cadastros() -> None:
-    """Espelha clientes/pessoas no grafo local."""
+    """Espelha clientes/pessoas no grafo local e no Neo4j (se configurado)."""
     try:
         from cadastro import listar_clientes
     except Exception:
         return
+    nos_neo: list[tuple[str, str, dict]] = []
+    arestas_neo: list[tuple[str, str, str, dict]] = []
     with _TRAVA:
         dados = _ler()
         _reparar_arestas(dados)
@@ -318,34 +369,44 @@ def sincronizar_cadastros() -> None:
             if not digitos:
                 continue
             u = f"U:{digitos}"
-            _upsert_no_local(dados, u, "usuario", {
+            props_u = {
                 "documento": digitos,
                 "nome": str(cliente.get("nome") or digitos),
                 "email": str(cliente.get("email") or ""),
                 "atualizado": _agora(),
-            })
+            }
+            _upsert_no_local(dados, u, "usuario", props_u)
+            nos_neo.append((u, "usuario", props_u))
             foto_cli = str(cliente.get("foto_face_id") or "").strip().upper()
             if foto_cli:
                 f_foto = f"F:{foto_cli}"
-                _upsert_no_local(dados, f_foto, "pessoa", {
+                props_foto = {
                     "face_id": foto_cli,
                     "nome": str(cliente.get("nome") or foto_cli),
                     "classe": "morador",
                     "documento_cliente": digitos,
                     "atualizado": _agora(),
-                })
+                }
+                _upsert_no_local(dados, f_foto, "pessoa", props_foto)
+                nos_neo.append((f_foto, "pessoa", props_foto))
                 if not any(
                     a.get("origem") == u and a.get("destino") == f_foto and a.get("tipo") == "proprio"
                     for a in dados["arestas"]
                 ):
-                    dados["arestas"].append({
+                    aresta_p = {
                         "origem": u,
                         "destino": f_foto,
                         "tipo": "proprio",
                         "rotulo": TIPOS_VINCULO["proprio"],
                         "quando": _agora(),
                         "fonte": "foto_cliente",
-                    })
+                    }
+                    dados["arestas"].append(aresta_p)
+                arestas_neo.append((u, f_foto, "proprio", {
+                    "tipo": "proprio",
+                    "rotulo": TIPOS_VINCULO["proprio"],
+                    "fonte": "foto_cliente",
+                }))
             for pessoa in cliente.get("pessoas") or []:
                 face = str((pessoa or {}).get("face_id") or "").strip().upper()
                 if not face:
@@ -360,6 +421,7 @@ def sincronizar_cadastros() -> None:
                 if pessoa.get("eh_proprio") is True or face == foto_cli:
                     props_p["documento_cliente"] = digitos
                 _upsert_no_local(dados, f, "pessoa", props_p)
+                nos_neo.append((f, "pessoa", props_p))
                 # Dono cadastrou a pessoa: vínculo implícito de monitoramento.
                 if not any(
                     a.get("origem") == u and a.get("destino") == f and a.get("tipo") == "monitora"
@@ -369,10 +431,29 @@ def sincronizar_cadastros() -> None:
                         "origem": u,
                         "destino": f,
                         "tipo": "monitora",
-                        "rotulo": "Monitora",
+                        "rotulo": TIPOS_VINCULO.get("monitora", "Monitora"),
                         "quando": _agora(),
                     })
+                arestas_neo.append((u, f, "monitora", {
+                    "tipo": "monitora",
+                    "rotulo": TIPOS_VINCULO.get("monitora", "Monitora"),
+                }))
+        # Espelha também arestas já existentes (Stive, cruzamentos, etc.).
+        for a in dados.get("arestas") or []:
+            o, d, t = a.get("origem"), a.get("destino"), str(a.get("tipo") or "")
+            if not o or not d or not t:
+                continue
+            props_a = {
+                chave: valor
+                for chave, valor in dict(a).items()
+                if chave not in {"origem", "destino"}
+            }
+            arestas_neo.append((o, d, t, props_a))
         _gravar(dados)
+    for no_id, rotulo, props in nos_neo:
+        _neo_upsert(no_id, rotulo, props)
+    for origem, destino, tipo, props in arestas_neo:
+        _neo_aresta(origem, destino, tipo, props)
 
 
 def _subgrafo(nos: list[dict], arestas: list[dict], foco: set[str]) -> tuple[list[dict], list[dict]]:
@@ -436,6 +517,8 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
         "medida_protege": "#c084fc",
         "monitora": "#64748b",
         "proprio": "#3ddc97",
+        "mesmo_individuo": "#fbbf24",
+        "interesse_compartilhado": "#60a5fa",
     }
     arestas = []
     contagem_tipos: dict[str, int] = {}
@@ -465,7 +548,9 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
             "tipo": tipo_a,
             "title": f"{rotulo_a}" + (f" · {a.get('quando')}" if a.get("quando") else ""),
             "color": {"color": cores_aresta.get(tipo_a, "#7a8799"), "highlight": "#e8eefc"},
-            "width": 3 if entre_usuarios else (2 if tipo_a in VINCULOS_STIVE or tipo_a in {"medida_protege", "proprio"} else 1),
+            "width": 3 if entre_usuarios or tipo_a in {"mesmo_individuo", "interesse_compartilhado"} else (
+                2 if tipo_a in VINCULOS_STIVE or tipo_a in {"medida_protege", "proprio", "monitora"} else 1
+            ),
             "font": {"color": cores_aresta.get(tipo_a, "#a7b3c7"), "size": 12, "strokeWidth": 0},
         })
 
@@ -523,11 +608,34 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
         for tipo, total in sorted(contagem_filtrada.items(), key=lambda item: (-item[1], item[0]))
     ]
 
+    geo = {}
+    try:
+        from cadastro import indice_geo_colaborativo
+
+        bruto_geo = indice_geo_colaborativo()
+        geo = {
+            "piloto_bairro": bruto_geo.get("piloto_bairro"),
+            "piloto_cidade": bruto_geo.get("piloto_cidade"),
+            "logradouros_stella_maris": bruto_geo.get("logradouros_stella_maris") or [],
+            "total_ruas": len(bruto_geo.get("ruas") or {}),
+            "total_bairros": len(bruto_geo.get("bairros") or {}),
+            "ruas": {
+                chave: len(itens)
+                for chave, itens in (bruto_geo.get("ruas") or {}).items()
+            },
+            "bairros": {
+                chave: len(itens)
+                for chave, itens in (bruto_geo.get("bairros") or {}).items()
+            },
+        }
+    except Exception:
+        geo = {}
+
     return {
         "nodes": nos,
         "edges": arestas,
         "motor": "neo4j" if _neo4j() else "json",
-        "tipos": {**TIPOS_VINCULO, "monitora": "Monitora"},
+        "tipos": dict(TIPOS_VINCULO),
         "vinculos_stive": VINCULOS_STIVE,
         "resumo_vinculos": resumo_vinculos,
         "total_nos": len(nos),
@@ -536,4 +644,5 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
         "opcoes_clientes": todos_clientes,
         "opcoes_pessoas": todas_pessoas,
         "clientes_visiveis": clientes,
+        "geo_colaborativo": geo,
     }
