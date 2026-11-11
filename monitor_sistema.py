@@ -14,10 +14,38 @@ _TRAVA = threading.Lock()
 _THREAD = None
 _PARAR = threading.Event()
 _INTERVALO = max(30, int(os.getenv("SISTEMA_AMOSTRA_SEG", "120") or 120))
+_TESTES_N = (1, 2, 4)
+
+# Último desempenho publicado pelo main (por câmera + processo).
+_DESEMPENHO_VIVO: dict = {
+    "quando": "",
+    "n_cameras": 0,
+    "cpu_processo": 0.0,
+    "ram_app_mb": 0.0,
+    "cameras": [],
+}
 
 
 def _digitos_mb(valor: float) -> float:
     return round(float(valor or 0), 2)
+
+
+def _digitos(valor: float, casas: int = 1) -> float:
+    return round(float(valor or 0), casas)
+
+
+def _media(valores: list[float]) -> float:
+    vals = [float(v) for v in valores if v is not None]
+    return (sum(vals) / len(vals)) if vals else 0.0
+
+
+def _hist_base() -> dict:
+    return {
+        "amostras": [],
+        "dias": {},
+        "desempenho_amostras": [],
+        "testes_capacidade": {str(n): None for n in _TESTES_N},
+    }
 
 
 def _host() -> dict:
@@ -132,24 +160,128 @@ def _tabelas_postgres() -> list[dict]:
 
 
 def _ler_hist() -> dict:
+    base = _hist_base()
     if not ARQUIVO.exists():
-        return {"amostras": [], "dias": {}}
+        return base
     try:
         bruto = json.loads(ARQUIVO.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"amostras": [], "dias": {}}
+        return base
     if not isinstance(bruto, dict):
-        return {"amostras": [], "dias": {}}
+        return base
     bruto.setdefault("amostras", [])
     bruto.setdefault("dias", {})
+    bruto.setdefault("desempenho_amostras", [])
+    testes = dict(bruto.get("testes_capacidade") or {})
+    for n in _TESTES_N:
+        testes.setdefault(str(n), None)
+    bruto["testes_capacidade"] = testes
     return bruto
+
+
+def _enriquecer_cameras(
+    cameras: list[dict],
+    cpu_processo: float,
+    ram_app_mb: float,
+) -> list[dict]:
+    n = max(1, len(cameras))
+    cpu_share = _digitos(float(cpu_processo or 0) / n, 1)
+    ram_share = _digitos_mb(float(ram_app_mb or 0) / n)
+    saida = []
+    for item in cameras:
+        saida.append({
+            "id": str(item.get("id") or item.get("nome") or ""),
+            "nome": str(item.get("nome") or item.get("id") or ""),
+            "latencia_ms": _digitos(item.get("latencia_ms"), 1),
+            "fps_efetivo": _digitos(item.get("fps_efetivo"), 2),
+            "cpu_processo": cpu_share,
+            "ram_app": ram_share,
+        })
+    return saida
+
+
+def publicar_desempenho(
+    cameras: list[dict] | None = None,
+    cpu_processo: float = 0.0,
+    ram_app_mb: float = 0.0,
+) -> dict:
+    """Recebe métricas ao vivo do main (latência/FPS por câmera + CPU/RAM do app)."""
+    global _DESEMPENHO_VIVO
+    lista = _enriquecer_cameras(list(cameras or []), cpu_processo, ram_app_mb)
+    vivo = {
+        "quando": datetime.now().isoformat(timespec="seconds"),
+        "n_cameras": len(lista),
+        "cpu_processo": _digitos(cpu_processo, 1),
+        "ram_app_mb": _digitos_mb(ram_app_mb),
+        "cameras": lista,
+        "latencia_ms_media": _digitos(_media([c["latencia_ms"] for c in lista]), 1),
+        "fps_efetivo_medio": _digitos(_media([c["fps_efetivo"] for c in lista]), 2),
+    }
+    with _TRAVA:
+        _DESEMPENHO_VIVO = vivo
+    return dict(vivo)
+
+
+def desempenho_vivo() -> dict:
+    with _TRAVA:
+        return dict(_DESEMPENHO_VIVO)
+
+
+def _amostra_desempenho_de_vivo(vivo: dict) -> dict:
+    cams = list(vivo.get("cameras") or [])
+    return {
+        "quando": vivo.get("quando") or datetime.now().isoformat(timespec="seconds"),
+        "n_cameras": int(vivo.get("n_cameras") or len(cams) or 0),
+        "cpu_processo": _digitos(vivo.get("cpu_processo"), 1),
+        "ram_app_mb": _digitos_mb(vivo.get("ram_app_mb")),
+        "latencia_ms_media": _digitos(vivo.get("latencia_ms_media"), 1),
+        "fps_efetivo_medio": _digitos(vivo.get("fps_efetivo_medio"), 2),
+        "cameras": cams,
+    }
+
+
+def registrar_teste_capacidade(n_cameras: int) -> dict:
+    """Congela o desempenho atual no slot de teste 1 / 2 / 4 câmeras."""
+    n = int(n_cameras or 0)
+    if n not in _TESTES_N:
+        return {"ok": False, "erro": "Use n_cameras = 1, 2 ou 4."}
+    vivo = desempenho_vivo()
+    atuais = int(vivo.get("n_cameras") or 0)
+    if atuais != n:
+        return {
+            "ok": False,
+            "erro": (
+                f"Há {atuais} câmera(s) ativa(s). "
+                f"Para o teste {n}, deixe exatamente {n} câmera(s) em análise e tente de novo."
+            ),
+            "n_cameras_ativas": atuais,
+            "n_pedido": n,
+        }
+    if atuais <= 0:
+        return {"ok": False, "erro": "Nenhuma câmera ativa para registrar o teste."}
+    amostra = _amostra_desempenho_de_vivo(vivo)
+    amostra["teste"] = n
+    amostra["rotulo"] = f"{n} câmera(s)"
+    with _TRAVA:
+        hist = _ler_hist()
+        hist.setdefault("testes_capacidade", {})
+        hist["testes_capacidade"][str(n)] = amostra
+        _gravar_hist(hist)
+    _persistir_teste_pg(amostra)
+    return {"ok": True, "teste": amostra, "testes_capacidade": hist["testes_capacidade"]}
+
+
+def testes_capacidade() -> dict:
+    with _TRAVA:
+        hist = _ler_hist()
+        return dict(hist.get("testes_capacidade") or {})
 
 
 def _gravar_hist(dados: dict):
     ARQUIVO.write_text(json.dumps(dados, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _persistir_pg(amostra: dict, tabelas: list[dict]):
+def _persistir_pg(amostra: dict, tabelas: list[dict], desempenho: dict | None = None):
     try:
         from db.conexao import conectar, disponivel
 
@@ -184,6 +316,57 @@ def _persistir_pg(amostra: dict, tabelas: list[dict]):
                         """,
                         (dia, item["tabela"], item["bytes"], item["linhas"]),
                     )
+                if desempenho and int(desempenho.get("n_cameras") or 0) > 0:
+                    cur.execute(
+                        """
+                        INSERT INTO metricas_desempenho
+                        (n_cameras, cpu_processo, ram_app_mb, latencia_ms_media, fps_efetivo_medio, cameras_json)
+                        VALUES (%s,%s,%s,%s,%s,%s::jsonb)
+                        """,
+                        (
+                            int(desempenho.get("n_cameras") or 0),
+                            float(desempenho.get("cpu_processo") or 0),
+                            float(desempenho.get("ram_app_mb") or 0),
+                            float(desempenho.get("latencia_ms_media") or 0),
+                            float(desempenho.get("fps_efetivo_medio") or 0),
+                            json.dumps(desempenho.get("cameras") or [], ensure_ascii=False),
+                        ),
+                    )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _persistir_teste_pg(amostra: dict):
+    try:
+        from db.conexao import conectar, disponivel
+
+        if not disponivel():
+            return
+        with conectar() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO testes_capacidade
+                    (n_cameras, quando, cpu_processo, ram_app_mb, latencia_ms_media, fps_efetivo_medio, cameras_json)
+                    VALUES (%s, NOW(), %s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (n_cameras) DO UPDATE SET
+                        quando = EXCLUDED.quando,
+                        cpu_processo = EXCLUDED.cpu_processo,
+                        ram_app_mb = EXCLUDED.ram_app_mb,
+                        latencia_ms_media = EXCLUDED.latencia_ms_media,
+                        fps_efetivo_medio = EXCLUDED.fps_efetivo_medio,
+                        cameras_json = EXCLUDED.cameras_json
+                    """,
+                    (
+                        int(amostra.get("teste") or amostra.get("n_cameras") or 0),
+                        float(amostra.get("cpu_processo") or 0),
+                        float(amostra.get("ram_app_mb") or 0),
+                        float(amostra.get("latencia_ms_media") or 0),
+                        float(amostra.get("fps_efetivo_medio") or 0),
+                        json.dumps(amostra.get("cameras") or [], ensure_ascii=False),
+                    ),
+                )
             conn.commit()
     except Exception:
         pass
@@ -200,21 +383,37 @@ def amostrar() -> dict:
         "tabelas_mb": _digitos_mb(total_bytes / (1024 * 1024)),
         "tabelas": len(tabelas),
     }
+    vivo = desempenho_vivo()
+    desempenho = _amostra_desempenho_de_vivo(vivo) if int(vivo.get("n_cameras") or 0) > 0 else None
     with _TRAVA:
         hist = _ler_hist()
         hist["amostras"].append(amostra)
         hist["amostras"] = hist["amostras"][-2000:]
+        if desempenho:
+            hist.setdefault("desempenho_amostras", [])
+            hist["desempenho_amostras"].append(desempenho)
+            hist["desempenho_amostras"] = hist["desempenho_amostras"][-2000:]
+            amostra["n_cameras"] = desempenho["n_cameras"]
+            amostra["cpu_processo"] = desempenho["cpu_processo"]
+            amostra["ram_app_mb"] = desempenho["ram_app_mb"]
+            amostra["latencia_ms_media"] = desempenho["latencia_ms_media"]
+            amostra["fps_efetivo_medio"] = desempenho["fps_efetivo_medio"]
         dia = date.today().isoformat()
         hist["dias"][dia] = {
             "cpu_pct": amostra["cpu_pct"],
             "ram_pct": amostra["ram_pct"],
             "tabelas_mb": amostra["tabelas_mb"],
             "disco_usado_mb": amostra["disco_usado_mb"],
+            "cpu_processo": amostra.get("cpu_processo"),
+            "ram_app_mb": amostra.get("ram_app_mb"),
+            "latencia_ms_media": amostra.get("latencia_ms_media"),
+            "fps_efetivo_medio": amostra.get("fps_efetivo_medio"),
+            "n_cameras": amostra.get("n_cameras"),
             "tabelas": {item["tabela"]: {"bytes": item["bytes"], "linhas": item["linhas"]} for item in tabelas},
         }
         _gravar_hist(hist)
-    _persistir_pg(amostra, tabelas)
-    return {"agora": amostra, "tabelas": tabelas}
+    _persistir_pg(amostra, tabelas, desempenho)
+    return {"agora": amostra, "tabelas": tabelas, "desempenho": desempenho}
 
 
 def _serie_dias(chave: str, dias: int = 30) -> list[dict]:
@@ -280,6 +479,10 @@ def resumo(fator: float = 1.0, escopo: str = "cluster") -> dict:
     with _TRAVA:
         hist = _ler_hist()
         amostras = list(hist.get("amostras") or [])[-288:]
+        desempenho_amostras = list(hist.get("desempenho_amostras") or [])[-288:]
+        testes = dict(hist.get("testes_capacidade") or {})
+    for n in _TESTES_N:
+        testes.setdefault(str(n), None)
 
     def _escala_host(bloco: dict) -> dict:
         if fator >= 0.999:
@@ -308,6 +511,8 @@ def resumo(fator: float = 1.0, escopo: str = "cluster") -> dict:
             "mb": _digitos_mb(bytes_i / (1024 * 1024)),
             "linhas": int(round(int(item.get("linhas") or 0) * fator)),
         })
+    vivo = desempenho_vivo()
+
     return {
         "agora": agora,
         "tabelas": tabelas_vista,
@@ -318,6 +523,10 @@ def resumo(fator: float = 1.0, escopo: str = "cluster") -> dict:
         "cpu_diario": _escalar_serie(_serie_dias("cpu_pct", 30), fator),
         "ram_diario": _escalar_serie(_serie_dias("ram_pct", 30), fator),
         "disco_diario": _escalar_serie(_serie_dias("disco_usado_mb", 30), fator),
+        "cpu_processo_diario": _serie_dias("cpu_processo", 30),
+        "ram_app_diario": _serie_dias("ram_app_mb", 30),
+        "latencia_diaria": _serie_dias("latencia_ms_media", 30),
+        "fps_diario": _serie_dias("fps_efetivo_medio", 30),
         "amostras": [
             _escala_host({
                 "quando": item.get("quando"),
@@ -327,6 +536,10 @@ def resumo(fator: float = 1.0, escopo: str = "cluster") -> dict:
             })
             for item in amostras
         ],
+        "desempenho": vivo,
+        "desempenho_amostras": desempenho_amostras,
+        "testes_capacidade": testes,
+        "testes_capacidade_n": list(_TESTES_N),
         "escopo": escopo,
         "fator_escopo": round(fator, 4),
     }

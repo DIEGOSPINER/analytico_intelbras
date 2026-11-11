@@ -1832,7 +1832,7 @@ def _form_avisos(sessao: dict, cameras: list[dict], aviso: str = "", ok: bool = 
 def _sistema(sessao: dict) -> str:
     miolo = _cabeca(
         "Armazenamento e sistema",
-        "Monitoramento do host, segmentação por cliente, tokens/custos GPT e preparação para espaço em nuvem. Somente administrador.",
+        "Host, capacidade por câmera (latência/FPS/CPU/RAM), testes 1/2/4 câmeras, GPT e nuvem. Somente administrador.",
     ) + "<main id='tela' data-tela='sistema'></main>"
     return _moldura(
         "Sistema · C4ISTAR MONITOR",
@@ -2796,6 +2796,18 @@ def _tratador(portal: Portal):
                 return
             if caminho == "/vista":
                 self._definir_vista(sessao, campos)
+                return
+            if caminho == "/sistema/teste-capacidade":
+                if (sessao.get("perfil") or "") != "administrador":
+                    self._json_status(403, {"ok": False, "erro": "Somente o administrador registra testes de capacidade."})
+                    return
+                try:
+                    import monitor_sistema
+
+                    n = int(_um(campos, "n_cameras") or _um(campos, "n") or 0)
+                    self._json(monitor_sistema.registrar_teste_capacidade(n))
+                except Exception as exc:
+                    self._json_status(500, {"ok": False, "erro": str(exc)})
                 return
             if caminho == "/agente/stive":
                 self._falar_stive(sessao, campos)

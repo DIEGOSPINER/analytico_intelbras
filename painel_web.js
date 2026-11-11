@@ -1879,6 +1879,10 @@ function pintarSistemaGraficos(pacote, ini, fim) {
   linha(document.getElementById("sis-cpu"), serieSimples(dia(pacote.cpu_diario), "#ff8c28"), dia(pacote.cpu_diario).map((i) => i.rotulo), "dias");
   linha(document.getElementById("sis-ram"), serieSimples(dia(pacote.ram_diario), "#aa3cb4"), dia(pacote.ram_diario).map((i) => i.rotulo), "dias");
   linha(document.getElementById("sis-disco"), serieSimples(dia(pacote.disco_diario), "#28c4dc"), dia(pacote.disco_diario).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-latencia"), serieSimples(dia(pacote.latencia_diaria), "#ff5c7a"), dia(pacote.latencia_diaria || []).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-fps"), serieSimples(dia(pacote.fps_diario), "#3ddc97"), dia(pacote.fps_diario || []).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-cpu-proc"), serieSimples(dia(pacote.cpu_processo_diario), "#ff8c28"), dia(pacote.cpu_processo_diario || []).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-ram-app"), serieSimples(dia(pacote.ram_app_diario), "#aa3cb4"), dia(pacote.ram_app_diario || []).map((i) => i.rotulo), "dias");
   linha(document.getElementById("sis-gpt-usd"), serieSimples(dia(custos.gpt_usd_diario), "#3ddc97"), dia(custos.gpt_usd_diario || []).map((i) => i.rotulo), "dias");
   linha(document.getElementById("sis-gpt-tok"), serieSimples(dia(custos.gpt_tokens_diario), "#ffb020"), dia(custos.gpt_tokens_diario || []).map((i) => i.rotulo), "dias");
   const resumoPeriodo = document.getElementById("sis-periodo-resumo");
@@ -1890,8 +1894,66 @@ function pintarSistemaGraficos(pacote, ini, fim) {
   }
 }
 
+function pintarDesempenhoSistema(pacote) {
+  const desp = (pacote && pacote.desempenho) || {};
+  const cams = desp.cameras || [];
+  const cards = document.getElementById("sistema-cap-cards");
+  if (cards) {
+    cards.innerHTML = [
+      ["Câmeras ativas", desp.n_cameras || 0, "#4c8dff"],
+      ["Latência média (ms)", desp.latencia_ms_media || 0, "#ff5c7a"],
+      ["FPS efetivo médio", desp.fps_efetivo_medio || 0, "#3ddc97"],
+      ["CPU processo %", desp.cpu_processo || 0, "#ff8c28"],
+      ["RAM app (MB)", desp.ram_app_mb || 0, "#aa3cb4"],
+    ].map(([rotulo, valor, cor]) =>
+      `<article class="cartao"><span style="color:${cor} !important">${rotulo}</span><strong style="color:${cor} !important">${Number(valor).toLocaleString("pt-BR")}</strong></article>`
+    ).join("");
+  }
+  const tabela = document.getElementById("sistema-cameras-perf");
+  if (tabela) {
+    const linhas = cams.map((c) =>
+      `<tr>
+        <td>${escapar(c.nome || c.id || "")}</td>
+        <td>${Number(c.latencia_ms || 0).toLocaleString("pt-BR")}</td>
+        <td>${Number(c.fps_efetivo || 0).toLocaleString("pt-BR")}</td>
+        <td>${Number(c.cpu_processo || 0).toLocaleString("pt-BR")}</td>
+        <td>${Number(c.ram_app || 0).toLocaleString("pt-BR")}</td>
+      </tr>`
+    ).join("");
+    tabela.innerHTML = `<table>
+      <tr><th>Câmera</th><th>latência_ms</th><th>fps_efetivo</th><th>cpu_processo %</th><th>ram_app MB</th></tr>
+      ${linhas || "<tr><td colspan='5'>Aguardando métricas das câmeras em análise…</td></tr>"}
+    </table>
+    <p style="color:var(--mudo);margin-top:.6rem;font-size:13px">cpu_processo e ram_app por câmera = fatia do processo (${Number(desp.cpu_processo || 0)}% · ${Number(desp.ram_app_mb || 0)} MB) ÷ N câmeras. Amostra ${escapar(desp.quando || "")}.</p>`;
+  }
+  const testes = (pacote && pacote.testes_capacidade) || {};
+  const ns = (pacote && pacote.testes_capacidade_n) || [1, 2, 4];
+  const box = document.getElementById("sistema-testes");
+  if (box) {
+    const linhas = ns.map((n) => {
+      const t = testes[String(n)];
+      if (!t) {
+        return `<tr><td>${n}</td><td colspan="5">Ainda sem teste registrado</td></tr>`;
+      }
+      return `<tr>
+        <td>${n}</td>
+        <td>${Number(t.latencia_ms_media || 0).toLocaleString("pt-BR")}</td>
+        <td>${Number(t.fps_efetivo_medio || 0).toLocaleString("pt-BR")}</td>
+        <td>${Number(t.cpu_processo || 0).toLocaleString("pt-BR")}</td>
+        <td>${Number(t.ram_app_mb || 0).toLocaleString("pt-BR")}</td>
+        <td>${escapar(t.quando || "")}</td>
+      </tr>`;
+    }).join("");
+    box.innerHTML = `<table>
+      <tr><th>N câmeras</th><th>latência_ms</th><th>fps_efetivo</th><th>cpu_processo %</th><th>ram_app MB</th><th>quando</th></tr>
+      ${linhas}
+    </table>
+    <p style="color:var(--mudo);margin-top:.6rem;font-size:13px">Deixe exatamente 1, 2 ou 4 câmeras ativas e registre o teste correspondente.</p>`;
+  }
+}
+
 async function sistema(tela) {
-  if (tela.dataset.pronto !== "sistema-v4") {
+  if (tela.dataset.pronto !== "sistema-v5") {
     const hoje = isoLocal(new Date());
     const ini7 = isoLocal(new Date(Date.now() - 6 * 86400000));
     tela.innerHTML = `<section class="cartao" style="margin-bottom:14px">
@@ -1915,6 +1977,21 @@ async function sistema(tela) {
   <p id="sis-periodo-resumo" style="color:var(--mudo);margin:.6rem 0 0;font-size:13px"></p>
 </section>
 <section class="cartoes" id="sistema-cards"></section>
+<section class="cartao" style="margin-bottom:14px">
+  <h2 style="margin:0 0 8px;font-size:16px">Capacidade por câmera (ao vivo)</h2>
+  <section class="cartoes" id="sistema-cap-cards"></section>
+  <div id="sistema-cameras-perf"><p>Carregando…</p></div>
+</section>
+<section class="cartao" style="margin-bottom:14px">
+  <h2 style="margin:0 0 8px;font-size:16px">Testes de capacidade · 1 / 2 / 4 câmeras</h2>
+  <div class="acoes-gestao" style="margin-bottom:10px">
+    <button type="button" data-sis-teste="1">Registrar teste 1</button>
+    <button type="button" data-sis-teste="2">Registrar teste 2</button>
+    <button type="button" data-sis-teste="4">Registrar teste 4</button>
+  </div>
+  <p id="sis-teste-msg" style="color:var(--mudo);margin:0 0 8px;font-size:13px"></p>
+  <div id="sistema-testes"><p>Carregando…</p></div>
+</section>
 <section class="grade">
 <article class="cartao"><h2>Tabelas no Postgres</h2><div id="sistema-tabelas"><p>Carregando…</p></div></article>
 <article class="cartao"><h2>Host agora</h2><div id="sistema-agora"><p>Carregando…</p></div></article>
@@ -1930,6 +2007,14 @@ async function sistema(tela) {
 <article class="cartao"><h2>Disco do sistema (MB)</h2><canvas class="grafico" id="sis-disco"></canvas></article>
 </section>
 <section class="grade">
+<article class="cartao"><h2>Latência média (ms)</h2><canvas class="grafico" id="sis-latencia"></canvas></article>
+<article class="cartao"><h2>FPS efetivo médio</h2><canvas class="grafico" id="sis-fps"></canvas></article>
+</section>
+<section class="grade">
+<article class="cartao"><h2>CPU processo (%)</h2><canvas class="grafico" id="sis-cpu-proc"></canvas></article>
+<article class="cartao"><h2>RAM app (MB)</h2><canvas class="grafico" id="sis-ram-app"></canvas></article>
+</section>
+<section class="grade">
 <article class="cartao"><h2>GPT · custo diário (USD)</h2><canvas class="grafico" id="sis-gpt-usd"></canvas></article>
 <article class="cartao"><h2>GPT · tokens/unidades diários</h2><canvas class="grafico" id="sis-gpt-tok"></canvas></article>
 </section>
@@ -1937,7 +2022,7 @@ async function sistema(tela) {
 <article class="cartao"><h2>Custos GPT por cliente (mês)</h2><div id="sistema-custos-cli"><p>Carregando…</p></div></article>
 <article class="cartao"><h2>Espaço em nuvem</h2><div id="sistema-nuvem"><p>Preparando medição por cliente…</p></div></article>
 </section>`;
-    tela.dataset.pronto = "sistema-v4";
+    tela.dataset.pronto = "sistema-v5";
     const sel = document.getElementById("sis-cliente");
     if (sel && !sel._sisBound) {
       sel._sisBound = true;
@@ -1977,12 +2062,45 @@ async function sistema(tela) {
         aplicarDatas();
       });
     });
+    tela.querySelectorAll("[data-sis-teste]").forEach((botao) => {
+      if (botao._sisBound) return;
+      botao._sisBound = true;
+      botao.addEventListener("click", async () => {
+        const msg = document.getElementById("sis-teste-msg");
+        const n = botao.dataset.sisTeste;
+        if (msg) msg.textContent = `Registrando teste com ${n} câmera(s)…`;
+        try {
+          const corpo = new URLSearchParams();
+          corpo.set("csrf", csrfPortal());
+          corpo.set("n_cameras", String(n));
+          const resp = await fetch("/sistema/teste-capacidade", {
+            method: "POST",
+            body: corpo,
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          });
+          const dados = await resp.json();
+          if (!dados.ok) {
+            if (msg) msg.textContent = dados.erro || "Não foi possível registrar o teste.";
+            return;
+          }
+          if (tela._sisPacote) {
+            tela._sisPacote.testes_capacidade = dados.testes_capacidade || tela._sisPacote.testes_capacidade;
+            pintarDesempenhoSistema(tela._sisPacote);
+          }
+          if (msg) msg.textContent = `Teste ${n} câmera(s) registrado.`;
+          tela._sisQuando = 0;
+        } catch (erro) {
+          if (msg) msg.textContent = "Falha ao registrar o teste de capacidade.";
+        }
+      });
+    });
   }
   if (tela._sisBusy) return;
   const agoraMs = Date.now();
   if (tela._sisQuando && agoraMs - tela._sisQuando < 8000 && tela._sisPacote) {
     const ini = document.getElementById("sis-ini")?.value || "";
     const fim = document.getElementById("sis-fim")?.value || "";
+    pintarDesempenhoSistema(tela._sisPacote);
     pintarSistemaGraficos(tela._sisPacote, ini, fim);
     return;
   }
@@ -2044,6 +2162,7 @@ async function sistema(tela) {
         <p>Disco ${agora.disco_usado_mb || 0} / ${agora.disco_total_mb || 0} MB · Dados nas tabelas ${agora.tabelas_mb || 0} MB</p>
         <p style="color:var(--mudo)">Amostra ${escapar(agora.quando || "")} · escopo ${escapar(pacote.escopo || "")}</p>`;
     }
+    pintarDesempenhoSistema(pacote);
     const custosCli = document.getElementById("sistema-custos-cli");
     if (custosCli) {
       const lista = custos.por_cliente_mes || [];

@@ -1004,6 +1004,7 @@ class CameraAnalitica:
             # Veículos parados >1h no mesmo ponto: estacionados (não contam de novo).
             self.estacionados = []
             self._fps = 0.0
+            self._latencia_ms = 0.0
             self._ultimo_quadro = time.time()
             self.comportamento = AnaliseComportamental(nome, self.pose)
             self._parar_analise = threading.Event()
@@ -1113,12 +1114,22 @@ class CameraAnalitica:
             if agora - float(slot.get("visto") or 0) <= 90
         ]
 
+    def metricas_desempenho(self) -> dict:
+        with self._trava:
+            return {
+                "id": self.nome,
+                "nome": self.nome,
+                "latencia_ms": round(float(self._latencia_ms or 0), 1),
+                "fps_efetivo": round(float(self._fps or 0), 2),
+            }
+
     def process(self, exibir=True):
         vazio = (None, [], {}, [], {}, [], [])
         frame = self.stream.read()
         if frame is None:
             return vazio
         frame = frame.copy()
+        t0 = time.perf_counter()
 
         agora = time.time()
         intervalo = agora - self._ultimo_quadro
@@ -1328,10 +1339,14 @@ class CameraAnalitica:
         else:
             frame = None
 
+        latencia_ms = (time.perf_counter() - t0) * 1000.0
+        self._latencia_ms = (0.85 * float(self._latencia_ms or 0)) + (0.15 * latencia_ms)
+
         self._definir_match(eventos_faces, eventos_placas)
         with self._trava:
             self._visao = {
                 "fps": self._fps,
+                "latencia_ms": round(float(self._latencia_ms or 0), 1),
                 "pessoas_cena": quantidade_cena["Pessoa"],
                 "veiculos_cena": quantidade_cena["Veiculo"],
                 "objetos_cena": quantidade_cena.get("Objeto", 0),
@@ -2595,6 +2610,28 @@ def _match_json(match, classe, risco, narracao, narracao_ia):
     }
 
 
+def _publicar_desempenho(estado):
+    """Envia latência/FPS por câmera + CPU/RAM do processo ao monitor de sistema."""
+    try:
+        import monitor_sistema
+        from painel import TELEMETRIA
+
+        tele = TELEMETRIA.atualizar()
+        cameras = []
+        for item in list((estado or {}).values()):
+            analitica = item.get("analitica")
+            if analitica is None:
+                continue
+            cameras.append(analitica.metricas_desempenho())
+        monitor_sistema.publicar_desempenho(
+            cameras=cameras,
+            cpu_processo=float(getattr(tele, "cpu", 0) or 0),
+            ram_app_mb=float(getattr(tele, "ram_mb", 0) or 0),
+        )
+    except Exception:
+        pass
+
+
 def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
     from remoto import slug_camera
     import cadastro
@@ -3005,8 +3042,10 @@ def main():
             cameras_online = [{"nome": item["nome"]} for item in estado.values()]
             acervo.quer_leitura = bool(paineis.get("3") or paineis.get("4") or portal)
             acervo.quer_mapas = bool(paineis.get("4") or portal)
-            if portal is not None and time.time() >= proxima_remota:
-                _publicar_remoto(portal, acervo, cameras_online, matches_vivos, estado)
+            if time.time() >= proxima_remota:
+                _publicar_desempenho(estado)
+                if portal is not None:
+                    _publicar_remoto(portal, acervo, cameras_online, matches_vivos, estado)
                 proxima_remota = time.time() + 1
             if (paineis.get("3") or paineis.get("4")) and acervo.mapa_versao != versao_mapa_vista:
                 proxima_tela = min(proxima_tela, time.time())
