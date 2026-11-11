@@ -1971,8 +1971,13 @@ def _ids_respondidos():
 
 
 def _lembrar_pendencia(camera, tipo, texto, agora, audio_payload=None):
-    bloco = int(agora // 1800)
-    chave = f"{camera}|{tipo}|{bloco}"
+    tipo = str(tipo or "")
+    # Rostos: chave estável (sem janela de 30 min) para não repetir a mesma pergunta.
+    if tipo.lower().startswith("rosto_"):
+        chave = f"{camera}|{tipo}"
+    else:
+        bloco = int(agora // 1800)
+        chave = f"{camera}|{tipo}|{bloco}"
     if chave in _ids_respondidos():
         return
     atual = _PENDENCIAS.get(chave)
@@ -2036,11 +2041,13 @@ def _pendencias_vivas(cameras):
                 ),
                 agora,
             )
-    # Rosto frequente (não cadastrado): Stive pergunta se o usuário conhece.
+    # Rosto frequente (não cadastrado): Stive pergunta se o usuário conhece (uma vez).
     try:
         from identidade import contar_passagens_faces
+        from agente.stive import faces_rosto_respondidas
 
         cadastrados = set()
+        ja_perguntados = faces_rosto_respondidas()
         try:
             from cadastro import interesse_deteccao_global
 
@@ -2051,7 +2058,10 @@ def _pendencias_vivas(cameras):
         except Exception:
             pass
         for face_id, total in contar_passagens_faces(30):
-            if face_id in cadastrados or int(total or 0) < 12:
+            face_id = str(face_id or "").strip().upper()
+            if not face_id or face_id in cadastrados or face_id in ja_perguntados:
+                continue
+            if int(total or 0) < 12:
                 continue
             _lembrar_pendencia(
                 "frequentes",

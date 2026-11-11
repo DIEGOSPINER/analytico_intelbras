@@ -117,6 +117,21 @@ def ids_respondidos() -> set[str]:
     return {str(item.get("id") or "") for item in bruto.get("respostas") or [] if item.get("id")}
 
 
+def faces_rosto_respondidas() -> set[str]:
+    """Faces já tratadas no fluxo conhece/vínculo/suspeito (não perguntar de novo)."""
+    saida: set[str] = set()
+    bruto = _ler()
+    for item in bruto.get("respostas") or []:
+        tipo = str(item.get("tipo") or "")
+        if not tipo.lower().startswith("rosto_"):
+            continue
+        if ":" in tipo:
+            face = tipo.split(":", 1)[1].strip().upper()
+            if face:
+                saida.add(face)
+    return saida
+
+
 def historico(
     documento: str = "",
     email: str = "",
@@ -230,12 +245,15 @@ def confirmar(
     camera: str,
     tipo: str,
     vinculo: str = "",
-) -> str:
+    nome: str = "",
+    faces_engine=None,
+) -> dict:
     ident = (ident or "").strip()
     if not ident:
         raise ValueError("Confirmação sem identificador.")
     sim = (resposta or "").strip().lower() in ("sim", "s", "1", "confirmo")
     vinculo = str(vinculo or "").strip().lower()
+    nome = " ".join(str(nome or "").split())
     with _TRAVA:
         bruto = _ler()
         bruto.setdefault("respostas", []).append({
@@ -245,6 +263,7 @@ def confirmar(
             "camera": camera or "",
             "tipo": tipo or "",
             "vinculo": vinculo,
+            "nome": nome,
             "quando": datetime.now().isoformat(timespec="seconds"),
         })
         bruto["respostas"] = bruto["respostas"][-200:]
@@ -279,71 +298,49 @@ def confirmar(
         except Exception:
             pass
         if face_freq:
-            return "Anotado. Mantemos só o código do rosto sem cadastro de interesse."
-        return "Anotado. Sem disparo — dado ignorado e nada entra na base."
+            return {
+                "fala": "Anotado. Mantemos só o código do rosto sem cadastro de interesse.",
+                "ok": True,
+            }
+        return {
+            "fala": "Anotado. Sem disparo — dado ignorado e nada entra na base.",
+            "ok": True,
+        }
 
     if tipo_base.startswith("rosto_frequente:") and face_freq:
-        # Segundo passo: escolhe o vínculo (conhecido/amigo/...) antes do suspeito.
-        try:
-            from main import _lembrar_pendencia
-            import time as _time
-
-            _lembrar_pendencia(
-                "frequentes",
-                f"rosto_vinculo:{face_freq}",
-                (
-                    f"Como você conhece {face_freq}? "
-                    f"Escolha o vínculo e confirme. "
-                    f"Foto: /rosto/{face_freq}.jpg"
-                ),
-                _time.time(),
+        # Mesmo balão: pede nome + vínculo (não cria segunda pendência).
+        if vinculo:
+            return _gravar_vinculo_e_perguntar_suspeito(
+                documento, ident, face_freq, vinculo, camera, nome=nome, faces_engine=faces_engine
             )
+        try:
+            from grafo_relacoes import VINCULOS_STIVE
+
+            opcoes = list(VINCULOS_STIVE.items())
         except Exception:
-            pass
-        return (
-            f"Entendi que você conhece o rosto {face_freq}. "
-            "No próximo balão escolha o vínculo (conhecido, amigo, familiar...) e confirme."
-        )
+            opcoes = [
+                ("conhecido", "Conhecido"),
+                ("amigo", "Amigo(a)"),
+                ("familiar", "Familiar"),
+            ]
+        return {
+            "fala": (
+                f"Você conhece o rosto {face_freq}. "
+                "Informe o nome desta pessoa e o vínculo para eu associar na base."
+            ),
+            "etapa": "vinculo",
+            "face_id": face_freq,
+            "id": ident,
+            "tipo": f"rosto_vinculo:{face_freq}",
+            "camera": camera or "frequentes",
+            "foto": f"/rosto/{face_freq}.jpg",
+            "vinculos": [{"id": k, "rotulo": v} for k, v in opcoes],
+            "ok": True,
+        }
 
     if tipo_base.startswith("rosto_vinculo:") and face_freq:
-        vinculo = str(vinculo or "").strip().lower() or "conhecido"
-        try:
-            from grafo_relacoes import TIPOS_VINCULO, relacionar
-            from cadastro import cliente_por_documento
-
-            if vinculo not in TIPOS_VINCULO:
-                vinculo = "conhecido"
-            cli = cliente_por_documento(documento) or {}
-            relacionar(
-                documento,
-                face_freq,
-                vinculo,
-                nome_pessoa=f"Rosto {face_freq}",
-                nome_usuario=str(cli.get("nome") or ""),
-                email=str(cli.get("email") or ""),
-                meta={"origem": "stive_conhece"},
-            )
-        except Exception as exc:
-            return f"Não consegui gravar o vínculo: {exc}"
-        try:
-            from main import _lembrar_pendencia
-            import time as _time
-
-            _lembrar_pendencia(
-                "frequentes",
-                f"rosto_suspeito:{face_freq}",
-                (
-                    f"Essa pessoa ({face_freq}) é suspeita? "
-                    f"Confirme pela foto. Se sim, eu cadastro automaticamente como comportamento suspeito. "
-                    f"Foto: /rosto/{face_freq}.jpg"
-                ),
-                _time.time(),
-            )
-        except Exception:
-            pass
-        return (
-            f"Vínculo «{vinculo}» salvo com {face_freq}. "
-            "Ela é suspeita? Responda Sim no próximo balão para cadastrar como interesse."
+        return _gravar_vinculo_e_perguntar_suspeito(
+            documento, ident, face_freq, vinculo, camera, nome=nome, faces_engine=faces_engine
         )
 
     if tipo_base.startswith("rosto_suspeito:") and face_freq:
@@ -358,12 +355,15 @@ def confirmar(
                 "motivo": "ameaca",
                 "referencia": "Cadastro automático via Stive (rosto frequente)",
             })
-            return (
-                f"Cadastrado {face_freq} como pessoa de interesse (comportamento suspeito). "
-                "A partir de agora o monitoramento gera alerta."
-            )
+            return {
+                "fala": (
+                    f"Cadastrado {face_freq} como pessoa de interesse (comportamento suspeito). "
+                    "A partir de agora o monitoramento gera alerta."
+                ),
+                "ok": True,
+            }
         except Exception as exc:
-            return f"Não consegui cadastrar automaticamente: {exc}"
+            return {"fala": f"Não consegui cadastrar automaticamente: {exc}", "ok": False}
 
     natureza = {
         "disparo": "Disparo",
@@ -396,10 +396,99 @@ def confirmar(
         "endereco": camera or "",
     }, usar_modelo=False)
     if tipo_base == "disparo":
-        return "Confirmado. Disparo lançado na base e risco vermelho ativado na câmera."
+        return {
+            "fala": "Confirmado. Disparo lançado na base e risco vermelho ativado na câmera.",
+            "ok": True,
+        }
     if audio_gravado:
-        return "Confirmado. Áudio e ocorrência gravados na base."
-    return "Confirmação gravada na base de ocorrências."
+        return {"fala": "Confirmado. Áudio e ocorrência gravados na base.", "ok": True}
+    return {"fala": "Confirmação gravada na base de ocorrências.", "ok": True}
+
+
+def _gravar_vinculo_e_perguntar_suspeito(
+    documento: str,
+    ident: str,
+    face_freq: str,
+    vinculo: str,
+    camera: str,
+    nome: str = "",
+    faces_engine=None,
+) -> dict:
+    vinculo = str(vinculo or "").strip().lower() or "conhecido"
+    nome = " ".join(str(nome or "").split())
+    face_final = face_freq
+    assoc = None
+    try:
+        from grafo_relacoes import TIPOS_VINCULO, VINCULOS_STIVE
+        from cadastro import associar_rosto_conhecido
+
+        validos = set(TIPOS_VINCULO) | set(VINCULOS_STIVE)
+        if vinculo not in validos or vinculo in {"medida_protege", "proprio"}:
+            vinculo = "conhecido"
+        if faces_engine is None:
+            try:
+                from remoto import portal as _portal
+
+                faces_engine = getattr(_portal, "_faces", None)
+            except Exception:
+                faces_engine = None
+        assoc = associar_rosto_conhecido(
+            documento,
+            face_freq,
+            nome,
+            vinculo,
+            faces_engine=faces_engine,
+        )
+        face_final = str((assoc or {}).get("face_canonica") or face_freq).upper()
+    except Exception as exc:
+        return {"fala": f"Não consegui gravar o vínculo: {exc}", "ok": False}
+    try:
+        from main import _lembrar_pendencia
+        import time as _time
+
+        rotulo_pessoa = nome or face_final
+        _lembrar_pendencia(
+            "frequentes",
+            f"rosto_suspeito:{face_final}",
+            (
+                f"Essa pessoa ({rotulo_pessoa} · {face_final}) é suspeita? "
+                f"Confirme pela foto. Se sim, eu cadastro automaticamente como comportamento suspeito. "
+                f"Foto: /rosto/{face_final}.jpg"
+            ),
+            _time.time(),
+        )
+    except Exception:
+        pass
+    rotulo = vinculo
+    try:
+        from grafo_relacoes import TIPOS_VINCULO
+
+        rotulo = TIPOS_VINCULO.get(vinculo, vinculo)
+    except Exception:
+        pass
+    nome_exib = nome or face_final
+    extra = ""
+    if assoc and assoc.get("cliente_associado"):
+        cli_a = assoc["cliente_associado"]
+        extra = (
+            f" Associei também à conta de {cli_a.get('nome') or cli_a.get('documento')} "
+            f"(face {assoc.get('face_canonica')}"
+            + (f", score {assoc.get('score')}" if assoc.get("score") is not None else "")
+            + ")."
+        )
+    elif nome:
+        extra = " Nome registrado; ainda sem match facial com outro cliente cadastrado."
+    return {
+        "fala": (
+            f"Vínculo «{rotulo}» salvo com {nome_exib} ({face_final}).{extra} "
+            "Ela é suspeita? Responda Sim ou Não no próximo balão."
+        ),
+        "ok": True,
+        "face_id": face_final,
+        "vinculo": vinculo,
+        "nome": nome_exib,
+        "associacao": assoc,
+    }
 
 
 def caminho_avatar() -> Path | None:

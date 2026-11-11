@@ -2381,6 +2381,8 @@ async function confirmarPendencia(botao) {
   const caixa = botao.closest(".pendencia") || botao.closest(".fala-hq") || document;
   const sel = caixa.querySelector && caixa.querySelector("select[name=vinculo], #sel-vinculo-stive");
   if (sel && sel.value) corpo.set("vinculo", sel.value);
+  const nomeInp = caixa.querySelector && caixa.querySelector("input[name=nome_pessoa], #nome-pessoa-stive");
+  if (nomeInp && nomeInp.value) corpo.set("nome", String(nomeInp.value).trim());
   const resposta = await fetch("/agente/stive/confirmar", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -2473,9 +2475,51 @@ function fotoPendenciaSrc(item) {
   const m = texto.match(/Foto:\s*(\/rosto\/[A-Za-z0-9]+\.jpg)/i);
   if (m) return m[1];
   const tipo = String(item.tipo || "");
-  const m2 = tipo.match(/^rosto_(?:frequente|suspeito):([A-Za-z0-9]+)/i);
+  const m2 = tipo.match(/^rosto_(?:frequente|vinculo|suspeito):([A-Za-z0-9]+)/i);
   if (m2) return `/rosto/${String(m2[1]).toUpperCase()}.jpg`;
   return "";
+}
+
+function opcoesVinculoStiveHtml(selecionados) {
+  const lista = Array.isArray(selecionados) && selecionados.length
+    ? selecionados
+    : [
+      { id: "conhecido", rotulo: "Conhecido" },
+      { id: "amigo", rotulo: "Amigo(a)" },
+      { id: "familiar", rotulo: "Familiar" },
+      { id: "irmao", rotulo: "Irmão(ã)" },
+      { id: "pai", rotulo: "Pai" },
+      { id: "mae", rotulo: "Mãe" },
+      { id: "esposa", rotulo: "Esposa" },
+      { id: "marido", rotulo: "Marido" },
+      { id: "namorado", rotulo: "Namorado(a)" },
+      { id: "primo", rotulo: "Primo(a)" },
+      { id: "tio", rotulo: "Tio(a)" },
+      { id: "vizinho", rotulo: "Vizinho(a)" },
+      { id: "colega", rotulo: "Colega" },
+    ];
+  return lista.map((item) =>
+    `<option value="${escapar(item.id || item.value || "")}">${escapar(item.rotulo || item.label || item.id || "")}</option>`
+  ).join("");
+}
+
+function htmlPendenciaVinculo(meta) {
+  const id = escapar((meta && meta.id) || "");
+  const tipo = escapar((meta && meta.tipo) || "");
+  const camera = escapar((meta && meta.camera) || "");
+  const texto = escapar((meta && meta.texto) || "");
+  const nome = escapar((meta && meta.nome) || "");
+  const opcoes = opcoesVinculoStiveHtml(meta && meta.vinculos);
+  return `<div class="pendencia">
+  <label style="display:block;margin:8px 0 4px;font-size:13px">Nome da pessoa
+    <input type="text" id="nome-pessoa-stive" name="nome_pessoa" value="${nome}" placeholder="Ex.: Vanessa" autocomplete="name" style="width:100%;margin-top:4px">
+  </label>
+  <label style="display:block;margin:8px 0 4px;font-size:13px">Relacionamento
+    <select id="sel-vinculo-stive" name="vinculo" style="width:100%;margin-top:4px">${opcoes}</select>
+  </label><span>
+    <button type="button" data-id="${id}" data-resp="sim" data-tipo="${tipo}" data-camera="${camera}" data-texto="${texto}">Salvar vínculo</button>
+    <button type="button" data-id="${id}" data-resp="nao" data-tipo="${tipo}" data-camera="${camera}" data-texto="${texto}">Não conheço</button>
+  </span></div>`;
 }
 
 function blocoFotoStive(src) {
@@ -2671,19 +2715,19 @@ function atualizarFalaStive(dados) {
     const ehRosto = tipoPend.startsWith("rosto_");
     const ehVinculo = tipoPend.startsWith("rosto_vinculo:");
     const tituloPend = ehVinculo
-      ? "Qual o vínculo com esta pessoa?"
+      ? "Nome e vínculo"
       : (ehRosto ? "Você conhece esta pessoa?" : "O que está acontecendo?");
-    const selVinculo = ehVinculo
-      ? `<label style="display:block;margin:8px 0 4px;font-size:13px">Relacionamento
-          <select id="sel-vinculo-stive" name="vinculo" style="width:100%;margin-top:4px">
-            <option value="conhecido">Conhecido</option>
-            <option value="amigo">Amigo(a)</option>
-            <option value="familiar">Familiar</option>
-            <option value="vizinho">Vizinho(a)</option>
-            <option value="colega">Colega</option>
-          </select>
-        </label>`
-      : "";
+    const htmlPend = ehVinculo
+      ? htmlPendenciaVinculo({
+        id: item.id,
+        tipo: tipoPend,
+        camera: item.camera || "",
+        texto: textoPend,
+      })
+      : `<div class="pendencia"><span>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(tipoPend)}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Sim</button>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(tipoPend)}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Não</button>
+        </span></div>`;
     enfileirarFalaStive(
       `pend:${item.id}`,
       tituloPend,
@@ -2693,10 +2737,7 @@ function atualizarFalaStive(dados) {
         classe: "pergunta",
         foto: fotoSrc,
         linkVivo: !ehRosto,
-        html: `<div class="pendencia">${selVinculo}<span>
-          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(tipoPend)}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">${ehVinculo ? "Salvar vínculo" : "Sim"}</button>
-          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(tipoPend)}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Não</button>
-        </span></div>`,
+        html: htmlPend,
       },
     );
     return;
@@ -2847,6 +2888,29 @@ function iniciarFalaStive() {
       const dados = await confirmarPendencia(confirmar);
       const chat = document.getElementById("chat-balao") || document.getElementById("chat-stive");
       if (chat) acrescentarBolhaChat(chat, "stive", dados.fala || "Confirmação registrada.");
+      if (dados && dados.etapa === "vinculo") {
+        const face = String(dados.face_id || "").toUpperCase();
+        const tipoVinculo = String(dados.tipo || `rosto_vinculo:${face}`);
+        const idPend = String(dados.id || confirmar.dataset.id || "");
+        mostrarFalaHq({
+          chave: `pend:vinculo:${face || idPend}`,
+          titulo: "Nome e vínculo",
+          texto: String(dados.fala || `Informe o nome e como você conhece ${face}.`),
+          tipo: "pendencia",
+          classe: "pergunta",
+          foto: dados.foto || (face ? `/rosto/${face}.jpg` : ""),
+          linkVivo: false,
+          html: htmlPendenciaVinculo({
+            id: idPend,
+            tipo: tipoVinculo,
+            camera: dados.camera || confirmar.dataset.camera || "frequentes",
+            texto: dados.fala || "",
+            vinculos: dados.vinculos,
+            nome: dados.nome || "",
+          }),
+        });
+        return;
+      }
       fecharFalaStive();
       return;
     }

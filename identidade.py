@@ -678,6 +678,60 @@ class IdentificadorFaces:
             )
         return melhor
 
+    def score_entre_ids(self, origem, destino) -> float:
+        """Compara duas identidades da galeria (uso explícito em associação Stive)."""
+        with self._trava:
+            return float(self._score_entre_ids(
+                str(origem or "").strip().upper(),
+                str(destino or "").strip().upper(),
+            ))
+
+    def fundir_em(self, destino_id, origem_id) -> str:
+        """Funde origem em destino (ação explícita do usuário; respeita protegidos do destino)."""
+        with self._trava:
+            destino = str(destino_id or "").strip().upper()
+            origem = str(origem_id or "").strip().upper()
+            if not destino or not origem:
+                raise ValueError("Informe origem e destino da fusão.")
+            if destino == origem:
+                return destino
+            if origem not in self.galeria:
+                return destino
+            if destino not in self.galeria:
+                # Promove a pasta/origem para o código canônico do cliente.
+                self.galeria[destino] = self.galeria.pop(origem)
+                meta = self.cadastro.pop(origem, {}) or {}
+                self.cadastro[destino] = meta
+                pasta_o = DIR_FACES / origem
+                pasta_d = DIR_FACES / destino
+                if pasta_o.is_dir():
+                    if pasta_d.exists():
+                        shutil.rmtree(pasta_d, ignore_errors=True)
+                    pasta_o.rename(pasta_d)
+                self.track_para_face = {
+                    chave: (destino if valor == origem else valor)
+                    for chave, valor in self.track_para_face.items()
+                }
+                self._salvar_caracteristicas(destino)
+                self._reescrever_csv_faces({origem: destino}, {})
+                return destino
+            mapa_arquivos = self._mover_fotos(origem, destino)
+            self._concatenar_galeria(destino, origem)
+            self.galeria.pop(origem, None)
+            self.cadastro.pop(origem, None)
+            shutil.rmtree(DIR_FACES / origem, ignore_errors=True)
+            self.track_para_face = {
+                chave: (destino if valor == origem else valor)
+                for chave, valor in self.track_para_face.items()
+            }
+            self._salvar_caracteristicas(destino)
+            self._garantir_referencia_colorida(DIR_FACES / destino)
+            ref = DIR_FACES / destino / "referencia.jpg"
+            if destino in self.cadastro and ref.exists():
+                self.cadastro[destino]["foto_referencia"] = str(ref).replace("\\", "/")
+            self._reescrever_csv_faces({origem: destino}, mapa_arquivos)
+            return destino
+
     def _concatenar_galeria(self, destino, origem):
         pacote_destino = self.galeria[destino]
         pacote_origem = self.galeria[origem]

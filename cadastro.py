@@ -322,11 +322,287 @@ def _cliente_novo(indice: int) -> dict:
         "documento": "",
         "tipo_documento": "",
         "email": "",
+        "foto_face_id": "",
+        "eh_proprio": False,
         "cameras": [],
         "pessoas": [],
         "veiculos": [],
         "contatos_apoio": [],
     }
+
+
+def _nome_norm(valor: str) -> str:
+    texto = unicodedata.normalize("NFKD", str(valor or ""))
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    return " ".join(texto.casefold().split())
+
+
+def definir_foto_cliente(documento: str, face_id: str, *, eh_proprio: bool = True) -> dict:
+    """Associa a foto do próprio cliente (morador da rua) ao cadastro da conta."""
+    cliente = _exigir(documento)
+    face = str(face_id or "").strip().upper()
+    if not face:
+        raise ValueError("Informe o código da foto do cliente.")
+    cliente["foto_face_id"] = face
+    cliente["eh_proprio"] = bool(eh_proprio)
+    # Garante pessoa de interesse "morador" apontando para a própria face.
+    pessoas = list(cliente.get("pessoas") or [])
+    achou = False
+    for pessoa in pessoas:
+        if str(pessoa.get("face_id") or "").strip().upper() != face:
+            continue
+        pessoa["eh_proprio"] = True
+        pessoa["classe"] = pessoa.get("classe") or "morador"
+        pessoa["base_legal"] = pessoa.get("base_legal") or pessoa["classe"]
+        if not str(pessoa.get("nome") or "").strip():
+            pessoa["nome"] = str(cliente.get("nome") or face)
+        achou = True
+        break
+    if not achou:
+        pessoas.append({
+            "face_id": face,
+            "nome": str(cliente.get("nome") or face),
+            "classe": "morador",
+            "base_legal": "morador",
+            "referencia": "Foto do próprio cliente",
+            "motivo": "",
+            "eh_proprio": True,
+        })
+    cliente["pessoas"] = pessoas
+    _substituir(cliente)
+    try:
+        from grafo_relacoes import garantir_pessoa, garantir_usuario, relacionar
+
+        digitos = _digitos(cliente.get("documento"))
+        garantir_usuario(digitos, cliente.get("nome") or "", cliente.get("email") or "")
+        garantir_pessoa(
+            face,
+            nome=str(cliente.get("nome") or face),
+            classe="morador",
+            documento_cliente=digitos,
+        )
+        relacionar(
+            digitos,
+            face,
+            "proprio",
+            nome_pessoa=str(cliente.get("nome") or face),
+            classe="morador",
+            nome_usuario=str(cliente.get("nome") or ""),
+            email=str(cliente.get("email") or ""),
+            meta={"fonte": "foto_cliente", "documento": digitos},
+        )
+    except Exception as exc:
+        print(f"Grafo foto cliente: {exc}")
+    return cliente
+
+
+def garantir_identidades_proprias() -> list[dict]:
+    """Diego/Vanessa: morador de interesse = o próprio cliente da conta."""
+    # documento → face canônica conhecida no piloto
+    mapa = (
+        ("02401001581", "F0001", "diego"),
+        ("01123242585", "F2553", "vanessa"),
+    )
+    atualizados = []
+    for digitos, face_padrao, chave_nome in mapa:
+        cliente = cliente_por_documento(digitos)
+        if not cliente:
+            continue
+        face = str(cliente.get("foto_face_id") or "").strip().upper()
+        if not face:
+            # Preferência: pessoa morador cujo nome bate com o cliente.
+            nome_cli = _nome_norm(cliente.get("nome") or "")
+            for pessoa in cliente.get("pessoas") or []:
+                if str(pessoa.get("classe") or pessoa.get("base_legal") or "") != "morador":
+                    continue
+                nome_p = _nome_norm(pessoa.get("nome") or "")
+                if chave_nome in nome_p or (nome_cli and (nome_cli in nome_p or nome_p in nome_cli)):
+                    face = str(pessoa.get("face_id") or "").strip().upper()
+                    break
+            if not face:
+                face = face_padrao
+        if not face:
+            continue
+        ja_ok = (
+            str(cliente.get("foto_face_id") or "").strip().upper() == face
+            and cliente.get("eh_proprio") is True
+            and any(
+                str(p.get("face_id") or "").strip().upper() == face and p.get("eh_proprio") is True
+                for p in (cliente.get("pessoas") or [])
+            )
+        )
+        if ja_ok:
+            continue
+        definir_foto_cliente(digitos, face, eh_proprio=True)
+        atualizados.append({"documento": digitos, "foto_face_id": face})
+    return atualizados
+
+
+def cliente_por_foto_face(face_id: str) -> dict | None:
+    ident = str(face_id or "").strip().upper()
+    if not ident:
+        return None
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        if str(cliente.get("foto_face_id") or "").strip().upper() == ident:
+            return cliente
+        for pessoa in cliente.get("pessoas") or []:
+            if str(pessoa.get("face_id") or "").strip().upper() != ident:
+                continue
+            if pessoa.get("eh_proprio") is True:
+                return cliente
+    return None
+
+
+def candidatos_face_por_nome(nome: str) -> list[dict]:
+    """Clientes/pessoas cujo nome bate — usados para match facial na associação Stive."""
+    alvo = _nome_norm(nome)
+    if not alvo or len(alvo) < 2:
+        return []
+    saida = []
+    vistos = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        digitos = _digitos(cliente.get("documento"))
+        nome_cli = _nome_norm(cliente.get("nome") or "")
+        foto = str(cliente.get("foto_face_id") or "").strip().upper()
+        if foto and nome_cli and (alvo in nome_cli or nome_cli in alvo or alvo.split()[0] in nome_cli):
+            chave = f"{digitos}:{foto}"
+            if chave not in vistos:
+                vistos.add(chave)
+                saida.append({
+                    "documento": digitos,
+                    "nome": str(cliente.get("nome") or ""),
+                    "face_id": foto,
+                    "origem": "cliente",
+                })
+        for pessoa in cliente.get("pessoas") or []:
+            face = str(pessoa.get("face_id") or "").strip().upper()
+            if not face:
+                continue
+            nome_p = _nome_norm(pessoa.get("nome") or "")
+            if not nome_p:
+                continue
+            if not (alvo in nome_p or nome_p in alvo or alvo.split()[0] in nome_p):
+                continue
+            chave = f"{digitos}:{face}"
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            saida.append({
+                "documento": digitos,
+                "nome": str(pessoa.get("nome") or cliente.get("nome") or face),
+                "face_id": face,
+                "origem": "pessoa",
+                "eh_proprio": pessoa.get("eh_proprio") is True or face == foto,
+            })
+    return saida
+
+
+def associar_rosto_conhecido(
+    documento_operador: str,
+    face_id: str,
+    nome: str,
+    vinculo: str,
+    *,
+    faces_engine=None,
+) -> dict:
+    """Nomeia o rosto reaparecido, tenta casar com foto de cliente e cria vínculo usuário↔usuário."""
+    face = str(face_id or "").strip().upper()
+    nome_limpo = " ".join(str(nome or "").split())
+    vinculo = str(vinculo or "").strip().lower() or "conhecido"
+    digitos_op = _digitos(documento_operador)
+    if not face or not digitos_op:
+        raise ValueError("Informe o rosto e o documento do operador.")
+    operador = cliente_por_documento(digitos_op) or {}
+    resultado = {
+        "face_id": face,
+        "nome": nome_limpo or face,
+        "vinculo": vinculo,
+        "cliente_associado": None,
+        "face_canonica": face,
+        "score": None,
+        "fundiu": False,
+    }
+    candidatos = candidatos_face_por_nome(nome_limpo) if nome_limpo else []
+    # Remove o próprio operador da lista de match (não associar a si mesmo).
+    candidatos = [c for c in candidatos if c.get("documento") != digitos_op and c.get("face_id") != face]
+
+    melhor = None
+    melhor_score = -1.0
+    if faces_engine is not None and candidatos:
+        for cand in candidatos:
+            try:
+                score = float(faces_engine.score_entre_ids(face, cand["face_id"]))
+            except Exception:
+                score = -1.0
+            if score > melhor_score:
+                melhor_score = score
+                melhor = cand
+        limiar = getattr(faces_engine, "limiar_fundir", None) or getattr(faces_engine, "limiar_match", 0.55)
+        try:
+            limiar = float(limiar)
+        except (TypeError, ValueError):
+            limiar = 0.55
+        if melhor is not None and melhor_score >= limiar:
+            resultado["cliente_associado"] = melhor
+            resultado["score"] = round(melhor_score, 4)
+            canon = str(melhor["face_id"]).upper()
+            resultado["face_canonica"] = canon
+            if canon != face:
+                try:
+                    faces_engine.fundir_em(canon, face)
+                    resultado["fundiu"] = True
+                    face = canon
+                    resultado["face_id"] = canon
+                except Exception as exc:
+                    print(f"Fusão facial na associação: {exc}")
+
+    try:
+        from grafo_relacoes import garantir_pessoa, relacionar, relacionar_usuarios
+
+        garantir_pessoa(
+            resultado["face_canonica"],
+            nome=resultado["nome"],
+            documento_cliente=(resultado["cliente_associado"] or {}).get("documento") or "",
+        )
+        relacionar(
+            digitos_op,
+            resultado["face_canonica"],
+            vinculo,
+            nome_pessoa=resultado["nome"],
+            nome_usuario=str(operador.get("nome") or ""),
+            email=str(operador.get("email") or ""),
+            meta={
+                "fonte": "stive_conhece",
+                "documento": digitos_op,
+                "nome_informado": nome_limpo,
+                "cliente_associado": (resultado["cliente_associado"] or {}).get("documento") or "",
+                "score": resultado["score"],
+            },
+        )
+        associado = resultado["cliente_associado"]
+        if associado and associado.get("documento"):
+            relacionar_usuarios(
+                digitos_op,
+                associado["documento"],
+                vinculo,
+                nome_origem=str(operador.get("nome") or ""),
+                email_origem=str(operador.get("email") or ""),
+                nome_destino=str(associado.get("nome") or ""),
+                meta={
+                    "fonte": "stive_face_match",
+                    "face_id": resultado["face_canonica"],
+                    "score": resultado["score"],
+                    "nome_informado": nome_limpo,
+                },
+            )
+    except Exception as exc:
+        print(f"Associação grafo: {exc}")
+        resultado["erro_grafo"] = str(exc)
+    return resultado
 
 
 def garantir_cliente_local():
@@ -1167,6 +1443,10 @@ def risco_visivel_para(documento: str) -> list[dict]:
 def interesse_deteccao_global() -> dict:
     """Todas as faces/placas cadastradas (para histórico e painéis agregados)."""
     garantir_cliente_local()
+    try:
+        garantir_identidades_proprias()
+    except Exception:
+        pass
     pessoas = []
     veiculos = []
     vistos_face = set()
@@ -1175,6 +1455,18 @@ def interesse_deteccao_global() -> dict:
         if cliente.get("ativo") is False:
             continue
         digitos = _digitos(cliente.get("documento"))
+        foto_cli = str(cliente.get("foto_face_id") or "").strip().upper()
+        if foto_cli and foto_cli not in vistos_face:
+            vistos_face.add(foto_cli)
+            pessoas.append(_anexar_dono({
+                "face_id": foto_cli,
+                "nome": str(cliente.get("nome") or foto_cli),
+                "classe": "morador",
+                "base_legal": "morador",
+                "referencia": "Foto do próprio cliente",
+                "motivo": "",
+                "eh_proprio": True,
+            }, digitos))
         for pessoa in cliente.get("pessoas") or []:
             if not isinstance(pessoa, dict):
                 continue

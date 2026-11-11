@@ -252,6 +252,12 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
   width: 132px; height: 132px; object-fit: cover; border-radius: 14px;
   border: 1px solid var(--linha); background: #05080f; display: block;
 }
+.foto-cliente-preview { margin: 12px 0 0; max-width: 180px; }
+.foto-cliente-preview img {
+  width: 160px; height: 160px; object-fit: cover; border-radius: 14px;
+  border: 1px solid var(--linha); background: #05080f; display: block;
+}
+.foto-cliente-preview figcaption { font-size: 12px; color: var(--mudo); margin-top: 6px; }
 .fala-hq .link-vivo { margin: 10px 0 0; }
 .fala-hq .link-vivo a { color: #4c6fff; font-weight: 700; text-decoration: none; }
 .fala-hq .link-vivo a:hover { text-decoration: underline; }
@@ -809,12 +815,13 @@ def _risco(perfil: str = "", csrf: str = "", usuario: str = "", documento: str =
 
 
 def _grifos(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
-    miolo = f"""{_cabeca("Grifos de relacionamento", "Grafo de vínculos entre usuários, rostos conhecidos e medidas protetivas.")}
+    miolo = f"""{_cabeca("Grifos de relacionamento", "Grafo de vínculos entre usuários, rostos conhecidos (Stive) e medidas protetivas.")}
 <main>
 <article class="cartao">
   <div class="segmentador-portal" style="margin-bottom:12px">
     <label>Cliente<select id="filtro-grafo-cliente"><option value="">Todos os clientes</option></select></label>
     <label>Pessoa monitorada<select id="filtro-grafo-pessoa"><option value="">Todas as pessoas</option></select></label>
+    <label>Tipo de vínculo<select id="filtro-grafo-vinculo"><option value="">Todos os vínculos</option></select></label>
   </div>
   <div class="acoes-gestao" style="margin-bottom:10px">
     <button type="button" id="recarregar-grafo">Atualizar grafo</button>
@@ -823,10 +830,18 @@ def _grifos(perfil: str = "", csrf: str = "", usuario: str = "", documento: str 
   </div>
   <div id="grafo-relacoes" style="height:min(72vh,720px);border:1px solid var(--linha);border-radius:16px;background:rgba(8,12,24,.55)"></div>
 </article>
+<section class="grade">
 <article class="cartao">
-  <h2>Legenda</h2>
-  <p>Azul: usuário · Vermelho: pessoa de risco · Roxo: medida protetiva · Rosa: demais rostos. Arestas: conhecido, amigo, familiar, vizinho, colega, medida protege, monitora.</p>
+  <h2>Legenda de nós</h2>
+  <p>Azul: usuário · Vermelho: pessoa de risco · Roxo: medida protetiva · Rosa: demais rostos.</p>
+  <h2 style="margin-top:14px">Vínculos evidenciados</h2>
+  <p id="legenda-vinculos" style="color:var(--mudo);font-size:13px;line-height:1.6">Carregando…</p>
 </article>
+<article class="cartao">
+  <h2>Resumo na vista</h2>
+  <div id="resumo-vinculos"><p style="color:var(--mudo)">Carregando…</p></div>
+</article>
+</section>
 </main>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <script>
@@ -835,21 +850,87 @@ def _grifos(perfil: str = "", csrf: str = "", usuario: str = "", documento: str 
   const meta = document.getElementById("meta-grafo");
   const selCli = document.getElementById("filtro-grafo-cliente");
   const selPes = document.getElementById("filtro-grafo-pessoa");
+  const selVin = document.getElementById("filtro-grafo-vinculo");
+  const legenda = document.getElementById("legenda-vinculos");
+  const resumo = document.getElementById("resumo-vinculos");
   let rede = null;
   let opcoesProntas = false;
+  let cacheDados = null;
   function popularSelects(dados) {{
-    if (opcoesProntas || !selCli || !selPes) return;
-    const cliAtual = selCli.value;
-    const pesAtual = selPes.value;
-    selCli.innerHTML = '<option value="">Todos os clientes</option>' + (dados.opcoes_clientes || []).map((c) =>
-      `<option value="${{c.documento || ""}}">${{(c.nome || c.documento || "")}} · ${{c.documento || ""}}</option>`
-    ).join("");
-    selPes.innerHTML = '<option value="">Todas as pessoas</option>' + (dados.opcoes_pessoas || []).map((p) =>
-      `<option value="${{p.face_id || ""}}">${{(p.nome || p.face_id || "")}} · ${{p.face_id || ""}}</option>`
-    ).join("");
-    if (cliAtual) selCli.value = cliAtual;
-    if (pesAtual) selPes.value = pesAtual;
-    opcoesProntas = true;
+    if (!selCli || !selPes) return;
+    if (!opcoesProntas) {{
+      const cliAtual = selCli.value;
+      const pesAtual = selPes.value;
+      selCli.innerHTML = '<option value="">Todos os clientes</option>' + (dados.opcoes_clientes || []).map((c) =>
+        `<option value="${{c.documento || ""}}">${{(c.nome || c.documento || "")}} · ${{c.documento || ""}}</option>`
+      ).join("");
+      selPes.innerHTML = '<option value="">Todas as pessoas</option>' + (dados.opcoes_pessoas || []).map((p) =>
+        `<option value="${{p.face_id || ""}}">${{(p.nome || p.face_id || "")}} · ${{p.face_id || ""}}</option>`
+      ).join("");
+      if (cliAtual) selCli.value = cliAtual;
+      if (pesAtual) selPes.value = pesAtual;
+      opcoesProntas = true;
+    }}
+    if (selVin && !selVin.dataset.pronto) {{
+      const tipos = dados.tipos || {{}};
+      selVin.innerHTML = '<option value="">Todos os vínculos</option>' + Object.keys(tipos).map((k) =>
+        `<option value="${{k}}">${{tipos[k] || k}}</option>`
+      ).join("");
+      selVin.dataset.pronto = "1";
+    }}
+    if (legenda) {{
+      const tipos = dados.tipos || {{}};
+      legenda.textContent = Object.keys(tipos).map((k) => tipos[k] || k).join(" · ");
+    }}
+  }}
+  function pintarResumo(dados, edges) {{
+    if (!resumo) return;
+    const mapa = {{}};
+    (edges || []).forEach((e) => {{
+      const tipo = e.tipo || "outro";
+      mapa[tipo] = (mapa[tipo] || 0) + 1;
+    }});
+    const tipos = (dados && dados.tipos) || {{}};
+    const linhas = Object.keys(mapa).sort((a, b) => mapa[b] - mapa[a]).map((tipo) => {{
+      const item = (dados.resumo_vinculos || []).find((r) => r.tipo === tipo) || {{}};
+      const cor = item.cor || "#7a8799";
+      const rotulo = item.rotulo || tipos[tipo] || tipo;
+      return `<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${{cor}};margin-right:6px"></span>${{rotulo}}</td><td style="text-align:right">${{mapa[tipo]}}</td></tr>`;
+    }});
+    resumo.innerHTML = linhas.length
+      ? `<table><tr><th>Vínculo</th><th>Qtde</th></tr>${{linhas.join("")}}</table>`
+      : "<p style='color:var(--mudo)'>Nenhum vínculo nesta vista.</p>";
+  }}
+  function desenhar(dados) {{
+    if (!caixa || !window.vis) {{
+      if (meta) meta.textContent = "Biblioteca de grafo indisponível.";
+      return;
+    }}
+    const filtroVin = selVin ? String(selVin.value || "") : "";
+    let edges = Array.isArray(dados.edges) ? dados.edges.slice() : [];
+    if (filtroVin) edges = edges.filter((e) => String(e.tipo || "") === filtroVin);
+    const usados = new Set();
+    edges.forEach((e) => {{ usados.add(e.from); usados.add(e.to); }});
+    let nodes = Array.isArray(dados.nodes) ? dados.nodes.slice() : [];
+    if (filtroVin) nodes = nodes.filter((n) => usados.has(n.id));
+    const nodesDS = new vis.DataSet(nodes);
+    const edgesDS = new vis.DataSet(edges);
+    if (rede) rede.destroy();
+    rede = new vis.Network(caixa, {{ nodes: nodesDS, edges: edgesDS }}, {{
+      nodes: {{ shape: "dot", size: 18, font: {{ color: "#e8eefc", size: 13 }} }},
+      edges: {{
+        font: {{ size: 12, strokeWidth: 0, align: "middle" }},
+        smooth: {{ type: "continuous" }},
+        arrows: {{ to: {{ enabled: true, scaleFactor: 0.7 }} }},
+      }},
+      physics: {{ stabilization: true, barnesHut: {{ gravitationalConstant: -12000, springLength: 160 }} }},
+      interaction: {{ hover: true, tooltipDelay: 120 }},
+    }});
+    const doc = selCli ? selCli.value : "";
+    const face = selPes ? selPes.value : "";
+    const foco = [doc && ("cliente " + doc), face && ("pessoa " + face), filtroVin && ("vínculo " + filtroVin)].filter(Boolean).join(" · ");
+    if (meta) meta.textContent = `${{nodes.length}} nós · ${{edges.length}} vínculos · motor ${{dados.motor || "json"}}${{foco ? " · filtro: " + foco : ""}}`;
+    pintarResumo(dados, edges);
   }}
   async function carregar() {{
     const doc = selCli ? selCli.value : "";
@@ -859,31 +940,20 @@ def _grifos(perfil: str = "", csrf: str = "", usuario: str = "", documento: str 
     if (face) qs.set("face_id", face);
     const resp = await fetch("/api/grafo.json?" + qs.toString());
     const dados = await resp.json().catch(() => ({{}}));
+    cacheDados = dados;
     popularSelects(dados);
-    if (!caixa || !window.vis) {{
-      if (meta) meta.textContent = "Biblioteca de grafo indisponível.";
-      return;
-    }}
-    const nodes = new vis.DataSet(dados.nodes || []);
-    const edges = new vis.DataSet(dados.edges || []);
-    if (rede) rede.destroy();
-    rede = new vis.Network(caixa, {{ nodes, edges }}, {{
-      nodes: {{ shape: "dot", size: 18, font: {{ color: "#e8eefc", size: 13 }} }},
-      edges: {{ color: {{ color: "#7a8799" }}, font: {{ color: "#a7b3c7", size: 11, strokeWidth: 0 }}, smooth: {{ type: "continuous" }} }},
-      physics: {{ stabilization: true, barnesHut: {{ gravitationalConstant: -12000, springLength: 140 }} }},
-      interaction: {{ hover: true, tooltipDelay: 120 }},
-    }});
-    const foco = [doc && ("cliente " + doc), face && ("pessoa " + face)].filter(Boolean).join(" · ");
-    if (meta) meta.textContent = `${{dados.total_nos || 0}} nós · ${{dados.total_arestas || 0}} vínculos · motor ${{dados.motor || "json"}}${{foco ? " · filtro: " + foco : ""}}`;
+    desenhar(dados);
   }}
   document.getElementById("recarregar-grafo")?.addEventListener("click", carregar);
   document.getElementById("limpar-filtro-grafo")?.addEventListener("click", () => {{
     if (selCli) selCli.value = "";
     if (selPes) selPes.value = "";
+    if (selVin) selVin.value = "";
     carregar();
   }});
   selCli?.addEventListener("change", carregar);
   selPes?.addEventListener("change", carregar);
+  selVin?.addEventListener("change", () => {{ if (cacheDados) desenhar(cacheDados); }});
   carregar();
 }})();
 </script>"""
@@ -1089,11 +1159,17 @@ window.atualizarStive = (dados) => {
     const img = foto
       ? `<figure class="foto-pendencia"><img alt="rosto" src="${foto}?t=${Date.now()}" onerror="this.parentElement.style.display='none'"></figure>`
       : "";
+    const opcoesVinculo = [
+      ["conhecido","Conhecido"],["amigo","Amigo(a)"],["familiar","Familiar"],
+      ["irmao","Irmão(ã)"],["pai","Pai"],["mae","Mãe"],["esposa","Esposa"],["marido","Marido"],
+      ["namorado","Namorado(a)"],["primo","Primo(a)"],["tio","Tio(a)"],["vizinho","Vizinho(a)"],["colega","Colega"]
+    ].map(([v,r]) => `<option value="${v}">${r}</option>`).join("");
     const vinculo = tipo.indexOf("rosto_vinculo:") === 0
-      ? `<label>Relacionamento<select name="vinculo"><option value="conhecido">Conhecido</option><option value="amigo">Amigo(a)</option><option value="familiar">Familiar</option><option value="vizinho">Vizinho(a)</option><option value="colega">Colega</option></select></label>`
+      ? `<label>Nome da pessoa<input type="text" name="nome_pessoa" id="nome-pessoa-stive" placeholder="Ex.: Vanessa" autocomplete="name"></label>
+         <label>Relacionamento<select name="vinculo">${opcoesVinculo}</select></label>`
       : "";
     const textoAttr = String(item.texto || "").replace(/"/g, "&quot;");
-    return `<div class="pendencia"><p>${texto}</p>${img}${vinculo}
+    return `<div class="pendencia" data-pend-id="${item.id}"><p>${texto}</p>${img}${vinculo}
     <span><button type="button" data-id="${item.id}" data-resp="sim" data-tipo="${tipo}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">${vinculo ? "Salvar vínculo" : "Sim"}</button>
     <button type="button" data-id="${item.id}" data-resp="nao" data-tipo="${tipo}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">Não</button></span></div>`;
   }).join("");
@@ -1101,18 +1177,40 @@ window.atualizarStive = (dados) => {
 document.getElementById("pendencias-stive").addEventListener("click", async (evento) => {
   const botao = evento.target.closest("button");
   if (!botao) return;
+  const caixaPend = botao.closest(".pendencia");
   const corpo = new URLSearchParams(new FormData(form));
   corpo.set("id", botao.dataset.id || "");
   corpo.set("resposta", botao.dataset.resp || "");
   corpo.set("tipo", botao.dataset.tipo || "");
   corpo.set("camera", botao.dataset.camera || "");
-  corpo.set("texto", botao.dataset.texto || botao.parentElement.parentElement.querySelector("p").textContent || "");
-  const sel = botao.closest(".pendencia") && botao.closest(".pendencia").querySelector("select[name=vinculo]");
+  corpo.set("texto", botao.dataset.texto || (caixaPend && caixaPend.querySelector("p") ? caixaPend.querySelector("p").textContent : "") || "");
+  const sel = caixaPend && caixaPend.querySelector("select[name=vinculo]");
   if (sel) corpo.set("vinculo", sel.value || "conhecido");
+  const nomeInp = caixaPend && caixaPend.querySelector("input[name=nome_pessoa], #nome-pessoa-stive");
+  if (nomeInp && nomeInp.value) corpo.set("nome", nomeInp.value.trim());
   const resposta = await fetch("/agente/stive/confirmar", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: corpo });
   const dados = await resposta.json().catch(() => ({}));
   bolha("stive", dados.fala || "Confirmação registrada.");
-  botao.parentElement.parentElement.remove();
+  if (dados && dados.etapa === "vinculo" && caixaPend) {
+    const face = String(dados.face_id || "").toUpperCase();
+    const tipoV = String(dados.tipo || ("rosto_vinculo:" + face));
+    const idV = String(dados.id || botao.dataset.id || "");
+    const opcoes = (dados.vinculos || []).map((item) => `<option value="${item.id}">${item.rotulo}</option>`).join("")
+      || [
+        ["conhecido","Conhecido"],["amigo","Amigo(a)"],["familiar","Familiar"],
+        ["irmao","Irmão(ã)"],["pai","Pai"],["mae","Mãe"],["esposa","Esposa"],["marido","Marido"],
+        ["namorado","Namorado(a)"],["primo","Primo(a)"],["tio","Tio(a)"],["vizinho","Vizinho(a)"],["colega","Colega"]
+      ].map(([v,r]) => `<option value="${v}">${r}</option>`).join("");
+    const foto = dados.foto || (face ? ("/rosto/" + face + ".jpg") : "");
+    const img = foto ? `<figure class="foto-pendencia"><img alt="rosto" src="${foto}?t=${Date.now()}" onerror="this.parentElement.style.display='none'"></figure>` : "";
+    caixaPend.innerHTML = `<p>${dados.fala || ("Qual o nome e o vínculo com " + face + "?")}</p>${img}
+      <label>Nome da pessoa<input type="text" name="nome_pessoa" id="nome-pessoa-stive" placeholder="Ex.: Vanessa" autocomplete="name"></label>
+      <label>Relacionamento<select name="vinculo">${opcoes}</select></label>
+      <span><button type="button" data-id="${idV}" data-resp="sim" data-tipo="${tipoV}" data-camera="${dados.camera || "frequentes"}" data-texto="${(dados.fala || "").replace(/"/g, "&quot;")}">Salvar vínculo</button>
+      <button type="button" data-id="${idV}" data-resp="nao" data-tipo="${tipoV}" data-camera="${dados.camera || "frequentes"}" data-texto="">Não conheço</button></span>`;
+    return;
+  }
+  if (caixaPend) caixaPend.remove();
 });
 </script>
 """
@@ -1602,16 +1700,31 @@ window.addEventListener("load", () => {{
 }});
 </script>
 </section>"""
+    foto_id = str(cliente.get("foto_face_id") or "").strip().upper()
+    preview = ""
+    if foto_id:
+        preview = (
+            f"<figure class='foto-cliente-preview'>"
+            f"<img alt='foto do cliente' src='/rosto/{_html_seguro(foto_id)}.jpg?t={int(time.time())}' "
+            f"onerror=\"this.parentElement.style.display='none'\">"
+            f"<figcaption>Foto atual · {_html_seguro(foto_id)}"
+            f"{' · próprio usuário' if cliente.get('eh_proprio') else ''}</figcaption></figure>"
+        )
     miolo = f"""<main>
 <h1>Cliente</h1>
 <p>Estes dados são da conta do CPF ou CNPJ com o qual você entrou.</p>
+<p>Se você também é morador da rua monitorada, envie sua foto: o sistema associa passagens nas câmeras ao seu perfil no grifo.</p>
 {_aviso_html(aviso, ok)}
-<form method="post" action="/cadastro/cliente">
+<form method="post" action="/cadastro/cliente" enctype="multipart/form-data">
 {_csrf(sessao)}
 {_campo("Nome", "nome", cliente.get("nome") or "")}
 {_campo("RG", "rg", cliente.get("rg") or "")}
 {_campo("CPF ou CNPJ", "documento", _documento_visivel(cliente.get("documento") or sessao.get("documento") or ""), obrigatorio=True)}
 {_campo("E-mail da conta", "email", cliente.get("email") or "", tipo="email")}
+<label>Foto do cliente (morador da rua)
+<input type="file" name="foto" accept="image/*" capture="user">
+</label>
+{preview}
 <button type="submit">{_svg(_ICONES["mais"])}Salvar cliente</button>
 </form>
 {novo}
@@ -2726,6 +2839,13 @@ def _tratador(portal: Portal):
                     return
                 self._salvar_pessoa(sessao)
                 return
+            if caminho == "/cadastro/cliente":
+                sessao = portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))
+                if sessao is None:
+                    self._html(_pagina_senha(), 200)
+                    return
+                self._salvar_cliente(sessao)
+                return
             campos = self._ler_formulario()
             if campos is None:
                 return
@@ -2751,9 +2871,6 @@ def _tratador(portal: Portal):
                 self.send_response(204)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
-                return
-            if caminho == "/cadastro/cliente":
-                self._salvar_cliente(sessao, campos)
                 return
             if caminho == "/cadastro/cliente/novo":
                 self._criar_cliente(sessao, campos)
@@ -3295,7 +3412,22 @@ def _tratador(portal: Portal):
                 return
             self._redirecionar("/", _cabecalho_cookie(acesso.emitir_cookie(usuario, portal.senha)))
 
-        def _salvar_cliente(self, sessao: dict, campos: dict):
+        def _salvar_cliente(self, sessao: dict, campos: dict | None = None, arquivos: dict | None = None):
+            tipo = self.headers.get("Content-Type") or ""
+            if "multipart/form-data" in tipo:
+                try:
+                    campos, arquivos = self._ler_multipart()
+                except ValueError as exc:
+                    atual = cadastro.cliente_por_documento(sessao.get("documento") or "") or {}
+                    self._html(_form_cliente(sessao, atual, str(exc)), 400)
+                    return
+            else:
+                campos = campos if campos is not None else (self._ler_formulario() or {})
+                arquivos = arquivos or {}
+            if not _csrf_confere(sessao, campos or {}):
+                atual = cadastro.cliente_por_documento(sessao.get("documento") or "") or {}
+                self._html(_form_cliente(sessao, atual, "Atualize a página e tente de novo."), 403)
+                return
             try:
                 cliente = cadastro.salvar_cliente(
                     sessao.get("documento") or "",
@@ -3308,6 +3440,26 @@ def _tratador(portal: Portal):
                 atual = cadastro.cliente_por_documento(sessao.get("documento") or "") or {}
                 self._html(_form_cliente(sessao, atual, str(exc)), 400)
                 return
+            foto = (arquivos or {}).get("foto") or b""
+            if foto:
+                imagem = cv2.imdecode(np_from(foto), cv2.IMREAD_COLOR)
+                if imagem is None:
+                    self._html(_form_cliente(sessao, cliente, "Não consegui ler a foto enviada."), 400)
+                    return
+                try:
+                    if portal._faces is None:
+                        raise ValueError("O monitoramento de faces ainda não está pronto.")
+                    face_atual = str(cliente.get("foto_face_id") or "").strip().upper()
+                    if face_atual:
+                        portal._faces.substituir_foto(face_atual, imagem)
+                        face_id = face_atual
+                    else:
+                        face_id, _nova = portal._faces.inscrever_foto(imagem)
+                    cadastro.definir_foto_cliente(cliente.get("documento") or "", face_id, eh_proprio=True)
+                    cliente = cadastro.cliente_por_documento(cliente.get("documento") or "") or cliente
+                except ValueError as exc:
+                    self._html(_form_cliente(sessao, cliente, str(exc)), 400)
+                    return
             cookie = ""
             if cliente.get("documento") != sessao.get("documento"):
                 usuario = {
@@ -3516,7 +3668,7 @@ def _tratador(portal: Portal):
             from agente.stive import confirmar
 
             try:
-                fala = confirmar(
+                saida = confirmar(
                     sessao.get("documento") or "",
                     _um(campos, "id"),
                     _um(campos, "resposta"),
@@ -3524,11 +3676,16 @@ def _tratador(portal: Portal):
                     _um(campos, "camera"),
                     _um(campos, "tipo"),
                     _um(campos, "vinculo"),
+                    _um(campos, "nome"),
+                    faces_engine=portal._faces,
                 )
             except ValueError as exc:
-                self._json({"fala": str(exc)})
+                self._json({"fala": str(exc), "ok": False})
                 return
-            self._json({"fala": fala})
+            if isinstance(saida, dict):
+                self._json(saida)
+            else:
+                self._json({"fala": str(saida or ""), "ok": True})
 
         def _reacao_stive(self, sessao: dict, campos: dict):
             from agente.stive import registrar_reacao

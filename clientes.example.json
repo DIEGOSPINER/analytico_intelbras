@@ -7,6 +7,8 @@
       "documento": "",
       "tipo_documento": "cpf",
       "email": "cliente.carlosott@exemplo.com",
+      "foto_face_id": "",
+      "eh_proprio": false,
       "cameras": [
         {
           "id": "cam-carlos-ott",
