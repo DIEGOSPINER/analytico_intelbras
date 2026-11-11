@@ -222,11 +222,20 @@ def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perf
     return resultado
 
 
-def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str, tipo: str) -> str:
+def confirmar(
+    documento: str,
+    ident: str,
+    resposta: str,
+    texto: str,
+    camera: str,
+    tipo: str,
+    vinculo: str = "",
+) -> str:
     ident = (ident or "").strip()
     if not ident:
         raise ValueError("Confirmação sem identificador.")
     sim = (resposta or "").strip().lower() in ("sim", "s", "1", "confirmo")
+    vinculo = str(vinculo or "").strip().lower()
     with _TRAVA:
         bruto = _ler()
         bruto.setdefault("respostas", []).append({
@@ -235,6 +244,7 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
             "texto": (texto or "")[:240],
             "camera": camera or "",
             "tipo": tipo or "",
+            "vinculo": vinculo,
             "quando": datetime.now().isoformat(timespec="seconds"),
         })
         bruto["respostas"] = bruto["respostas"][-200:]
@@ -256,6 +266,8 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
     face_freq = ""
     if tipo_base.startswith("rosto_frequente:"):
         face_freq = tipo_base.split(":", 1)[1].strip().upper()
+    elif tipo_base.startswith("rosto_vinculo:"):
+        face_freq = tipo_base.split(":", 1)[1].strip().upper()
     elif tipo_base.startswith("rosto_suspeito:"):
         face_freq = tipo_base.split(":", 1)[1].strip().upper()
 
@@ -271,7 +283,48 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         return "Anotado. Sem disparo — dado ignorado e nada entra na base."
 
     if tipo_base.startswith("rosto_frequente:") and face_freq:
-        # Segundo passo: se conhece, pergunta se é suspeita para cadastrar.
+        # Segundo passo: escolhe o vínculo (conhecido/amigo/...) antes do suspeito.
+        try:
+            from main import _lembrar_pendencia
+            import time as _time
+
+            _lembrar_pendencia(
+                "frequentes",
+                f"rosto_vinculo:{face_freq}",
+                (
+                    f"Como você conhece {face_freq}? "
+                    f"Escolha o vínculo e confirme. "
+                    f"Foto: /rosto/{face_freq}.jpg"
+                ),
+                _time.time(),
+            )
+        except Exception:
+            pass
+        return (
+            f"Entendi que você conhece o rosto {face_freq}. "
+            "No próximo balão escolha o vínculo (conhecido, amigo, familiar...) e confirme."
+        )
+
+    if tipo_base.startswith("rosto_vinculo:") and face_freq:
+        vinculo = str(vinculo or "").strip().lower() or "conhecido"
+        try:
+            from grafo_relacoes import TIPOS_VINCULO, relacionar
+            from cadastro import cliente_por_documento
+
+            if vinculo not in TIPOS_VINCULO:
+                vinculo = "conhecido"
+            cli = cliente_por_documento(documento) or {}
+            relacionar(
+                documento,
+                face_freq,
+                vinculo,
+                nome_pessoa=f"Rosto {face_freq}",
+                nome_usuario=str(cli.get("nome") or ""),
+                email=str(cli.get("email") or ""),
+                meta={"origem": "stive_conhece"},
+            )
+        except Exception as exc:
+            return f"Não consegui gravar o vínculo: {exc}"
         try:
             from main import _lembrar_pendencia
             import time as _time
@@ -289,7 +342,7 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         except Exception:
             pass
         return (
-            f"Entendi que você conhece o rosto {face_freq}. "
+            f"Vínculo «{vinculo}» salvo com {face_freq}. "
             "Ela é suspeita? Responda Sim no próximo balão para cadastrar como interesse."
         )
 

@@ -9,3 +9,4 @@ psycopg[binary]
 psutil
 fastapi
 uvicorn
+neo4j

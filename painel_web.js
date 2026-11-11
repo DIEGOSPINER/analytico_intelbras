@@ -1854,13 +1854,65 @@ function serieSimples(itens, cor) {
   }];
 }
 
+function filtrarSerieSistema(serie, ini, fim, modo) {
+  return (serie || []).filter((item) => {
+    if (modo === "mes") {
+      const mes = String(item.mes || "").slice(0, 7);
+      if (!mes) return true;
+      const iniM = ini ? String(ini).slice(0, 7) : "";
+      const fimM = fim ? String(fim).slice(0, 7) : "";
+      return (!iniM || mes >= iniM) && (!fimM || mes <= fimM);
+    }
+    const dia = String(item.dia || item.d || "");
+    if (!dia) return true;
+    return dentro(dia, ini, fim);
+  });
+}
+
+function pintarSistemaGraficos(pacote, ini, fim) {
+  const custos = (pacote && pacote.custos) || {};
+  const dia = (serie) => filtrarSerieSistema(serie, ini, fim, "dia");
+  const mes = (serie) => filtrarSerieSistema(serie, ini, fim, "mes");
+  linha(document.getElementById("sis-diario"), serieSimples(dia(pacote.crescimento_diario), "#4c8dff"), dia(pacote.crescimento_diario).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-mensal"), serieSimples(mes(pacote.crescimento_mensal), "#148ceb"), mes(pacote.crescimento_mensal).map((i) => i.rotulo), "meses");
+  linha(document.getElementById("sis-acumulado"), serieSimples(dia(pacote.crescimento_acumulado), "#3ddc97"), dia(pacote.crescimento_acumulado).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-cpu"), serieSimples(dia(pacote.cpu_diario), "#ff8c28"), dia(pacote.cpu_diario).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-ram"), serieSimples(dia(pacote.ram_diario), "#aa3cb4"), dia(pacote.ram_diario).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-disco"), serieSimples(dia(pacote.disco_diario), "#28c4dc"), dia(pacote.disco_diario).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-gpt-usd"), serieSimples(dia(custos.gpt_usd_diario), "#3ddc97"), dia(custos.gpt_usd_diario || []).map((i) => i.rotulo), "dias");
+  linha(document.getElementById("sis-gpt-tok"), serieSimples(dia(custos.gpt_tokens_diario), "#ffb020"), dia(custos.gpt_tokens_diario || []).map((i) => i.rotulo), "dias");
+  const resumoPeriodo = document.getElementById("sis-periodo-resumo");
+  if (resumoPeriodo) {
+    const n = dia(pacote.crescimento_diario || []).length;
+    resumoPeriodo.textContent = ini && fim
+      ? `Período ${ini.split("-").reverse().join("/")} → ${fim.split("-").reverse().join("/")} · ${n} dia(s) nos gráficos diários`
+      : "Período completo disponível nos gráficos.";
+  }
+}
+
 async function sistema(tela) {
-  if (tela.dataset.pronto !== "sistema-v3") {
+  if (tela.dataset.pronto !== "sistema-v4") {
+    const hoje = isoLocal(new Date());
+    const ini7 = isoLocal(new Date(Date.now() - 6 * 86400000));
     tela.innerHTML = `<section class="cartao" style="margin-bottom:14px">
 <label>Segmentação por cliente
 <select id="sis-cliente"><option value="">Cluster total (clientes + administrador)</option></select>
 </label>
 <p id="sis-cliente-info" style="color:var(--mudo);margin:.6rem 0 0"></p>
+</section>
+<section class="cartao" style="margin-bottom:14px">
+  <h2 style="margin:0 0 8px;font-size:16px">Filtro de datas (visão diária)</h2>
+  <div class="segmentador-portal">
+    <label>De <input type="date" id="sis-ini" value="${ini7}"></label>
+    <label>Até <input type="date" id="sis-fim" value="${hoje}"></label>
+  </div>
+  <div class="acoes-gestao" style="margin-top:8px">
+    <button type="button" data-sis-periodo="hoje">Hoje</button>
+    <button type="button" data-sis-periodo="7">7 dias</button>
+    <button type="button" data-sis-periodo="30">30 dias</button>
+    <button type="button" data-sis-periodo="90">90 dias</button>
+  </div>
+  <p id="sis-periodo-resumo" style="color:var(--mudo);margin:.6rem 0 0;font-size:13px"></p>
 </section>
 <section class="cartoes" id="sistema-cards"></section>
 <section class="grade">
@@ -1885,7 +1937,7 @@ async function sistema(tela) {
 <article class="cartao"><h2>Custos GPT por cliente (mês)</h2><div id="sistema-custos-cli"><p>Carregando…</p></div></article>
 <article class="cartao"><h2>Espaço em nuvem</h2><div id="sistema-nuvem"><p>Preparando medição por cliente…</p></div></article>
 </section>`;
-    tela.dataset.pronto = "sistema-v3";
+    tela.dataset.pronto = "sistema-v4";
     const sel = document.getElementById("sis-cliente");
     if (sel && !sel._sisBound) {
       sel._sisBound = true;
@@ -1894,10 +1946,46 @@ async function sistema(tela) {
         sistema(tela);
       });
     }
+    const aplicarDatas = () => {
+      if (!tela._sisPacote) return;
+      const ini = document.getElementById("sis-ini")?.value || "";
+      const fim = document.getElementById("sis-fim")?.value || "";
+      pintarSistemaGraficos(tela._sisPacote, ini, fim);
+    };
+    ["sis-ini", "sis-fim"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && !el._sisBound) {
+        el._sisBound = true;
+        el.addEventListener("change", aplicarDatas);
+      }
+    });
+    tela.querySelectorAll("[data-sis-periodo]").forEach((botao) => {
+      if (botao._sisBound) return;
+      botao._sisBound = true;
+      botao.addEventListener("click", () => {
+        const hoje = new Date();
+        const fim = isoLocal(hoje);
+        const chave = botao.dataset.sisPeriodo;
+        let ini = fim;
+        if (chave === "7") ini = isoLocal(new Date(hoje.getTime() - 6 * 86400000));
+        else if (chave === "30") ini = isoLocal(new Date(hoje.getTime() - 29 * 86400000));
+        else if (chave === "90") ini = isoLocal(new Date(hoje.getTime() - 89 * 86400000));
+        const a = document.getElementById("sis-ini");
+        const b = document.getElementById("sis-fim");
+        if (a) a.value = ini;
+        if (b) b.value = fim;
+        aplicarDatas();
+      });
+    });
   }
   if (tela._sisBusy) return;
   const agoraMs = Date.now();
-  if (tela._sisQuando && agoraMs - tela._sisQuando < 8000) return;
+  if (tela._sisQuando && agoraMs - tela._sisQuando < 8000 && tela._sisPacote) {
+    const ini = document.getElementById("sis-ini")?.value || "";
+    const fim = document.getElementById("sis-fim")?.value || "";
+    pintarSistemaGraficos(tela._sisPacote, ini, fim);
+    return;
+  }
   tela._sisBusy = true;
   try {
     const sel = document.getElementById("sis-cliente");
@@ -1905,6 +1993,7 @@ async function sistema(tela) {
     const resposta = await fetch(`/sistema.json?documento=${encodeURIComponent(filtro)}`);
     if (!resposta.ok) throw new Error("sem acesso");
     const pacote = await resposta.json();
+    tela._sisPacote = pacote;
     tela._sisQuando = agoraMs;
     if (sel && !sel.dataset.opcoes) {
       const opts = ['<option value="">Cluster total (clientes + administrador)</option>'].concat(
@@ -1975,14 +2064,9 @@ async function sistema(tela) {
         <p>Usado: ${n.usado_mb == null ? "—" : Number(n.usado_mb).toLocaleString("pt-BR") + " MB"} · Cota: ${n.cota_mb == null ? "—" : Number(n.cota_mb).toLocaleString("pt-BR") + " MB"}</p>
         <p style="color:var(--mudo)">${escapar(n.aviso || "Medição de nuvem por cliente em preparação.")}</p>`;
     }
-    linha(document.getElementById("sis-diario"), serieSimples(pacote.crescimento_diario, "#4c8dff"), (pacote.crescimento_diario || []).map((i) => i.rotulo), "dias");
-    linha(document.getElementById("sis-mensal"), serieSimples(pacote.crescimento_mensal, "#148ceb"), (pacote.crescimento_mensal || []).map((i) => i.rotulo), "meses");
-    linha(document.getElementById("sis-acumulado"), serieSimples(pacote.crescimento_acumulado, "#3ddc97"), (pacote.crescimento_acumulado || []).map((i) => i.rotulo), "dias");
-    linha(document.getElementById("sis-cpu"), serieSimples(pacote.cpu_diario, "#ff8c28"), (pacote.cpu_diario || []).map((i) => i.rotulo), "dias");
-    linha(document.getElementById("sis-ram"), serieSimples(pacote.ram_diario, "#aa3cb4"), (pacote.ram_diario || []).map((i) => i.rotulo), "dias");
-    linha(document.getElementById("sis-disco"), serieSimples(pacote.disco_diario, "#28c4dc"), (pacote.disco_diario || []).map((i) => i.rotulo), "dias");
-    linha(document.getElementById("sis-gpt-usd"), serieSimples(custos.gpt_usd_diario, "#3ddc97"), (custos.gpt_usd_diario || []).map((i) => i.rotulo), "dias");
-    linha(document.getElementById("sis-gpt-tok"), serieSimples(custos.gpt_tokens_diario, "#ffb020"), (custos.gpt_tokens_diario || []).map((i) => i.rotulo), "dias");
+    const ini = document.getElementById("sis-ini")?.value || "";
+    const fim = document.getElementById("sis-fim")?.value || "";
+    pintarSistemaGraficos(pacote, ini, fim);
   } catch (erro) {
     const tabela = document.getElementById("sistema-tabelas");
     if (tabela) tabela.innerHTML = "<p class='aviso'>Não foi possível carregar o monitor. Confirme o perfil administrador.</p>";
@@ -2175,6 +2259,9 @@ async function confirmarPendencia(botao) {
   corpo.set("tipo", botao.dataset.tipo || "");
   corpo.set("camera", botao.dataset.camera || "");
   corpo.set("texto", botao.dataset.texto || "");
+  const caixa = botao.closest(".pendencia") || botao.closest(".fala-hq") || document;
+  const sel = caixa.querySelector && caixa.querySelector("select[name=vinculo], #sel-vinculo-stive");
+  if (sel && sel.value) corpo.set("vinculo", sel.value);
   const resposta = await fetch("/agente/stive/confirmar", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -2461,19 +2548,35 @@ function atualizarFalaStive(dados) {
     const item = pendencias[0];
     const textoPend = String(item.texto || "Confirma esta situação?");
     const fotoSrc = fotoPendenciaSrc(item);
-    const ehRosto = String(item.tipo || "").startsWith("rosto_");
+    const tipoPend = String(item.tipo || "");
+    const ehRosto = tipoPend.startsWith("rosto_");
+    const ehVinculo = tipoPend.startsWith("rosto_vinculo:");
+    const tituloPend = ehVinculo
+      ? "Qual o vínculo com esta pessoa?"
+      : (ehRosto ? "Você conhece esta pessoa?" : "O que está acontecendo?");
+    const selVinculo = ehVinculo
+      ? `<label style="display:block;margin:8px 0 4px;font-size:13px">Relacionamento
+          <select id="sel-vinculo-stive" name="vinculo" style="width:100%;margin-top:4px">
+            <option value="conhecido">Conhecido</option>
+            <option value="amigo">Amigo(a)</option>
+            <option value="familiar">Familiar</option>
+            <option value="vizinho">Vizinho(a)</option>
+            <option value="colega">Colega</option>
+          </select>
+        </label>`
+      : "";
     enfileirarFalaStive(
       `pend:${item.id}`,
-      ehRosto ? "Você conhece esta pessoa?" : "O que está acontecendo?",
+      tituloPend,
       textoPendenciaLimpo(textoPend) || "Confirma esta situação?",
       {
         tipo: "pendencia",
         classe: "pergunta",
         foto: fotoSrc,
         linkVivo: !ehRosto,
-        html: `<div class="pendencia"><span>
-          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Sim</button>
-          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Não</button>
+        html: `<div class="pendencia">${selVinculo}<span>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(tipoPend)}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">${ehVinculo ? "Salvar vínculo" : "Sim"}</button>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(tipoPend)}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Não</button>
         </span></div>`,
       },
     );

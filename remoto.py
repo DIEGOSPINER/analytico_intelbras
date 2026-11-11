@@ -542,6 +542,7 @@ _ICONES = {
     "stive": "<circle cx='12' cy='8' r='3'/><path d='M6 19c1-3 3-4.5 6-4.5s5 1.5 6 4.5'/><path d='M18 5c1.5 1.2 2 2.6 2 4'/>",
     "audio": "<path d='M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4'/>",
     "sistema": "<rect x='3' y='4' width='18' height='14' rx='2'/><path d='M7 20h10M12 18v2'/><path d='M7 9h2M11 9h2M15 9h2M7 13h10'/>",
+    "grafo": "<circle cx='6' cy='12' r='2.5'/><circle cx='18' cy='6' r='2.5'/><circle cx='18' cy='18' r='2.5'/><path d='M8.2 11.2 15.8 7.2M8.2 12.8 15.8 16.8M18 8.5v9'/>",
 }
 
 
@@ -579,6 +580,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
     if perfil == "administrador":
         grupos.insert(2, ("Administração", [
             ("/gestao", "Gestão de ativos", "cliente"),
+            ("/painel/grifos", "Grifos de relacionamento", "grafo"),
             ("/cadastro/cliente", "Cliente", "cliente"),
             ("/sistema", "Armazenamento e sistema", "sistema"),
         ]))
@@ -651,7 +653,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=rf117"></script>
+<script src="/painel.js?v=sis182"></script>
 </body>
 </html>"""
 
@@ -802,6 +804,93 @@ def _risco(perfil: str = "", csrf: str = "", usuario: str = "", documento: str =
     miolo = _cabeca("Detector de risco", "Panorama do fluxo, do comportamento e de quem reaparece.") + "<main id='tela' data-tela='risco'></main>"
     return _moldura(
         "C4ISTAR MONITOR · Detector de risco", miolo, "/painel/risco",
+        perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
+    )
+
+
+def _grifos(perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
+    miolo = f"""{_cabeca("Grifos de relacionamento", "Grafo de vínculos entre usuários, rostos conhecidos e medidas protetivas.")}
+<main>
+<article class="cartao">
+  <div class="segmentador-portal" style="margin-bottom:12px">
+    <label>Cliente<select id="filtro-grafo-cliente"><option value="">Todos os clientes</option></select></label>
+    <label>Pessoa monitorada<select id="filtro-grafo-pessoa"><option value="">Todas as pessoas</option></select></label>
+  </div>
+  <div class="acoes-gestao" style="margin-bottom:10px">
+    <button type="button" id="recarregar-grafo">Atualizar grafo</button>
+    <button type="button" id="limpar-filtro-grafo">Limpar filtros</button>
+    <span id="meta-grafo" style="color:var(--mudo);font-size:13px"></span>
+  </div>
+  <div id="grafo-relacoes" style="height:min(72vh,720px);border:1px solid var(--linha);border-radius:16px;background:rgba(8,12,24,.55)"></div>
+</article>
+<article class="cartao">
+  <h2>Legenda</h2>
+  <p>Azul: usuário · Vermelho: pessoa de risco · Roxo: medida protetiva · Rosa: demais rostos. Arestas: conhecido, amigo, familiar, vizinho, colega, medida protege, monitora.</p>
+</article>
+</main>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script>
+(function () {{
+  const caixa = document.getElementById("grafo-relacoes");
+  const meta = document.getElementById("meta-grafo");
+  const selCli = document.getElementById("filtro-grafo-cliente");
+  const selPes = document.getElementById("filtro-grafo-pessoa");
+  let rede = null;
+  let opcoesProntas = false;
+  function popularSelects(dados) {{
+    if (opcoesProntas || !selCli || !selPes) return;
+    const cliAtual = selCli.value;
+    const pesAtual = selPes.value;
+    selCli.innerHTML = '<option value="">Todos os clientes</option>' + (dados.opcoes_clientes || []).map((c) =>
+      `<option value="${{c.documento || ""}}">${{(c.nome || c.documento || "")}} · ${{c.documento || ""}}</option>`
+    ).join("");
+    selPes.innerHTML = '<option value="">Todas as pessoas</option>' + (dados.opcoes_pessoas || []).map((p) =>
+      `<option value="${{p.face_id || ""}}">${{(p.nome || p.face_id || "")}} · ${{p.face_id || ""}}</option>`
+    ).join("");
+    if (cliAtual) selCli.value = cliAtual;
+    if (pesAtual) selPes.value = pesAtual;
+    opcoesProntas = true;
+  }}
+  async function carregar() {{
+    const doc = selCli ? selCli.value : "";
+    const face = selPes ? selPes.value : "";
+    const qs = new URLSearchParams();
+    if (doc) qs.set("documento", doc);
+    if (face) qs.set("face_id", face);
+    const resp = await fetch("/api/grafo.json?" + qs.toString());
+    const dados = await resp.json().catch(() => ({{}}));
+    popularSelects(dados);
+    if (!caixa || !window.vis) {{
+      if (meta) meta.textContent = "Biblioteca de grafo indisponível.";
+      return;
+    }}
+    const nodes = new vis.DataSet(dados.nodes || []);
+    const edges = new vis.DataSet(dados.edges || []);
+    if (rede) rede.destroy();
+    rede = new vis.Network(caixa, {{ nodes, edges }}, {{
+      nodes: {{ shape: "dot", size: 18, font: {{ color: "#e8eefc", size: 13 }} }},
+      edges: {{ color: {{ color: "#7a8799" }}, font: {{ color: "#a7b3c7", size: 11, strokeWidth: 0 }}, smooth: {{ type: "continuous" }} }},
+      physics: {{ stabilization: true, barnesHut: {{ gravitationalConstant: -12000, springLength: 140 }} }},
+      interaction: {{ hover: true, tooltipDelay: 120 }},
+    }});
+    const foco = [doc && ("cliente " + doc), face && ("pessoa " + face)].filter(Boolean).join(" · ");
+    if (meta) meta.textContent = `${{dados.total_nos || 0}} nós · ${{dados.total_arestas || 0}} vínculos · motor ${{dados.motor || "json"}}${{foco ? " · filtro: " + foco : ""}}`;
+  }}
+  document.getElementById("recarregar-grafo")?.addEventListener("click", carregar);
+  document.getElementById("limpar-filtro-grafo")?.addEventListener("click", () => {{
+    if (selCli) selCli.value = "";
+    if (selPes) selPes.value = "";
+    carregar();
+  }});
+  selCli?.addEventListener("change", carregar);
+  selPes?.addEventListener("change", carregar);
+  carregar();
+}})();
+</script>"""
+    return _moldura(
+        "C4ISTAR MONITOR · Grifos de relacionamento",
+        miolo,
+        "/painel/grifos",
         perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
     )
 
@@ -990,6 +1079,7 @@ window.atualizarStive = (dados) => {
   caixa.innerHTML = lista.map((item) => {
     let texto = String(item.texto || "");
     let foto = String(item.foto || "");
+    const tipo = String(item.tipo || "");
     const marca = texto.indexOf("Foto:");
     if (marca >= 0) {
       const trecho = texto.slice(marca).trim().split(/\\s+/)[1] || "";
@@ -999,10 +1089,13 @@ window.atualizarStive = (dados) => {
     const img = foto
       ? `<figure class="foto-pendencia"><img alt="rosto" src="${foto}?t=${Date.now()}" onerror="this.parentElement.style.display='none'"></figure>`
       : "";
+    const vinculo = tipo.indexOf("rosto_vinculo:") === 0
+      ? `<label>Relacionamento<select name="vinculo"><option value="conhecido">Conhecido</option><option value="amigo">Amigo(a)</option><option value="familiar">Familiar</option><option value="vizinho">Vizinho(a)</option><option value="colega">Colega</option></select></label>`
+      : "";
     const textoAttr = String(item.texto || "").replace(/"/g, "&quot;");
-    return `<div class="pendencia"><p>${texto}</p>${img}
-    <span><button type="button" data-id="${item.id}" data-resp="sim" data-tipo="${item.tipo || ""}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">Sim</button>
-    <button type="button" data-id="${item.id}" data-resp="nao" data-tipo="${item.tipo || ""}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">Não</button></span></div>`;
+    return `<div class="pendencia"><p>${texto}</p>${img}${vinculo}
+    <span><button type="button" data-id="${item.id}" data-resp="sim" data-tipo="${tipo}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">${vinculo ? "Salvar vínculo" : "Sim"}</button>
+    <button type="button" data-id="${item.id}" data-resp="nao" data-tipo="${tipo}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">Não</button></span></div>`;
   }).join("");
 };
 document.getElementById("pendencias-stive").addEventListener("click", async (evento) => {
@@ -1014,6 +1107,8 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
   corpo.set("tipo", botao.dataset.tipo || "");
   corpo.set("camera", botao.dataset.camera || "");
   corpo.set("texto", botao.dataset.texto || botao.parentElement.parentElement.querySelector("p").textContent || "");
+  const sel = botao.closest(".pendencia") && botao.closest(".pendencia").querySelector("select[name=vinculo]");
+  if (sel) corpo.set("vinculo", sel.value || "conhecido");
   const resposta = await fetch("/agente/stive/confirmar", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: corpo });
   const dados = await resposta.json().catch(() => ({}));
   bolha("stive", dados.fala || "Confirmação registrada.");
@@ -1103,6 +1198,15 @@ def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool =
 <label>Tipo<select name="base_legal" id="classe" required>{''.join(classes)}</select></label>
 <label>Motivo<select name="motivo" id="motivo">{''.join(motivos)}</select></label>
 {_campo("Referência", "referencia")}
+<div id="bloco-medida" hidden>
+  <label>Medida favorece<select name="favorecido" id="favorecido">
+    <option value="">Selecione</option>
+    <option value="eu">A mim (sou a pessoa protegida)</option>
+    <option value="amigo">A um amigo(a) perseguido e protegido pela justiça</option>
+  </select></label>
+  {_campo("Nome do protegido (se amigo)", "nome_protegido")}
+  <p style="color:var(--mudo);font-size:13px">Obrigatório em medida protetiva: o vínculo entra no grafo de relacionamentos do administrador.</p>
+</div>
 <label>Código existente<select name="face_id">{''.join(corrigir)}</select></label>
 <label>Foto do rosto
   <input type="file" name="foto" id="foto-arquivo" accept="image/*" capture="user">
@@ -1138,6 +1242,17 @@ function filtrarMotivo() {{
 }}
 classe.addEventListener("change", filtrarMotivo);
 filtrarMotivo();
+(function () {{
+  const bloco = document.getElementById("bloco-medida");
+  const favorecido = document.getElementById("favorecido");
+  function syncMedida() {{
+    const mp = classe.value === "medida_protetiva";
+    if (bloco) bloco.hidden = !mp;
+    if (favorecido) favorecido.required = mp;
+  }}
+  classe.addEventListener("change", syncMedida);
+  syncMedida();
+}})();
 (function () {{
   const video = document.getElementById("video-captura");
   const canvas = document.getElementById("canvas-captura");
@@ -2771,6 +2886,12 @@ def _tratador(portal: Portal):
                 if numero == "risco":
                     self._html(_risco(**ui), 200)
                     return
+                if numero == "grifos":
+                    if perfil != "administrador":
+                        self.send_error(403)
+                        return
+                    self._html(_grifos(**ui), 200)
+                    return
                 if numero == "audio":
                     if perfil != "administrador":
                         self._html(
@@ -2898,6 +3019,18 @@ def _tratador(portal: Portal):
                     pacote["vista_portal"] = _info_vista_admin(portal, sessao)
                 self._json(pacote)
                 return
+            if caminho == "/api/grafo.json":
+                if perfil != "administrador":
+                    self._json_status(403, {"ok": False, "erro": "Somente o administrador."})
+                    return
+                try:
+                    from grafo_relacoes import exportar_vis
+                    doc_f = (consulta.get("documento") or [""])[0]
+                    face_f = (consulta.get("face_id") or [""])[0]
+                    self._json(exportar_vis(documento=doc_f, face_id=face_f))
+                except Exception as exc:
+                    self._json_status(500, {"ok": False, "erro": str(exc), "nodes": [], "edges": []})
+                return
             if caminho.startswith("/video/"):
                 if not ver:
                     self.send_error(404)
@@ -2954,6 +3087,8 @@ def _tratador(portal: Portal):
                     "base_legal": _um(campos, "base_legal"),
                     "referencia": _um(campos, "referencia"),
                     "motivo": _um(campos, "motivo"),
+                    "favorecido": _um(campos, "favorecido"),
+                    "nome_protegido": _um(campos, "nome_protegido"),
                 })
             except ValueError as exc:
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
@@ -3376,6 +3511,7 @@ def _tratador(portal: Portal):
                     _um(campos, "texto"),
                     _um(campos, "camera"),
                     _um(campos, "tipo"),
+                    _um(campos, "vinculo"),
                 )
             except ValueError as exc:
                 self._json({"fala": str(exc)})

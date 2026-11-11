@@ -456,6 +456,14 @@ def validar_pessoa(pessoa: dict):
         raise ValueError("Escolha o motivo desta pessoa.")
     if classe in ("mandado", "mandado_judicial", "medida_protetiva") and not str(pessoa.get("referencia") or "").strip():
         raise ValueError("Informe o número do mandado ou da medida protetiva.")
+    if classe == "medida_protetiva":
+        favorecido = str(pessoa.get("favorecido") or "").strip().lower()
+        if favorecido not in ("eu", "amigo"):
+            raise ValueError(
+                "Medida protetiva deve favorecer você ou um amigo(a) perseguido e protegido pela justiça."
+            )
+        if favorecido == "amigo" and not str(pessoa.get("nome_protegido") or "").strip():
+            raise ValueError("Informe o nome do amigo(a) protegido pela medida.")
     if not str(pessoa.get("nome") or "").strip():
         raise ValueError("Informe o nome da pessoa.")
     if not str(pessoa.get("face_id") or "").strip():
@@ -471,10 +479,33 @@ def cadastrar_pessoa(documento: str, pessoa: dict):
     registro["classe"] = classe_pessoa(pessoa)
     registro["base_legal"] = registro["classe"]
     registro["motivo"] = str(pessoa.get("motivo") or "").strip()
+    if registro["classe"] == "medida_protetiva":
+        registro["favorecido"] = str(pessoa.get("favorecido") or "").strip().lower()
+        registro["nome_protegido"] = str(pessoa.get("nome_protegido") or "").strip()
     pessoas = [item for item in cliente["pessoas"] if str(item.get("face_id") or "").upper() != face_id]
     pessoas.append(registro)
     cliente["pessoas"] = pessoas
     _substituir(cliente)
+    if registro["classe"] == "medida_protetiva":
+        try:
+            from grafo_relacoes import relacionar
+
+            relacionar(
+                documento,
+                face_id,
+                "medida_protege",
+                nome_pessoa=str(registro.get("nome") or face_id),
+                classe="medida_protetiva",
+                nome_usuario=str(cliente.get("nome") or ""),
+                email=str(cliente.get("email") or ""),
+                meta={
+                    "favorecido": registro.get("favorecido") or "",
+                    "nome_protegido": registro.get("nome_protegido") or "",
+                    "referencia": registro.get("referencia") or "",
+                },
+            )
+        except Exception as exc:
+            print(f"Grafo medida protetiva: {exc}")
     return registro
 
 
