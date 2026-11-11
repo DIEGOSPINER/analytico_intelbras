@@ -2114,7 +2114,19 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
 
     cubo = [item for item in (resumo.get("cubo") or []) if (item.get("c") or "") in permitidas]
     resumo["cubo"] = cubo
-    cubo_risco = [item for item in (resumo.get("cubo_risco") or []) if (item.get("c") or "") in permitidas]
+    # Cubo de risco: próprias câmeras + demais do mesmo bairro (alerta colaborativo).
+    _ruas_cli, bairros_cli, _cidades_cli = cadastro._escopos_geograficos(digitos)
+
+    def _camera_no_bairro_cli(nome_cam: str) -> bool:
+        if not nome_cam or not bairros_cli:
+            return False
+        bairro = cadastro._bairro_da_camera(nome_cam)
+        return bool(bairro and bairro in bairros_cli)
+
+    cubo_risco = [
+        item for item in (resumo.get("cubo_risco") or [])
+        if (item.get("c") or "") in permitidas or _camera_no_bairro_cli(str(item.get("c") or ""))
+    ]
     resumo["cubo_risco"] = cubo_risco
     cubo_faixa = [item for item in (resumo.get("cubo_faixa") or []) if (item.get("c") or "") in permitidas]
     resumo["cubo_faixa"] = cubo_faixa
@@ -2249,35 +2261,57 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     resumo["insights"] = list(resumo.get("insights") or [])
     resumo["itens"] = sum(int(item.get("n") or 0) for item in cubo if str(item.get("d") or "") == hoje)
 
-    resumo["led"] = "branco"
-    ordem_led = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
-    for camera in vivo:
-        risco = camera.get("risco") or "branco"
-        if ordem_led.get(risco, 0) > ordem_led.get(resumo["led"], 0):
-            resumo["led"] = risco
     match = resumo.get("match")
     if isinstance(match, dict):
-        cam_ok = (match.get("camera") or "") in permitidas
-        # Vista admin→cliente: também libera se o match é POI da conta filtrada.
-        dono_ok = False
-        try:
-            tipo_m = str(match.get("tipo") or "").upper()
-            ident_m = str(match.get("id") or "")
-            if tipo_m == "PLACA":
-                cli_m, _ = cadastro.veiculo_por_placa(ident_m)
-            else:
-                cli_m, _ = cadastro.pessoa_por_face(ident_m)
-            dono_ok = bool(cli_m) and cadastro._digitos(cli_m.get("documento")) == digitos
-        except Exception:
-            dono_ok = False
-        if not (
-            (cam_ok and cadastro.pode_ver_match_interesse(digitos, match))
-            or dono_ok
-        ):
+        # Risco no bairro: Vanessa vê invasor na Carlos Ott mesmo sem ter essa câmera no ao vivo.
+        if not cadastro.pode_ver_match_interesse(digitos, match):
             resumo["match"] = None
             resumo["narracao"] = ""
             resumo["narracao_ia"] = ""
             resumo["voz"] = ""
+            match = None
+
+    # LED/termômetro: sobe com o match de risco do bairro, não só com câmeras próprias.
+    ordem_led = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
+    led = "branco"
+    for camera in vivo:
+        risco = camera.get("risco") or "branco"
+        if ordem_led.get(risco, 0) > ordem_led.get(led, 0):
+            led = risco
+    if isinstance(match, dict):
+        alvo = "vermelho" if match.get("risco") else "verde"
+        if ordem_led.get(alvo, 0) > ordem_led.get(led, 0):
+            led = alvo
+        cam_alerta = str(match.get("camera") or "").strip()
+        if match.get("risco") and cam_alerta and cam_alerta not in {c.get("nome") for c in vivo}:
+            # Inclui a câmera do alerta no detector para o termômetro ir a vermelho.
+            vivo = list(vivo) + [{
+                "nome": cam_alerta,
+                "rua": "",
+                "slug": "",
+                "agora": {"Pessoa": 0, "Veiculo": 0, "Objeto": 0, "Animal": 0},
+                "acumulado": {"Pessoa": 0, "Veiculo": 0, "Objeto": 0, "Animal": 0},
+                "comportamentos": [],
+                "frase": f"Pessoa de risco no bairro: {match.get('nome') or match.get('id') or ''}",
+                "fluxo": {},
+                "fluxo_veiculo": {},
+                "permanencias": [],
+                "risco": "vermelho",
+                "audio_vivo": None,
+                "cena": "",
+            }]
+            resumo["cameras_vivo"] = vivo
+            resumo["cameras"] = len(vivo)
+        if match.get("risco"):
+            riscos = dict(resumo.get("riscos") or {})
+            riscos["Critico"] = int(riscos.get("Critico") or 0) + 1
+            resumo["riscos"] = riscos
+            if not str(resumo.get("voz") or "").strip() or "observação" in str(resumo.get("voz") or "").lower():
+                resumo["voz"] = (
+                    f"Atenção: {match.get('nome') or match.get('id')} "
+                    f"(risco) em {cam_alerta or 'câmera do bairro'}."
+                )
+    resumo["led"] = led
     resumo["cliente_documento"] = digitos
     resumo["perfil_sessao"] = perfil or ""
     return resumo
@@ -2323,8 +2357,19 @@ def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
     else:
         try:
             conta = cadastro.consultar(documento)
+            pessoas_conta = list(conta.get("pessoas") or [])
+            # Inclui risco do bairro (ex.: invasor do Diego aparece para Vanessa).
+            vistos = {
+                str(p.get("face_id") or "").upper()
+                for p in pessoas_conta if p.get("face_id")
+            }
+            for pessoa in cadastro.risco_visivel_para(documento):
+                face = str(pessoa.get("face_id") or "").upper()
+                if face and face not in vistos:
+                    pessoas_conta.append(pessoa)
+                    vistos.add(face)
             interesse = {
-                "pessoas": list(conta.get("pessoas") or []),
+                "pessoas": pessoas_conta,
                 "veiculos": list(conta.get("veiculos") or []),
             }
         except Exception:

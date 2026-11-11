@@ -1094,6 +1094,45 @@ def interesse_para_camera(camera_ref: str) -> dict:
     return {"pessoas": pessoas, "veiculos": veiculos}
 
 
+def risco_visivel_para(documento: str) -> list[dict]:
+    """POIs de risco (exceto medida protetiva) de contas no mesmo bairro do CPF."""
+    digitos = _digitos(documento)
+    if not digitos:
+        return []
+    _ruas, bairros, _cidades = _escopos_geograficos(digitos)
+    if digitos == _digitos(DOCUMENTO_ADMIN):
+        bairros = set()  # admin: todos
+        for cli in listar_clientes():
+            for cam in _cameras_cliente(cli):
+                b = normalizar_rua(cam.get("bairro") or "")
+                if b:
+                    bairros.add(b)
+    if not bairros and digitos != _digitos(DOCUMENTO_ADMIN):
+        return []
+    saida = []
+    vistos = set()
+    for cliente in listar_clientes():
+        if cliente.get("ativo") is False:
+            continue
+        outro = _digitos(cliente.get("documento"))
+        if not outro:
+            continue
+        _r, bairros_cli, _c = _escopos_geograficos(outro)
+        if digitos != _digitos(DOCUMENTO_ADMIN) and not (bairros_cli & bairros):
+            continue
+        for pessoa in cliente.get("pessoas") or []:
+            if not isinstance(pessoa, dict) or not pessoa_de_risco(pessoa):
+                continue
+            if classe_pessoa(pessoa) == "medida_protetiva":
+                continue
+            face = str(pessoa.get("face_id") or "").strip().upper()
+            if not face or face in vistos:
+                continue
+            vistos.add(face)
+            saida.append(_anexar_dono(pessoa, outro))
+    return saida
+
+
 def interesse_deteccao_global() -> dict:
     """Todas as faces/placas cadastradas (para histórico e painéis agregados)."""
     garantir_cliente_local()
@@ -1213,7 +1252,7 @@ def _emails_vizinhos_bairro_camera(camera_ref: str) -> list[str]:
 def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list[str]:
     """Placa → dono. Local → sem alerta.
 
-    Mandado/suspeito/desaparecida/ex-detento → dono + todos da rua + admin.
+    Mandado/suspeito/desaparecida/ex-detento → dono + todos do bairro com câmera + admin.
     Medida protetiva → só quem cadastrou + admin.
     """
     emails = []
@@ -1233,9 +1272,9 @@ def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list
     emails.extend(_emails_avisos(cliente, camera_ref, somente_alerta=True))
     emails.extend(emails_admin())
     classe = classe_pessoa(pessoa or {})
-    # Rua inteira para mandado, suspeito, desaparecida, ex-detento (não medida protetiva).
+    # Bairro (ex.: Stella Maris): Vanessa na Lidia Borja recebe invasor visto na Carlos Ott.
     if classe != "medida_protetiva":
-        emails.extend(_emails_vizinhos_rua_camera(camera_ref))
+        emails.extend(_emails_vizinhos_bairro_camera(camera_ref))
     return _emails_unicos(emails)
 
 
@@ -1267,7 +1306,7 @@ def emails_ocorrencia_rua(endereco_ou_rua: str) -> list[str]:
 def pode_ver_match_interesse(documento: str, match: dict | None) -> bool:
     """Admin vê tudo. Dono vê o próprio.
 
-    Mandado, suspeito, desaparecida e ex-detento: todos com câmera na mesma rua.
+    Mandado, suspeito, desaparecida e ex-detento: todos com câmera no mesmo bairro.
     Medida protetiva: só quem cadastrou (+ admin).
     """
     digitos = _digitos(documento)
@@ -1295,7 +1334,11 @@ def pode_ver_match_interesse(documento: str, match: dict | None) -> bool:
     camera = str(match.get("camera") or "")
     if not camera:
         return False
-    # Mesma rua do evento → alerta para todos que monitoram a rua.
+    # Mesmo bairro do evento (Lidia Borja ↔ Carlos Ott em Stella Maris).
+    bairro = _bairro_da_camera(camera)
+    _ruas, bairros, _cidades = _escopos_geograficos(digitos)
+    if bairro and bairro in bairros:
+        return True
     rua = _rua_da_camera(camera)
     if rua and rua in ruas_compartilhadas(digitos):
         return True
