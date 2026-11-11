@@ -2260,6 +2260,27 @@ function acoesFalaHtml(item) {
   </div>`;
 }
 
+function fotoPendenciaSrc(item) {
+  if (!item) return "";
+  if (item.foto) return String(item.foto);
+  const texto = String(item.texto || "");
+  const m = texto.match(/Foto:\s*(\/rosto\/[A-Za-z0-9]+\.jpg)/i);
+  if (m) return m[1];
+  const tipo = String(item.tipo || "");
+  const m2 = tipo.match(/^rosto_(?:frequente|suspeito):([A-Za-z0-9]+)/i);
+  if (m2) return `/rosto/${String(m2[1]).toUpperCase()}.jpg`;
+  return "";
+}
+
+function blocoFotoStive(src) {
+  if (!src) return "";
+  return `<figure class="foto-pendencia"><img alt="rosto para confirmação" src="${escapar(src)}?t=${Date.now()}" onerror="this.parentElement.style.display='none'"></figure>`;
+}
+
+function textoPendenciaLimpo(texto) {
+  return String(texto || "").replace(/\s*Foto:\s*\/rosto\/[A-Za-z0-9]+\.jpg/ig, "").replace(/\s*Confirme pela foto[^.]*\./ig, "").trim();
+}
+
 function mostrarFalaHq(item) {
   const caixa = document.getElementById("fala-hq");
   if (!caixa || !item) return;
@@ -2269,7 +2290,8 @@ function mostrarFalaHq(item) {
   caixa.className = `fala-hq sobe${classe ? ` ${classe}` : ""}`;
   const comLinkVivo = !!item.linkVivo && !item.linkHref;
   const link = item.linkHref || comLinkVivo ? linkFalaHtml(item.linkHref ? item : { linkHref: "/painel/cameras", linkTexto: "Visualize ao vivo" }) : "";
-  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${link}${acoesFalaHtml(item)}`;
+  const foto = blocoFotoStive(item.foto || "");
+  caixa.innerHTML = `<strong>${escapar(item.titulo || "Stive")}</strong><p>${escapar(item.texto || "")}</p>${foto}${link}${acoesFalaHtml(item)}`;
   falandoStive = true;
   salvarFalaAtiva(item);
   piscarStive();
@@ -2291,6 +2313,7 @@ function enfileirarFalaStive(chave, titulo, texto, opcoes) {
     tipo: (opcoes && opcoes.tipo) || "",
     classe: (opcoes && opcoes.classe) || "",
     html: (opcoes && opcoes.html) || "",
+    foto: (opcoes && opcoes.foto) || "",
     linkVivo: mereceLinkAoVivo(texto, opcoes),
     linkHref: (opcoes && opcoes.linkHref) || "",
     linkTexto: (opcoes && opcoes.linkTexto) || "",
@@ -2437,19 +2460,18 @@ function atualizarFalaStive(dados) {
   if (pendencias[0]) {
     const item = pendencias[0];
     const textoPend = String(item.texto || "Confirma esta situação?");
-    const fotoMatch = textoPend.match(/Foto:\s*(\/rosto\/[A-Z0-9]+\.jpg)/i);
-    const fotoHtml = fotoMatch
-      ? `<figure style="margin:8px 0"><img alt="rosto" src="${escapar(fotoMatch[1])}?t=${Date.now()}" style="width:120px;height:120px;object-fit:cover;border-radius:12px"></figure>`
-      : "";
+    const fotoSrc = fotoPendenciaSrc(item);
+    const ehRosto = String(item.tipo || "").startsWith("rosto_");
     enfileirarFalaStive(
       `pend:${item.id}`,
-      "O que está acontecendo?",
-      textoPend.replace(/\s*Foto:\s*\/rosto\/[A-Z0-9]+\.jpg/i, "").trim(),
+      ehRosto ? "Você conhece esta pessoa?" : "O que está acontecendo?",
+      textoPendenciaLimpo(textoPend) || "Confirma esta situação?",
       {
         tipo: "pendencia",
         classe: "pergunta",
-        linkVivo: !String(item.tipo || "").startsWith("rosto_"),
-        html: `${fotoHtml}<div class="pendencia"><span>
+        foto: fotoSrc,
+        linkVivo: !ehRosto,
+        html: `<div class="pendencia"><span>
           <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Sim</button>
           <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Não</button>
         </span></div>`,

@@ -247,6 +247,11 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .fala-hq strong { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #4c6fff; margin-bottom: 4px; }
 .fala-hq .pendencia { margin-top: 10px; }
 .fala-hq .pendencia button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; }
+.fala-hq .foto-pendencia, .pendencia .foto-pendencia { margin: 10px 0 4px; }
+.fala-hq .foto-pendencia img, .pendencia .foto-pendencia img {
+  width: 132px; height: 132px; object-fit: cover; border-radius: 14px;
+  border: 1px solid var(--linha); background: #05080f; display: block;
+}
 .fala-hq .link-vivo { margin: 10px 0 0; }
 .fala-hq .link-vivo a { color: #4c6fff; font-weight: 700; text-decoration: none; }
 .fala-hq .link-vivo a:hover { text-decoration: underline; }
@@ -646,7 +651,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=rf116"></script>
+<script src="/painel.js?v=rf117"></script>
 </body>
 </html>"""
 
@@ -979,12 +984,26 @@ window.atualizarStive = (dados) => {
   const caixa = document.getElementById("pendencias-stive");
   if (!caixa) return;
   const lista = dados.pendencias || [];
-  const chave = lista.map((item) => item.id).join("|");
+  const chave = lista.map((item) => item.id + ":" + (item.foto || "")).join("|");
   if (caixa.dataset.chave === chave) return;
   caixa.dataset.chave = chave;
-  caixa.innerHTML = lista.map((item) => `<div class="pendencia"><p>${item.texto}</p>
-    <span><button type="button" data-id="${item.id}" data-resp="sim" data-tipo="${item.tipo}" data-camera="${item.camera}">Sim</button>
-    <button type="button" data-id="${item.id}" data-resp="nao" data-tipo="${item.tipo}" data-camera="${item.camera}">Não</button></span></div>`).join("");
+  caixa.innerHTML = lista.map((item) => {
+    let texto = String(item.texto || "");
+    let foto = String(item.foto || "");
+    const marca = texto.indexOf("Foto:");
+    if (marca >= 0) {
+      const trecho = texto.slice(marca).trim().split(/\\s+/)[1] || "";
+      if (!foto && trecho.indexOf("/rosto/") === 0) foto = trecho;
+      texto = texto.slice(0, marca).trim();
+    }
+    const img = foto
+      ? `<figure class="foto-pendencia"><img alt="rosto" src="${foto}?t=${Date.now()}" onerror="this.parentElement.style.display='none'"></figure>`
+      : "";
+    const textoAttr = String(item.texto || "").replace(/"/g, "&quot;");
+    return `<div class="pendencia"><p>${texto}</p>${img}
+    <span><button type="button" data-id="${item.id}" data-resp="sim" data-tipo="${item.tipo || ""}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">Sim</button>
+    <button type="button" data-id="${item.id}" data-resp="nao" data-tipo="${item.tipo || ""}" data-camera="${item.camera || ""}" data-texto="${textoAttr}">Não</button></span></div>`;
+  }).join("");
 };
 document.getElementById("pendencias-stive").addEventListener("click", async (evento) => {
   const botao = evento.target.closest("button");
@@ -994,7 +1013,7 @@ document.getElementById("pendencias-stive").addEventListener("click", async (eve
   corpo.set("resposta", botao.dataset.resp || "");
   corpo.set("tipo", botao.dataset.tipo || "");
   corpo.set("camera", botao.dataset.camera || "");
-  corpo.set("texto", botao.parentElement.parentElement.querySelector("p").textContent);
+  corpo.set("texto", botao.dataset.texto || botao.parentElement.parentElement.querySelector("p").textContent || "");
   const resposta = await fetch("/agente/stive/confirmar", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: corpo });
   const dados = await resposta.json().catch(() => ({}));
   bolha("stive", dados.fala || "Confirmação registrada.");

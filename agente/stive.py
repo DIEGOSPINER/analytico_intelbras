@@ -281,7 +281,7 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
                 f"rosto_suspeito:{face_freq}",
                 (
                     f"Essa pessoa ({face_freq}) é suspeita? "
-                    f"Se sim, eu cadastro automaticamente como comportamento suspeito. "
+                    f"Confirme pela foto. Se sim, eu cadastro automaticamente como comportamento suspeito. "
                     f"Foto: /rosto/{face_freq}.jpg"
                 ),
                 _time.time(),

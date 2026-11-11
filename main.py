@@ -21,6 +21,7 @@ import time
 import csv
 import os
 import math
+import re
 from datetime import datetime
 from collections import defaultdict, deque
 from pathlib import Path
@@ -2043,6 +2044,7 @@ def _pendencias_vivas(cameras):
                 (
                     f"Você conhece a pessoa do rosto {face_id}? "
                     f"Ela já passou {total} vezes pela área. "
+                    f"Confirme pela foto ao lado. "
                     f"Foto: /rosto/{face_id}.jpg"
                 ),
                 agora,
@@ -2056,11 +2058,23 @@ def _pendencias_vivas(cameras):
         if chave in respondidas or item["expira"] < agora:
             _PENDENCIAS.pop(chave, None)
             continue
+        tipo = str(item.get("tipo") or "")
+        foto = ""
+        texto_item = str(item.get("texto") or "")
+        if "Foto:" in texto_item:
+            achado = re.search(r"Foto:\s*(/rosto/[A-Za-z0-9]+\.jpg)", texto_item, re.I)
+            if achado:
+                foto = achado.group(1)
+        if not foto and ":" in tipo and tipo.lower().startswith("rosto_"):
+            face = tipo.split(":", 1)[1].strip().upper()
+            if face:
+                foto = f"/rosto/{face}.jpg"
         vivos.append({
             "id": chave,
             "texto": item["texto"],
             "camera": item["camera"],
-            "tipo": item["tipo"],
+            "tipo": tipo,
+            "foto": foto,
         })
     return vivos[:6]
 

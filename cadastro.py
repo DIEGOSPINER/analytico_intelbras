@@ -1211,7 +1211,11 @@ def _emails_vizinhos_bairro_camera(camera_ref: str) -> list[str]:
 
 
 def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list[str]:
-    """Placa → dono. Local → sem alerta. Risco → dono+rua+admin; medida protetiva → dono+admin."""
+    """Placa → dono. Local → sem alerta.
+
+    Mandado/suspeito/desaparecida/ex-detento → dono + todos da rua + admin.
+    Medida protetiva → só quem cadastrou + admin.
+    """
     emails = []
     if str(tipo or "").upper() == "PLACA":
         cliente, _veiculo = veiculo_por_placa(ident)
@@ -1229,6 +1233,7 @@ def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list
     emails.extend(_emails_avisos(cliente, camera_ref, somente_alerta=True))
     emails.extend(emails_admin())
     classe = classe_pessoa(pessoa or {})
+    # Rua inteira para mandado, suspeito, desaparecida, ex-detento (não medida protetiva).
     if classe != "medida_protetiva":
         emails.extend(_emails_vizinhos_rua_camera(camera_ref))
     return _emails_unicos(emails)
@@ -1260,7 +1265,11 @@ def emails_ocorrencia_rua(endereco_ou_rua: str) -> list[str]:
 
 
 def pode_ver_match_interesse(documento: str, match: dict | None) -> bool:
-    """Admin vê tudo. Dono vê o próprio. Risco (exceto medida protetiva) também na rua."""
+    """Admin vê tudo. Dono vê o próprio.
+
+    Mandado, suspeito, desaparecida e ex-detento: todos com câmera na mesma rua.
+    Medida protetiva: só quem cadastrou (+ admin).
+    """
     digitos = _digitos(documento)
     if not digitos or not isinstance(match, dict):
         return False
@@ -1286,6 +1295,10 @@ def pode_ver_match_interesse(documento: str, match: dict | None) -> bool:
     camera = str(match.get("camera") or "")
     if not camera:
         return False
+    # Mesma rua do evento → alerta para todos que monitoram a rua.
+    rua = _rua_da_camera(camera)
+    if rua and rua in ruas_compartilhadas(digitos):
+        return True
     return camera in nomes_cameras_visiveis(digitos)
 
 
