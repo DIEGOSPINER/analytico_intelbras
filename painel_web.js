@@ -826,10 +826,27 @@ function popularSelRf(sel, pessoas) {
   sel.dataset.marca = marca;
 }
 
+function idsRfSelecionados(sel) {
+  return Array.from((sel && sel.selectedOptions) || []).map((opcao) => String(opcao.value || "").toUpperCase()).filter(Boolean);
+}
+
+function filtroRfAtivo(sel) {
+  const ids = idsRfSelecionados(sel);
+  return ids.length ? new Set(ids) : null;
+}
+
+function idRfItem(item) {
+  return String((item && (item.id || item.placa)) || "").toUpperCase();
+}
+
+function passaFiltroRf(item, filtro) {
+  if (!filtro || !filtro.size) return true;
+  return filtro.has(idRfItem(item));
+}
+
 function rastrosRfFiltrados(dados, sel) {
-  const selecionados = Array.from((sel && sel.selectedOptions) || []).map((opcao) => opcao.value);
-  const filtro = new Set(selecionados);
-  return (dados.rastros_rf || []).filter((item) => !filtro.size || filtro.has(item.id)).map((item) => ({
+  const filtro = filtroRfAtivo(sel);
+  return (dados.rastros_rf || []).filter((item) => passaFiltroRf(item, filtro)).map((item) => ({
     ...item,
     id: item.id || "",
     lat: Number(item.lat),
@@ -1160,11 +1177,12 @@ function inicio(tela, dados) {
 
 function contagens(tela, dados) {
   if (!tela.dataset.pronto) {
+    // Rótulos sem "hoje"/nome do dia: o filtro de período define o absoluto nos cards.
     tela.innerHTML = `<section class="cartoes">
-      ${cartao("pessoa", "Pessoas hoje", "periodos.dia.Pessoa")}
-      ${cartao("veiculo", "Veículos hoje", "periodos.dia.Veiculo")}
-      ${cartao("animal", "Animais hoje", "periodos.dia.Animal")}
-      ${cartao("camera", "Objetos hoje", "periodos.dia.Objeto")}
+      ${cartao("pessoa", "Pessoas", "periodos.dia.Pessoa")}
+      ${cartao("veiculo", "Veículos", "periodos.dia.Veiculo")}
+      ${cartao("animal", "Animais", "periodos.dia.Animal")}
+      ${cartao("camera", "Objetos", "periodos.dia.Objeto")}
     </section>
     <div id="periodo-contagens"></div>
     <article class="cartao"><h2>Mapa das câmeras</h2><iframe class="mapa mapa-folium" id="mapa-contagens" title="Mapa das câmeras" src="/mapa/folha"></iframe><div id="legenda-contagens"></div></article>
@@ -1172,7 +1190,7 @@ function contagens(tela, dados) {
       <article class="cartao"><h2>Últimos dias</h2><div class="graos" data-grafico="dias">${botoesGrao("dia")}</div><canvas class="grafico" id="dias"></canvas><div id="legenda-dias"></div></article>
       <article class="cartao"><h2>Histórico do dia</h2><div class="graos" data-grafico="horas">${botoesGrao("hora")}</div><canvas class="grafico" id="horas"></canvas></article>
     </section>`;
-    tela.dataset.pronto = "1";
+    tela.dataset.pronto = "contagens-v2";
     tela.querySelectorAll(".graos").forEach((grupo) => {
       grupo.addEventListener("click", (evento) => {
         const botao = evento.target.closest("button[data-grao]");
@@ -1214,14 +1232,13 @@ function contagens(tela, dados) {
     const horas = dados.horas || {};
     linha(document.getElementById("horas"), seriesClasse(horas, (nome) => horas[nome] || []), horasDoDia(), "horas", { fonte: 16 });
   }
+  // Cards sempre absolutos no período do filtro (padrão = últimos 7 dias).
   ["Pessoa", "Veiculo", "Animal", "Objeto"].forEach((classe) => {
     const el = document.querySelector(`[data-num="periodos.dia.${classe}"]`);
     if (!el) return;
-    if (!filtrado) {
-      delete el.dataset.travado;
-      return;
-    }
-    const total = (dados.cubo || []).filter((item) => item.k === classe && dentro(item.d, ini, fim)).reduce((soma, item) => soma + Number(item.n || 0), 0);
+    const total = (dados.cubo || [])
+      .filter((item) => item.k === classe && dentro(item.d, ini, fim))
+      .reduce((soma, item) => soma + Number(item.n || 0), 0);
     el.dataset.travado = "1";
     el.textContent = String(total);
   });
@@ -1284,14 +1301,14 @@ function fotos(ref, agora) {
 }
 
 function alertas(tela, dados) {
-  if (tela.dataset.pronto !== "alertas-rf-v2") {
+  if (tela.dataset.pronto !== "alertas-rf-v3") {
     tela.innerHTML = `<section class="coluna"><div>
       <article class="cartao" id="comparacao"></article>
       <article class="cartao"><h2>Últimos alertas</h2><div id="historico"></div></article>
       <article class="cartao"><h2>Mapa de rastreamento de pessoa de interesse</h2>
         <div id="caixa-rf-alertas" class="caixa-rf">
           <label>Pessoas de interesse<select id="sel-rf-alertas" multiple></select></label>
-          <p>Selecione uma ou várias pessoas para rastrear as câmeras por onde passaram. A seta segue a rota de trânsito pelas vias.</p>
+          <p>O filtro vale para a página inteira: comparação, alertas, ranking “Quem mais passa” e mapa só da pessoa selecionada.</p>
         </div>
         <iframe class="mapa mapa-folium" id="mapa-rf-alertas" title="Mapa de rastreamento" src="/mapa/folha"></iframe>
         <div id="legenda-rf-alertas"></div>
@@ -1299,7 +1316,7 @@ function alertas(tela, dados) {
       <article class="cartao"><h2>Pessoa na área</h2><div id="frase-face" class="leitura"></div></article>
     </div>
     <aside class="cartao"><h2>Quem mais passa</h2><div id="faces"></div></aside></section>`;
-    tela.dataset.pronto = "alertas-rf-v2";
+    tela.dataset.pronto = "alertas-rf-v3";
     const selAlertas = document.getElementById("sel-rf-alertas");
     if (selAlertas) {
       selAlertas.addEventListener("change", () => {
@@ -1307,8 +1324,14 @@ function alertas(tela, dados) {
       });
     }
   }
-  const match = dados.match || null;
-  const chaveMatch = match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "";
+  const selRf = document.getElementById("sel-rf-alertas");
+  popularSelRf(selRf, dados.pessoas_interesse || []);
+  const filtro = filtroRfAtivo(selRf);
+  const chaveFiltro = filtro ? [...filtro].sort().join(",") : "";
+
+  const matchBruto = dados.match || null;
+  const match = matchBruto && passaFiltroRf(matchBruto, filtro) ? matchBruto : null;
+  const chaveMatch = `${chaveFiltro}|${match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "vazio"}`;
   const comparacao = document.getElementById("comparacao");
   if (comparacao.dataset.chave !== chaveMatch) {
     const avisoRisco = match && match.risco
@@ -1322,12 +1345,15 @@ function alertas(tela, dados) {
         <p>${escapar(match.narracao_ia || match.narracao || "")}</p>`;
     } else {
       comparacao.className = "cartao";
-      comparacao.innerHTML = "<h2>Comparação</h2><p>Nenhuma pessoa de interesse na câmera neste momento.</p>";
+      comparacao.innerHTML = filtro
+        ? "<h2>Comparação</h2><p>A pessoa selecionada não está na câmera neste momento.</p>"
+        : "<h2>Comparação</h2><p>Nenhuma pessoa de interesse na câmera neste momento.</p>";
     }
     comparacao.dataset.chave = chaveMatch;
   }
-  const historico = (dados.historico || []).slice(0, 4);
-  const chaveHist = historico.map((item) => `${item.quando}|${item.id}|${item.taxa}`).join(";");
+
+  const historico = (dados.historico || []).filter((item) => passaFiltroRf(item, filtro)).slice(0, 8);
+  const chaveHist = `${chaveFiltro}|${historico.map((item) => `${item.quando}|${item.id}|${item.taxa}`).join(";")}`;
   const caixaHist = document.getElementById("historico");
   if (caixaHist.dataset.chave !== chaveHist) {
     caixaHist.innerHTML = historico.map((item) => {
@@ -1338,26 +1364,32 @@ function alertas(tela, dados) {
       <p>${escapar(item.quando)} · ${escapar(item.rotulo || "SIM")} ${Number(item.taxa || 0).toFixed(2)} · ${escapar(codigo)} · ${escapar(item.camera || "")}</p></div>
       ${fotos(`${item.ref}?t=${encodeURIComponent(item.quando)}`, `${item.agora}?t=${encodeURIComponent(item.quando)}`)}
     </div>`;
-    }).join("") || "<p>Nenhum alerta de rosto ou placa ainda.</p>";
+    }).join("") || (filtro
+      ? "<p>Nenhum alerta desta pessoa ainda.</p>"
+      : "<p>Nenhum alerta de rosto ou placa ainda.</p>");
     caixaHist.dataset.chave = chaveHist;
   }
-  const selRf = document.getElementById("sel-rf-alertas");
-  popularSelRf(selRf, dados.pessoas_interesse || []);
+
   const rastros = rastrosRfFiltrados(dados, selRf);
   enviarMapaRf("mapa-rf-alertas", rastros, {
     sel: selRf,
     assinaturaDados: assinaturaPontosRf(dados.rastros_rf || []),
   });
   atualizarLegendaRf("legenda-rf-alertas", rastros, selRf);
+
   const texto = match
     ? (match.risco
       ? `Pessoa de risco na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
       : `Presença informativa na área. ${match.narracao_ia || match.narracao || "Morador ou pessoa sem classificação de risco."}`)
-    : "Nenhuma pessoa de interesse na área agora.";
+    : (filtro
+      ? "A pessoa selecionada não está na área agora."
+      : "Nenhuma pessoa de interesse na área agora.");
   document.getElementById("frase-face").textContent = texto;
-  document.getElementById("faces").innerHTML = barras((dados.passagens || []).map((item) => ({
+
+  const passagens = (dados.passagens || []).filter((item) => passaFiltroRf(item, filtro));
+  document.getElementById("faces").innerHTML = barras(passagens.map((item) => ({
     id: item.id, nome: item.nome, rotulo: item.id, total: item.total,
-  })));
+  }))) || (filtro ? "<p>Sem passagens contabilizadas para a seleção.</p>" : "<p>Sem passagens ainda.</p>");
 }
 
 function faixaFluxo(minuto) {
@@ -2404,17 +2436,22 @@ function atualizarFalaStive(dados) {
   const pendencias = dados.pendencias || [];
   if (pendencias[0]) {
     const item = pendencias[0];
+    const textoPend = String(item.texto || "Confirma esta situação?");
+    const fotoMatch = textoPend.match(/Foto:\s*(\/rosto\/[A-Z0-9]+\.jpg)/i);
+    const fotoHtml = fotoMatch
+      ? `<figure style="margin:8px 0"><img alt="rosto" src="${escapar(fotoMatch[1])}?t=${Date.now()}" style="width:120px;height:120px;object-fit:cover;border-radius:12px"></figure>`
+      : "";
     enfileirarFalaStive(
       `pend:${item.id}`,
       "O que está acontecendo?",
-      item.texto || "Confirma esta situação?",
+      textoPend.replace(/\s*Foto:\s*\/rosto\/[A-Z0-9]+\.jpg/i, "").trim(),
       {
         tipo: "pendencia",
         classe: "pergunta",
-        linkVivo: true,
-        html: `<div class="pendencia"><span>
-          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Sim</button>
-          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(item.texto || "")}">Não</button>
+        linkVivo: !String(item.tipo || "").startsWith("rosto_"),
+        html: `${fotoHtml}<div class="pendencia"><span>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="sim" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Sim</button>
+          <button type="button" data-id="${escapar(item.id)}" data-resp="nao" data-tipo="${escapar(item.tipo || "")}" data-camera="${escapar(item.camera || "")}" data-texto="${escapar(textoPend)}">Não</button>
         </span></div>`,
       },
     );

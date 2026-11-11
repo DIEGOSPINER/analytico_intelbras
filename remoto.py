@@ -563,6 +563,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
         ("Cadastros", [
             ("/cadastro/cameras", "Câmeras", "camera"),
             ("/cadastro/pessoas", "Pessoas", "pessoa"),
+            ("/cadastro/veiculos", "Placas", "veiculo"),
             ("/cadastro/avisos", "Avisos", "aviso"),
         ]),
         ("Conta", [
@@ -645,7 +646,7 @@ def _moldura(
 <div id="led" class="led branco" title="Risco"></div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=fluxo4"></script>
+<script src="/painel.js?v=rf116"></script>
 </body>
 </html>"""
 
@@ -1084,7 +1085,22 @@ def _form_pessoas(sessao: dict, pessoas: list[dict], aviso: str = "", ok: bool =
 <label>Motivo<select name="motivo" id="motivo">{''.join(motivos)}</select></label>
 {_campo("Referência", "referencia")}
 <label>Código existente<select name="face_id">{''.join(corrigir)}</select></label>
-<label>Foto do rosto<input type="file" name="foto" accept="image/*" required></label>
+<label>Foto do rosto
+  <input type="file" name="foto" id="foto-arquivo" accept="image/*" capture="user">
+</label>
+<div class="caixa-rf" style="margin-top:8px">
+  <p id="dica-camera">No celular use <strong>Tirar foto nativa</strong> (abre a câmera do iPhone/Android). Webcam ao vivo exige HTTPS.</p>
+  <video id="video-captura" autoplay playsinline muted webkit-playsinline style="width:100%;max-width:360px;border-radius:12px;background:#05080f"></video>
+  <canvas id="canvas-captura" hidden></canvas>
+  <input type="hidden" name="foto_base64" id="foto-base64" value="">
+  <div class="acoes-gestao" style="margin-top:8px">
+    <button type="button" id="foto-nativa">Tirar foto nativa</button>
+    <button type="button" id="abrir-camera">Abrir webcam</button>
+    <button type="button" id="tirar-foto">Capturar frame</button>
+    <button type="button" id="fechar-camera">Fechar câmera</button>
+  </div>
+  <img id="preview-captura" alt="" style="display:none;margin-top:8px;max-width:220px;border-radius:12px">
+</div>
 <button type="submit">{_svg(_ICONES["mais"])}Incluir e monitorar</button>
 </form>
 <script>
@@ -1103,9 +1119,143 @@ function filtrarMotivo() {{
 }}
 classe.addEventListener("change", filtrarMotivo);
 filtrarMotivo();
+(function () {{
+  const video = document.getElementById("video-captura");
+  const canvas = document.getElementById("canvas-captura");
+  const hidden = document.getElementById("foto-base64");
+  const arquivo = document.getElementById("foto-arquivo");
+  const preview = document.getElementById("preview-captura");
+  const dica = document.getElementById("dica-camera");
+  const movel = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+  const seguro = window.isSecureContext === true || location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  let stream = null;
+  if (dica && movel && !seguro) {{
+    dica.textContent = "Neste celular o site está em HTTP: use Tirar foto nativa (abre a câmera do aparelho). A webcam ao vivo só funciona em HTTPS.";
+  }}
+  function mostrarPreviewArquivo(file) {{
+    if (!file || !preview) return;
+    const leitor = new FileReader();
+    leitor.onload = () => {{
+      preview.src = leitor.result;
+      preview.style.display = "block";
+    }};
+    leitor.readAsDataURL(file);
+  }}
+  async function pedirStream(constraints) {{
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+      throw new Error("sem-media");
+    }}
+    return navigator.mediaDevices.getUserMedia(constraints);
+  }}
+  async function abrir() {{
+    if (!seguro) {{
+      if (arquivo) arquivo.click();
+      else alert("Abra o portal em HTTPS ou use Tirar foto nativa / Foto do rosto.");
+      return;
+    }}
+    const tentativas = [
+      {{ video: {{ facingMode: {{ ideal: "user" }}, width: {{ ideal: 1280 }}, height: {{ ideal: 720 }} }}, audio: false }},
+      {{ video: {{ facingMode: "user" }}, audio: false }},
+      {{ video: {{ facingMode: "environment" }}, audio: false }},
+      {{ video: true, audio: false }},
+    ];
+    let ultimo = null;
+    for (const opc of tentativas) {{
+      try {{
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+        stream = await pedirStream(opc);
+        video.setAttribute("playsinline", "true");
+        video.setAttribute("webkit-playsinline", "true");
+        video.muted = true;
+        video.srcObject = stream;
+        try {{ await video.play(); }} catch (_) {{}}
+        return;
+      }} catch (erro) {{
+        ultimo = erro;
+      }}
+    }}
+    const msg = (ultimo && ultimo.name) ? ultimo.name : "erro";
+    if (arquivo && (movel || msg === "NotAllowedError" || msg === "NotFoundError" || msg === "sem-media")) {{
+      alert("Não foi possível abrir a webcam ao vivo (" + msg + "). Vou abrir a câmera nativa do aparelho.");
+      arquivo.click();
+      return;
+    }}
+    alert("Não foi possível abrir a câmera (" + msg + "). No celular use Tirar foto nativa, ou acesse o portal em HTTPS.");
+  }}
+  function fechar() {{
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null;
+    video.srcObject = null;
+  }}
+  function capturar() {{
+    if (!video.videoWidth) {{ alert("Abra a webcam antes de capturar, ou use Tirar foto nativa."); return; }}
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const data = canvas.toDataURL("image/jpeg", 0.92);
+    hidden.value = data;
+    if (arquivo) arquivo.value = "";
+    preview.src = data;
+    preview.style.display = "block";
+  }}
+  document.getElementById("foto-nativa").addEventListener("click", () => {{
+    if (arquivo) arquivo.click();
+  }});
+  document.getElementById("abrir-camera").addEventListener("click", abrir);
+  document.getElementById("tirar-foto").addEventListener("click", capturar);
+  document.getElementById("fechar-camera").addEventListener("click", fechar);
+  if (arquivo) arquivo.addEventListener("change", () => {{
+    hidden.value = "";
+    if (arquivo.files && arquivo.files[0]) mostrarPreviewArquivo(arquivo.files[0]);
+    else preview.style.display = "none";
+  }});
+  window.addEventListener("pagehide", fechar);
+}})();
 </script>
 </main>"""
     return _moldura("Pessoas · C4ISTAR MONITOR", miolo, "/cadastro/pessoas", **_sessao_ui(sessao))
+
+
+def _veiculos_da_conta(documento: str) -> list[dict]:
+    try:
+        conta = cadastro.consultar(documento)
+    except Exception:
+        return []
+    return list(conta.get("veiculos") or [])
+
+
+def _form_veiculos(sessao: dict, veiculos: list[dict], aviso: str = "", ok: bool = False) -> str:
+    linhas = []
+    for item in veiculos:
+        placa = _html_seguro(item.get("placa") or "")
+        linhas.append(
+            "<tr>"
+            f"<td>{placa}</td>"
+            f"<td>{_html_seguro(item.get('nome') or '')}</td>"
+            f"<td>{_html_seguro(item.get('motivo') or '')}</td>"
+            "<td><form method='post' action='/cadastro/veiculos/remover'>"
+            f"{_csrf(sessao)}<input type='hidden' name='placa' value='{placa}'>"
+            "<button type='submit'>Excluir</button></form></td></tr>"
+        )
+    tabela = (
+        "<table><tr><th>Placa</th><th>Nome</th><th>Motivo</th><th></th></tr>"
+        + "".join(linhas)
+        + "</table>"
+    ) if linhas else "<p>Nenhuma placa de interesse nesta conta.</p>"
+    miolo = f"""<header class="topo"><div><h1>Placas de interesse</h1>
+<p>As placas entram na busca OCR/LPR e no ranking de Alertas de RF e LPR.</p></div></header>
+<main>
+{tabela}
+{_aviso_html(aviso, ok)}
+<form method="post" action="/cadastro/veiculos">
+{_csrf(sessao)}
+{_campo("Placa", "placa", obrigatorio=True)}
+{_campo("Nome / descrição", "nome")}
+{_campo("Motivo", "motivo")}
+<button type="submit">{_svg(_ICONES["mais"])}Incluir placa</button>
+</form>
+</main>"""
+    return _moldura("Placas · C4ISTAR MONITOR", miolo, "/cadastro/veiculos", **_sessao_ui(sessao))
 
 
 def _aviso_html(texto: str, ok: bool = False) -> str:
@@ -2026,11 +2176,30 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     resumo["pendencias"] = [
         item for item in (resumo.get("pendencias") or [])
         if (item.get("camera") or "") in permitidas
+        or str(item.get("camera") or "") in ("frequentes", "")
+        or str(item.get("tipo") or "").startswith("rosto_")
     ]
+    def _historico_visivel(item: dict) -> bool:
+        if cadastro.pode_ver_match_interesse(digitos, item):
+            return True
+        # Admin em vista do cliente: POIs da conta entram mesmo sem câmera no item.
+        try:
+            tipo_m = str(item.get("tipo") or "").upper()
+            ident_m = str(item.get("id") or "")
+            if tipo_m == "PLACA":
+                cli_m, _ = cadastro.veiculo_por_placa(ident_m)
+            else:
+                cli_m, _ = cadastro.pessoa_por_face(ident_m)
+            if cli_m and cadastro._digitos(cli_m.get("documento")) == digitos:
+                return True
+        except Exception:
+            pass
+        cam = item.get("camera") or ""
+        return bool(cam) and cam in permitidas
+
     resumo["historico"] = [
         item for item in (resumo.get("historico") or [])
-        if (item.get("camera") or "") in permitidas
-        and cadastro.pode_ver_match_interesse(digitos, item)
+        if _historico_visivel(item)
     ]
     resumo["geo"] = [
         item for item in (resumo.get("geo") or [])
@@ -2038,13 +2207,13 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     ]
     resumo["pontos"] = [
         item for item in (resumo.get("pontos") or [])
-        if cadastro.item_na_rua_visivel(
+        if cadastro.item_no_bairro_visivel(
             digitos, item.get("camera") or "", item.get("rua") or item.get("bairro") or "",
         )
     ]
     resumo["app_linhas"] = [
         item for item in (resumo.get("app_linhas") or [])
-        if cadastro.item_na_rua_visivel(
+        if cadastro.item_no_bairro_visivel(
             digitos,
             item.get("camera") or "",
             item.get("rua") or item.get("endereco") or item.get("bairro") or "",
@@ -2068,14 +2237,28 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
         if ordem_led.get(risco, 0) > ordem_led.get(resumo["led"], 0):
             resumo["led"] = risco
     match = resumo.get("match")
-    if isinstance(match, dict) and (
-        (match.get("camera") or "") not in permitidas
-        or not cadastro.pode_ver_match_interesse(digitos, match)
-    ):
-        resumo["match"] = None
-        resumo["narracao"] = ""
-        resumo["narracao_ia"] = ""
-        resumo["voz"] = ""
+    if isinstance(match, dict):
+        cam_ok = (match.get("camera") or "") in permitidas
+        # Vista admin→cliente: também libera se o match é POI da conta filtrada.
+        dono_ok = False
+        try:
+            tipo_m = str(match.get("tipo") or "").upper()
+            ident_m = str(match.get("id") or "")
+            if tipo_m == "PLACA":
+                cli_m, _ = cadastro.veiculo_por_placa(ident_m)
+            else:
+                cli_m, _ = cadastro.pessoa_por_face(ident_m)
+            dono_ok = bool(cli_m) and cadastro._digitos(cli_m.get("documento")) == digitos
+        except Exception:
+            dono_ok = False
+        if not (
+            (cam_ok and cadastro.pode_ver_match_interesse(digitos, match))
+            or dono_ok
+        ):
+            resumo["match"] = None
+            resumo["narracao"] = ""
+            resumo["narracao_ia"] = ""
+            resumo["voz"] = ""
     resumo["cliente_documento"] = digitos
     resumo["perfil_sessao"] = perfil or ""
     return resumo
@@ -2107,31 +2290,52 @@ def _cameras_sessao(portal, sessao: dict) -> list:
 
 def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
     import time
-    from identidade import contar_passagens_faces
+    from identidade import contar_passagens_faces, contar_passagens_placas
 
     nomes = {}
     classes = {}
-    try:
-        interesse = cadastro.interesse_ativo() or {}
-    except Exception:
-        interesse = {}
-    # Interesse: admin vê o da instalação; usuário vê pessoas do próprio cadastro.
-    if perfil != "administrador" and documento:
+    placas_interesse = {}
+    # Admin geral: toda a base. Vista de cliente / usuário: só o cadastro daquele CPF.
+    if perfil == "administrador" or not documento:
+        try:
+            interesse = cadastro.interesse_deteccao_global() or {}
+        except Exception:
+            interesse = {"pessoas": [], "veiculos": []}
+    else:
         try:
             conta = cadastro.consultar(documento)
-            interesse = {"pessoas": list(conta.get("pessoas") or [])}
+            interesse = {
+                "pessoas": list(conta.get("pessoas") or []),
+                "veiculos": list(conta.get("veiculos") or []),
+            }
         except Exception:
-            interesse = {"pessoas": []}
+            interesse = {"pessoas": [], "veiculos": []}
     for pessoa in interesse.get("pessoas") or []:
         ident = str(pessoa.get("face_id") or "").upper()
         if not ident:
             continue
         nomes[ident] = str(pessoa.get("nome") or "")
         classes[ident] = cadastro.classe_pessoa(pessoa)
+    for veiculo in interesse.get("veiculos") or []:
+        placa = "".join(c for c in str(veiculo.get("placa") or "").upper() if c.isalnum())
+        if placa:
+            placas_interesse[placa] = str(veiculo.get("nome") or placa)
+
+    # Memoriza no ranking os 5 rostos mais frequentes ainda não cadastrados.
+    cadastrados = set(nomes)
+    for ident, total in contar_passagens_faces(100000):
+        if ident in cadastrados:
+            continue
+        if total < 3:
+            continue
+        nomes[ident] = f"Rosto frequente {ident}"
+        classes[ident] = "frequente"
+        if sum(1 for c in classes.values() if c == "frequente") >= 5:
+            break
 
     resumo = dict(portal.resumo())
     agora = time.time()
-    chave_nomes = f"{perfil}|{documento}|" + ",".join(sorted(nomes))
+    chave_nomes = f"{perfil}|{documento}|" + ",".join(sorted(nomes)) + "|" + ",".join(sorted(placas_interesse))
     # Cache 2s das leituras pesadas (Postgres/CSV): o poll do portal é 1s.
     extra = _CACHE_DADOS.get("extra")
     if (
@@ -2155,12 +2359,23 @@ def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
 
         linhas = []
         try:
-            if contagem_faces:
-                linhas = contagem_faces(set(nomes))
+            ids_face = {ident for ident, classe in classes.items() if classe != "frequente"}
+            ids_face |= {ident for ident, classe in classes.items() if classe == "frequente"}
+            if contagem_faces and ids_face:
+                linhas = contagem_faces(ids_face)
             if not linhas:
                 linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
         except Exception:
             linhas = [(ident, total) for ident, total in contar_passagens_faces(100000) if ident in nomes]
+        # Garante top 5 frequentes mesmo se o filtro do banco omitir.
+        vistos = {ident for ident, _total in linhas}
+        for ident, total in contar_passagens_faces(100000):
+            if classes.get(ident) != "frequente" or ident in vistos:
+                continue
+            linhas.append((ident, total))
+            if sum(1 for i, _t in linhas if classes.get(i) == "frequente") >= 5:
+                break
+        linhas = sorted(linhas, key=lambda item: (-int(item[1] or 0), item[0]))
 
         contagem = {ident: total for ident, total in linhas}
         hist_db = []
@@ -2246,6 +2461,22 @@ def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
         audio.update(extra["audio_extra"])
         resumo["audio"] = audio
 
+    placar_placas = []
+    try:
+        for placa, total in contar_passagens_placas(100000):
+            if placa not in placas_interesse:
+                continue
+            placar_placas.append({
+                "id": placa,
+                "nome": placas_interesse.get(placa) or placa,
+                "total": total,
+                "classe": "placa",
+            })
+            if len(placar_placas) >= 12:
+                break
+    except Exception:
+        placar_placas = []
+
     resumo.update({
         "itens": int(resumo.get("itens") or 0),
         "faces": len(linhas),
@@ -2259,8 +2490,12 @@ def _dados_json(portal, documento: str = "", perfil: str = "") -> dict:
                 "classe": classes.get(ident, ""),
             }
             for ident, total in linhas[:12]
-        ],
+        ] + placar_placas,
         "pessoas_interesse": extra["pessoas"],
+        "veiculos_interesse": [
+            {"placa": placa, "nome": nome}
+            for placa, nome in list(placas_interesse.items())[:40]
+        ],
         "rastros_rf": extra["rastros_rf"],
         "fonte_dados": extra.get("fonte_dados") or (resumo.get("fonte_dados") or "csv"),
     })
@@ -2367,6 +2602,12 @@ def _tratador(portal: Portal):
                 return
             if caminho == "/cadastro/pessoas/remover":
                 self._remover_pessoa(sessao, campos)
+                return
+            if caminho == "/cadastro/veiculos":
+                self._salvar_veiculo(sessao, campos)
+                return
+            if caminho == "/cadastro/veiculos/remover":
+                self._remover_veiculo(sessao, campos)
                 return
             if caminho == "/conta/senha":
                 self._trocar_senha(sessao, campos)
@@ -2580,6 +2821,9 @@ def _tratador(portal: Portal):
             if caminho == "/cadastro/pessoas":
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), aviso, ok), 200)
                 return
+            if caminho == "/cadastro/veiculos":
+                self._html(_form_veiculos(sessao, _veiculos_da_conta(documento), aviso, ok), 200)
+                return
             if caminho == "/dados.json":
                 if not ver:
                     self.send_error(404)
@@ -2619,6 +2863,18 @@ def _tratador(portal: Portal):
                 return
             foto = arquivos.get("foto") or b""
             imagem = cv2.imdecode(np_from(foto), cv2.IMREAD_COLOR) if foto else None
+            if imagem is None:
+                bruto = _um(campos, "foto_base64")
+                if bruto.startswith("data:image"):
+                    import base64
+                    try:
+                        parte = bruto.split(",", 1)[1]
+                        imagem = cv2.imdecode(np_from(base64.b64decode(parte)), cv2.IMREAD_COLOR)
+                    except Exception:
+                        imagem = None
+            if imagem is None:
+                self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), "Envie um arquivo ou capture a foto pela câmera."), 400)
+                return
             try:
                 if portal._faces is None:
                     raise ValueError("O monitoramento de faces ainda não está pronto.")
@@ -2639,6 +2895,28 @@ def _tratador(portal: Portal):
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), str(exc)), 400)
                 return
             self._redirecionar("/cadastro/pessoas?ok=salvo")
+
+        def _salvar_veiculo(self, sessao: dict, campos: dict):
+            documento = sessao.get("documento") or ""
+            try:
+                cadastro.cadastrar_veiculo(documento, {
+                    "placa": _um(campos, "placa"),
+                    "nome": _um(campos, "nome"),
+                    "motivo": _um(campos, "motivo"),
+                })
+            except ValueError as exc:
+                self._html(_form_veiculos(sessao, _veiculos_da_conta(documento), str(exc)), 400)
+                return
+            self._redirecionar("/cadastro/veiculos?ok=salvo")
+
+        def _remover_veiculo(self, sessao: dict, campos: dict):
+            documento = sessao.get("documento") or ""
+            try:
+                cadastro.remover_veiculo(documento, _um(campos, "placa"))
+            except ValueError as exc:
+                self._html(_form_veiculos(sessao, _veiculos_da_conta(documento), str(exc)), 400)
+                return
+            self._redirecionar("/cadastro/veiculos?ok=removido")
 
         def _remover_pessoa(self, sessao: dict, campos: dict):
             documento = sessao.get("documento") or ""

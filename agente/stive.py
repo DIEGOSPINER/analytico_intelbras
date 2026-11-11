@@ -252,6 +252,13 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         )
     except Exception:
         pass
+    tipo_base = str(tipo or "")
+    face_freq = ""
+    if tipo_base.startswith("rosto_frequente:"):
+        face_freq = tipo_base.split(":", 1)[1].strip().upper()
+    elif tipo_base.startswith("rosto_suspeito:"):
+        face_freq = tipo_base.split(":", 1)[1].strip().upper()
+
     if not sim:
         try:
             from audio_registro import rejeitar_pendente
@@ -259,22 +266,67 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
             rejeitar_pendente(ident)
         except Exception:
             pass
+        if face_freq:
+            return "Anotado. Mantemos só o código do rosto sem cadastro de interesse."
         return "Anotado. Sem disparo — dado ignorado e nada entra na base."
+
+    if tipo_base.startswith("rosto_frequente:") and face_freq:
+        # Segundo passo: se conhece, pergunta se é suspeita para cadastrar.
+        try:
+            from main import _lembrar_pendencia
+            import time as _time
+
+            _lembrar_pendencia(
+                "frequentes",
+                f"rosto_suspeito:{face_freq}",
+                (
+                    f"Essa pessoa ({face_freq}) é suspeita? "
+                    f"Se sim, eu cadastro automaticamente como comportamento suspeito. "
+                    f"Foto: /rosto/{face_freq}.jpg"
+                ),
+                _time.time(),
+            )
+        except Exception:
+            pass
+        return (
+            f"Entendi que você conhece o rosto {face_freq}. "
+            "Ela é suspeita? Responda Sim no próximo balão para cadastrar como interesse."
+        )
+
+    if tipo_base.startswith("rosto_suspeito:") and face_freq:
+        try:
+            from cadastro import cadastrar_pessoa
+
+            cadastrar_pessoa(documento, {
+                "face_id": face_freq,
+                "nome": f"Interesse {face_freq}",
+                "classe": "comportamento_suspeito",
+                "base_legal": "comportamento_suspeito",
+                "motivo": "ameaca",
+                "referencia": "Cadastro automático via Stive (rosto frequente)",
+            })
+            return (
+                f"Cadastrado {face_freq} como pessoa de interesse (comportamento suspeito). "
+                "A partir de agora o monitoramento gera alerta."
+            )
+        except Exception as exc:
+            return f"Não consegui cadastrar automaticamente: {exc}"
+
     natureza = {
         "disparo": "Disparo",
         "audio": "Áudio de risco",
         "veiculo": "Permanência de veículo",
         "pessoa": "Permanência de pessoa",
-    }.get(tipo, "Confirmação de campo")
+    }.get(tipo_base, "Confirmação de campo")
     audio_gravado = False
-    if tipo in ("disparo", "audio", "briga", "socorro"):
+    if tipo_base in ("disparo", "audio", "briga", "socorro"):
         try:
             from audio_registro import confirmar_pendente
 
             audio_gravado = confirmar_pendente(ident)
         except Exception:
             audio_gravado = False
-    if tipo == "disparo":
+    if tipo_base == "disparo":
         try:
             from audio_registro import marcar_disparo_confirmado
 
@@ -290,7 +342,7 @@ def confirmar(documento: str, ident: str, resposta: str, texto: str, camera: str
         "descricao": (texto or natureza) + " Confirmado pelo operador com o Agente Stive.",
         "endereco": camera or "",
     }, usar_modelo=False)
-    if tipo == "disparo":
+    if tipo_base == "disparo":
         return "Confirmado. Disparo lançado na base e risco vermelho ativado na câmera."
     if audio_gravado:
         return "Confirmado. Áudio e ocorrência gravados na base."

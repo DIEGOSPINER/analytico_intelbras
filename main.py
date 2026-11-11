@@ -1404,7 +1404,7 @@ class CameraAnalitica:
         except Exception:
             return
         nomes_face = {
-            str(pessoa.get("face_id") or ""): str(pessoa.get("nome") or "")
+            str(pessoa.get("face_id") or "").upper(): str(pessoa.get("nome") or "")
             for pessoa in interesse.get("pessoas") or []
             if pessoa.get("face_id")
         }
@@ -1415,7 +1415,7 @@ class CameraAnalitica:
         }
         face = None
         for ev in eventos_faces or []:
-            ident = str(ev.get("face_id") or "")
+            ident = str(ev.get("face_id") or "").upper()
             if ident not in nomes_face:
                 continue
             taxa = ev.get("similaridade")
@@ -2020,6 +2020,36 @@ def _pendencias_vivas(cameras):
                 ),
                 agora,
             )
+    # Rosto frequente (não cadastrado): Stive pergunta se o usuário conhece.
+    try:
+        from identidade import contar_passagens_faces
+
+        cadastrados = set()
+        try:
+            from cadastro import interesse_deteccao_global
+
+            for pessoa in (interesse_deteccao_global().get("pessoas") or []):
+                face = str(pessoa.get("face_id") or "").strip().upper()
+                if face:
+                    cadastrados.add(face)
+        except Exception:
+            pass
+        for face_id, total in contar_passagens_faces(30):
+            if face_id in cadastrados or int(total or 0) < 12:
+                continue
+            _lembrar_pendencia(
+                "frequentes",
+                f"rosto_frequente:{face_id}",
+                (
+                    f"Você conhece a pessoa do rosto {face_id}? "
+                    f"Ela já passou {total} vezes pela área. "
+                    f"Foto: /rosto/{face_id}.jpg"
+                ),
+                agora,
+            )
+            break
+    except Exception:
+        pass
     respondidas = _ids_respondidos()
     vivos = []
     for chave, item in list(_PENDENCIAS.items()):
@@ -2561,7 +2591,8 @@ def _publicar_remoto(portal, acervo, cameras_online, matches, estado):
         portal.publicar(f"painel-{chave}", desenhar_monitor(chave, pacote))
     pessoas = {}
     try:
-        interesse = cadastro.interesse_ativo() or {}
+        # Toda a base cadastrada: admin em vista de cliente e LED/morador corretos.
+        interesse = cadastro.interesse_deteccao_global() or {}
     except Exception:
         interesse = {}
     for pessoa in interesse.get("pessoas") or []:

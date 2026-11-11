@@ -43,16 +43,22 @@ MODELO_FACE_FALLBACK = "blaze_face_short_range.tflite"
 FACE_LADO_MINIMO_PX = 24
 FACE_LADO_MINIMO_CADASTRO = 32
 CONF_FACE_MINIMA = 0.50
-COOLDOWN_PASSAGEM_FACE_SEG = 90
+COOLDOWN_PASSAGEM_FACE_SEG = 120
 INTERVALO_AMOSTRA_FACE = 2.5
 TTL_TRACK_SEG = 6
 MAX_AMOSTRAS = 12
 
-# Similaridade de cosseno do SFace. Abaixo disso a foto vira outra pessoa.
-LIMIAR_MATCH = 0.58
-LIMIAR_CERTEZA = 0.64
-MARGEM_MATCH = 0.08
-LIMIAR_FUNDIR = 0.52
+# Similaridade de cosseno do SFace. Mais rígido para reduzir falso positivo em rua.
+LIMIAR_MATCH = 0.68
+LIMIAR_CERTEZA = 0.76
+MARGEM_MATCH = 0.12
+LIMIAR_FUNDIR = 0.72
+# Cadastro/protegidos: só confirma com score alto e margem clara.
+LIMIAR_PROTEGIDO = 0.80
+LIMIAR_PROTEGIDO_RISCO = 0.76
+LIMIAR_PROTEGIDO_LOCAL = 0.72  # morador/prestador/visitante: facilita match sem e-mail
+MARGEM_PROTEGIDO = 0.14
+LIMIAR_AMOSTRA_PROTEGIDO = 0.90
 
 MODELO_SFACE = "face_recognition_sface_2021dec.onnx"
 URL_SFACE = (
@@ -171,6 +177,30 @@ def contar_passagens_faces(limite: int = 14) -> list[tuple[str, int]]:
     linhas = sorted(contagem.items(), key=lambda item: (-item[1], item[0]))
     _CACHE_FACES["quando"] = agora
     _CACHE_FACES["linhas"] = linhas
+    return linhas[:limite]
+
+
+_CACHE_PLACAS = {"quando": 0.0, "linhas": []}
+
+
+def contar_passagens_placas(limite: int = 14) -> list[tuple[str, int]]:
+    """Quantas vezes cada placa passou, do mais frequente ao menos."""
+    agora = time.time()
+    if agora - _CACHE_PLACAS["quando"] < 1 and _CACHE_PLACAS["linhas"]:
+        return _CACHE_PLACAS["linhas"][:limite]
+    contagem = {}
+    if os.path.exists(ARQUIVO_PLACAS):
+        with open(ARQUIVO_PLACAS, encoding="utf-8-sig", newline="") as arquivo:
+            leitor = csv.reader(arquivo, delimiter=";")
+            next(leitor, None)
+            for linha in leitor:
+                if len(linha) > 3 and linha[3].strip():
+                    ident = "".join(c for c in linha[3].upper() if c.isalnum())
+                    if ident:
+                        contagem[ident] = contagem.get(ident, 0) + 1
+    linhas = sorted(contagem.items(), key=lambda item: (-item[1], item[0]))
+    _CACHE_PLACAS["quando"] = agora
+    _CACHE_PLACAS["linhas"] = linhas
     return linhas[:limite]
 
 
@@ -518,33 +548,62 @@ class IdentificadorFaces:
         ranking.sort(reverse=True)
         melhor_score, melhor_id = ranking[0]
         segundo = ranking[1][0] if len(ranking) > 1 else -1.0
+        protegidos = self._ids_protegidos()
+        if melhor_id in protegidos:
+            minimo = self._limiar_protegido(melhor_id)
+            margem = MARGEM_PROTEGIDO
+            # Morador/risco: limiar próprio; margem evita pedestre “parecido”.
+            if melhor_score >= minimo and (
+                segundo < 0 or (melhor_score - segundo) >= margem
+            ):
+                return melhor_id, melhor_score
+            return None, melhor_score
         separado = segundo < 0 or (melhor_score - segundo) >= MARGEM_MATCH
-        aceito = melhor_score >= self.limiar_certeza and separado
-        if aceito and melhor_id in self._ids_protegidos():
-            if melhor_score < max(self.limiar_certeza, 0.70) or (segundo >= 0 and (melhor_score - segundo) < 0.12):
-                return None, melhor_score
-        if aceito:
+        if melhor_score >= self.limiar_certeza and separado:
             return melhor_id, melhor_score
         return None, melhor_score
 
     def _ids_protegidos(self) -> set[str]:
         """Pessoas já cadastradas não absorvem um rosto parecido."""
+        return set(self._meta_protegidos().keys())
+
+    def _meta_protegidos(self) -> dict[str, str]:
+        """face_id → classe cadastrada (risco x local)."""
         agora = time.time()
         if agora - getattr(self, "_protegidos_em", 0) < 2:
-            return getattr(self, "_protegidos", set())
+            return getattr(self, "_protegidos_meta", {})
         try:
-            from cadastro import interesse_ativo
-            interesse = interesse_ativo() or {}
+            from cadastro import interesse_deteccao_global, classe_pessoa
+            interesse = interesse_deteccao_global() or {}
         except Exception:
             interesse = {}
-        ids = {
-            str(pessoa.get("face_id") or "").upper()
-            for pessoa in interesse.get("pessoas") or []
-            if pessoa.get("face_id")
-        }
-        self._protegidos = ids
+            classe_pessoa = lambda p: ""
+        meta = {}
+        for pessoa in interesse.get("pessoas") or []:
+            face = str(pessoa.get("face_id") or "").upper()
+            if not face:
+                continue
+            try:
+                meta[face] = str(classe_pessoa(pessoa) or "")
+            except Exception:
+                meta[face] = ""
+        self._protegidos_meta = meta
+        self._protegidos = set(meta.keys())
         self._protegidos_em = agora
-        return ids
+        return meta
+
+    def _limiar_protegido(self, face_id: str) -> float:
+        """Locais mais permissivos (match verde); risco intermediário; demais rígidos."""
+        classe = self._meta_protegidos().get(str(face_id or "").upper(), "")
+        try:
+            from cadastro import CLASSES_LOCAIS, CLASSES_RISCO
+            if classe in CLASSES_LOCAIS:
+                return LIMIAR_PROTEGIDO_LOCAL
+            if classe in CLASSES_RISCO:
+                return LIMIAR_PROTEGIDO_RISCO
+        except Exception:
+            pass
+        return LIMIAR_PROTEGIDO
 
     def _anexar_vetor(self, pack, vetor, alinhado):
         linha = vetor.reshape(1, -1).astype(np.float32)
@@ -567,14 +626,17 @@ class IdentificadorFaces:
         if vetor is None or face_id not in self.galeria:
             return
         pack = self.galeria[face_id]
+        protegido = face_id in self._ids_protegidos()
         if len(pack["vetores"]) == 0:
             self._anexar_vetor(pack, vetor, alinhado)
             self._salvar_caracteristicas(face_id)
             return
         score = self._score_contra_id(face_id, vetor, alinhado)
-        if score < 0.80:
+        # Protegidos: só enriquece com amostra quase idêntica (evita poluir Diego com pedestres).
+        minimo = LIMIAR_AMOSTRA_PROTEGIDO if protegido else 0.80
+        if score < minimo:
             return
-        if score >= 0.92:
+        if score >= 0.95:
             return
         if len(pack["vetores"]) < MAX_AMOSTRAS:
             self._anexar_vetor(pack, vetor, alinhado)
@@ -669,8 +731,12 @@ class IdentificadorFaces:
                 identidade = pai[identidade]
             return identidade
 
+        protegidos = self._ids_protegidos()
         for indice, origem in enumerate(identidades):
             for destino in identidades[indice + 1:]:
+                # Nunca funde identidade cadastrada com outro rosto (causa falso positivo em massa).
+                if origem in protegidos or destino in protegidos:
+                    continue
                 if self._score_entre_ids(origem, destino) >= self.limiar_fundir:
                     pai[achar(destino)] = achar(origem)
 
@@ -1000,32 +1066,54 @@ class IdentificadorFaces:
         lado = face.get("lado_px", 0)
         pode_cadastrar = lado >= FACE_LADO_MINIMO_CADASTRO and self._crop_util(crop)
 
+        protegidos = self._ids_protegidos()
         if encontrado is not None and (cached is None or encontrado == cached):
             face_id, score, novo = encontrado, score_busca, False
             self._adicionar_amostra(face_id, vetor, alinhado)
         elif encontrado is not None and cached is not None:
             proprio = self._score_contra_id(cached, vetor, alinhado)
-            if score_busca >= self.limiar_certeza and proprio < self.limiar_match:
+            # Não troca track anônimo por protegido sem score alto.
+            if (
+                score_busca >= self.limiar_certeza
+                and proprio < self.limiar_match
+                and (
+                    encontrado not in protegidos
+                    or score_busca >= self._limiar_protegido(encontrado)
+                )
+            ):
                 face_id, score, novo = encontrado, score_busca, False
                 self._adicionar_amostra(face_id, vetor, alinhado)
             else:
                 face_id, score, novo = cached, proprio, False
-                if proprio >= 0.30 and pode_cadastrar:
+                if proprio >= 0.30 and pode_cadastrar and face_id not in protegidos:
                     self._adicionar_amostra(face_id, vetor, alinhado)
         elif cached is not None:
             proprio = self._score_contra_id(cached, vetor, alinhado)
-            if proprio < 0.25 and pode_cadastrar:
+            if cached in protegidos and proprio < self._limiar_protegido(cached):
+                # Track grudado em cadastrado fraco: solta e trata como novo rosto.
+                if pode_cadastrar:
+                    face_id = self._cadastrar(crop, vetor, alinhado)
+                    score, novo = 0.90, True
+                else:
+                    return None, score_busca, False
+            elif proprio < 0.25 and pode_cadastrar:
                 face_id = self._cadastrar(crop, vetor, alinhado)
                 score, novo = 0.90, True
             else:
                 face_id, score, novo = cached, proprio, False
-                if proprio >= 0.30 and pode_cadastrar:
+                if proprio >= 0.30 and pode_cadastrar and face_id not in protegidos:
                     self._adicionar_amostra(face_id, vetor, alinhado)
         elif pode_cadastrar:
             face_id = self._cadastrar(crop, vetor, alinhado)
             score, novo = 0.90, True
         else:
             return None, score_busca, False
+
+        # Passageiro de evento não grava match de protegido sem limiar alto.
+        if face_id in protegidos and float(score) < self._limiar_protegido(face_id):
+            self.track_para_face.pop(chave, None)
+            self.track_score.pop(chave, None)
+            return None, float(score), False
 
         self.track_para_face[chave] = face_id
         self.track_score[chave] = float(score)
