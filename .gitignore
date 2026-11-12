@@ -19,6 +19,8 @@ ocorrencias_informadas.json
 fenomenos.json
 memoria_rua.json
 dataverse_token.json
+grupos_seguranca.json
+vizinhos_chat.json
 relatorios/
 
 # Modelos e pesos

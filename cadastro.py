@@ -1938,6 +1938,13 @@ def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list
     # Bairro (ex.: Stella Maris): Vanessa na Lidia Borja recebe invasor visto na Carlos Ott.
     if classe != "medida_protetiva":
         emails.extend(_emails_vizinhos_bairro_camera(camera_ref))
+    # Grupos de segurança: membros de outros logradouros também recebem o alerta.
+    try:
+        from grupos_seguranca import emails_membros_grupos_camera
+
+        emails.extend(emails_membros_grupos_camera(camera_ref))
+    except Exception:
+        pass
     return _emails_unicos(emails)
 
 
@@ -2155,10 +2162,17 @@ def nomes_cameras_visiveis(documento: str, perfil: str = "") -> set[str]:
                     nomes.add(nome)
         return nomes
     proprias = nomes_cameras_conta(digitos)
-    if not proprias and perfil not in ("lider_cidade", "lider_bairro"):
-        return set()
-    ruas, bairros, cidades = _escopos_geograficos(digitos)
     visiveis = set(proprias)
+    try:
+        from grupos_seguranca import nomes_cameras_compartilhadas
+
+        visiveis.update(nomes_cameras_compartilhadas(digitos))
+    except Exception:
+        pass
+    if not proprias and perfil not in ("lider_cidade", "lider_bairro"):
+        # Sem câmera própria: só enxerga o que o grupo de segurança compartilhou.
+        return visiveis
+    ruas, bairros, cidades = _escopos_geograficos(digitos)
     for item_cli in listar_clientes():
         if item_cli.get("ativo") is False:
             continue

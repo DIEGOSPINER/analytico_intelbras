@@ -46,6 +46,26 @@ VINCULOS_STIVE = {
         "interesse_compartilhado",
     }
 }
+
+# Reciprocidade ao gravar vínculo entre usuários (cônjuges e pares simétricos).
+INVERSOS_VINCULO = {
+    "esposa": "marido",
+    "marido": "esposa",
+    "pai": "familiar",
+    "mae": "familiar",
+}
+VINCULOS_SIMETRICOS = {
+    "amigo",
+    "conhecido",
+    "familiar",
+    "vizinho",
+    "colega",
+    "namorado",
+    "primo",
+    "tio",
+    "irmao",
+    "interesse_compartilhado",
+}
 _TRAVA = threading.RLock()
 _neo = None
 _neo_ok = False
@@ -257,8 +277,9 @@ def relacionar_usuarios(
     nome_destino: str = "",
     email_destino: str = "",
     meta: dict | None = None,
+    reciproco: bool = True,
 ) -> dict:
-    """Vínculo entre duas contas (ex.: Diego —esposa→ Vanessa)."""
+    """Vínculo entre duas contas (ex.: Diego —esposa→ Vanessa e Vanessa —marido→ Diego)."""
     tipo = str(tipo or "").strip().lower()
     if tipo not in TIPOS_VINCULO:
         raise ValueError("Escolha um tipo de vínculo válido.")
@@ -280,7 +301,22 @@ def relacionar_usuarios(
         "entre_usuarios": True,
         **meta_limpo,
     }
-    return _gravar_aresta(origem, destino, tipo, props)
+    aresta = _gravar_aresta(origem, destino, tipo, props)
+    if reciproco:
+        tipo_inv = INVERSOS_VINCULO.get(tipo)
+        if not tipo_inv and tipo in VINCULOS_SIMETRICOS:
+            tipo_inv = tipo
+        if tipo_inv and tipo_inv in TIPOS_VINCULO:
+            props_inv = {
+                **meta_limpo,
+                "tipo": tipo_inv,
+                "rotulo": TIPOS_VINCULO.get(tipo_inv, tipo_inv),
+                "quando": _agora(),
+                "entre_usuarios": True,
+                "reciproco_de": tipo,
+            }
+            _gravar_aresta(destino, origem, tipo_inv, props_inv)
+    return aresta
 
 
 def relacionar_faces(
@@ -351,6 +387,77 @@ def _reparar_arestas(dados: dict) -> bool:
     return mudou
 
 
+def garantir_vinculos_piloto() -> None:
+    """Diego↔Vanessa cônjuges; F0010/F2553 = mesma Vanessa (um só glifo de usuário)."""
+    diego = "02401001581"
+    vanessa = "01123242585"
+    try:
+        from cadastro import cliente_por_documento
+
+        cli_d = cliente_por_documento(diego) or {}
+        cli_v = cliente_por_documento(vanessa) or {}
+    except Exception:
+        cli_d, cli_v = {}, {}
+    if not cli_d or not cli_v:
+        return
+    relacionar_usuarios(
+        diego,
+        vanessa,
+        "esposa",
+        nome_origem=str(cli_d.get("nome") or "Diego Renan"),
+        email_origem=str(cli_d.get("email") or ""),
+        nome_destino=str(cli_v.get("nome") or "Vanessa"),
+        email_destino=str(cli_v.get("email") or ""),
+        meta={"fonte": "piloto_conjuges"},
+        reciproco=True,
+    )
+    # Faces do próprio cliente ficam só como alias do usuário — sem «mesmo_individuo».
+    garantir_pessoa("F2553", nome=str(cli_v.get("nome") or "Vanessa"), classe="morador", documento_cliente=vanessa)
+    garantir_pessoa("F0010", nome=str(cli_v.get("nome") or "Vanessa"), classe="morador", documento_cliente=vanessa)
+    with _TRAVA:
+        dados = _ler()
+        mudou = False
+        novas = []
+        for a in list(dados.get("arestas") or []):
+            tipo = str(a.get("tipo") or "")
+            origem = a.get("origem")
+            destino = a.get("destino")
+            # Remove duplicidade F0010↔F2553 (mesma pessoa/conta).
+            if tipo == "mesmo_individuo" and {origem, destino} == {"F:F0010", "F:F2553"}:
+                mudou = True
+                continue
+            # Cônjuges apontando ao próprio rosto da Vanessa → só U↔U.
+            if (
+                origem == f"U:{diego}"
+                and destino in {"F:F0010", "F:F2553"}
+                and tipo in {"esposa", "marido", "namorado", "familiar"}
+            ):
+                a = dict(a)
+                a["destino"] = f"U:{vanessa}"
+                a["entre_usuarios"] = True
+                mudou = True
+            # Remove conhecido/monitora espúrios Diego→rosto da Vanessa (conta dela).
+            if (
+                origem == f"U:{diego}"
+                and destino in {"F:F0010", "F:F2553", f"U:{vanessa}"}
+                and tipo in {"conhecido", "monitora"}
+            ):
+                mudou = True
+                continue
+            novas.append(a)
+        if mudou:
+            vistos = set()
+            limpas = []
+            for a in novas:
+                chave = (a.get("origem"), a.get("destino"), a.get("tipo"))
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                limpas.append(a)
+            dados["arestas"] = limpas
+            _gravar(dados)
+
+
 def sincronizar_cadastros() -> None:
     """Espelha clientes/pessoas no grafo local e no Neo4j (se configurado)."""
     try:
@@ -412,17 +519,20 @@ def sincronizar_cadastros() -> None:
                 if not face:
                     continue
                 f = f"F:{face}"
+                eh_proprio = pessoa.get("eh_proprio") is True or face == foto_cli
                 props_p = {
                     "face_id": face,
                     "nome": str(pessoa.get("nome") or face),
                     "classe": str(pessoa.get("classe") or pessoa.get("base_legal") or ""),
                     "atualizado": _agora(),
                 }
-                if pessoa.get("eh_proprio") is True or face == foto_cli:
+                if eh_proprio:
                     props_p["documento_cliente"] = digitos
                 _upsert_no_local(dados, f, "pessoa", props_p)
                 nos_neo.append((f, "pessoa", props_p))
-                # Dono cadastrou a pessoa: vínculo implícito de monitoramento.
+                # Próprio usuário: só aresta «proprio» (sem «monitora» reflexivo).
+                if eh_proprio:
+                    continue
                 if not any(
                     a.get("origem") == u and a.get("destino") == f and a.get("tipo") == "monitora"
                     for a in dados["arestas"]
@@ -438,11 +548,29 @@ def sincronizar_cadastros() -> None:
                     "tipo": "monitora",
                     "rotulo": TIPOS_VINCULO.get("monitora", "Monitora"),
                 }))
+            # Remove «monitora» do próprio rosto (limpa grifo Diego→Diego).
+            if foto_cli:
+                f_foto = f"F:{foto_cli}"
+                dados["arestas"] = [
+                    a for a in dados["arestas"]
+                    if not (
+                        a.get("origem") == u
+                        and a.get("destino") == f_foto
+                        and a.get("tipo") == "monitora"
+                    )
+                ]
         # Espelha também arestas já existentes (Stive, cruzamentos, etc.).
         for a in dados.get("arestas") or []:
             o, d, t = a.get("origem"), a.get("destino"), str(a.get("tipo") or "")
             if not o or not d or not t:
                 continue
+            # Não republica monitora reflexivo U→própria face.
+            if t == "monitora" and str(o).startswith("U:") and str(d).startswith("F:"):
+                face_d = str(d)[2:]
+                doc_u = str(o)[2:]
+                props_no = (dados.get("nos") or {}).get(d) or {}
+                if str(props_no.get("documento_cliente") or "") == doc_u and face_d:
+                    continue
             props_a = {
                 chave: valor
                 for chave, valor in dict(a).items()
@@ -454,6 +582,10 @@ def sincronizar_cadastros() -> None:
         _neo_upsert(no_id, rotulo, props)
     for origem, destino, tipo, props in arestas_neo:
         _neo_aresta(origem, destino, tipo, props)
+    try:
+        garantir_vinculos_piloto()
+    except Exception as exc:
+        print(f"Vínculos piloto: {exc}")
 
 
 def _subgrafo(nos: list[dict], arestas: list[dict], foco: set[str]) -> tuple[list[dict], list[dict]]:
@@ -473,13 +605,53 @@ def _subgrafo(nos: list[dict], arestas: list[dict], foco: set[str]) -> tuple[lis
     return nos_f, arestas_f
 
 
+def _alias_face_para_usuario(dados: dict) -> dict[str, str]:
+    """Face do próprio cliente → nó do usuário (um glifo só)."""
+    alias: dict[str, str] = {}
+    nos = dados.get("nos") or {}
+    for no_id, props in nos.items():
+        if not str(no_id).startswith("F:"):
+            continue
+        digitos = _digitos((props or {}).get("documento_cliente") or "")
+        if digitos and f"U:{digitos}" in nos:
+            alias[no_id] = f"U:{digitos}"
+    # Propaga por «mesmo_individuo» até cair no usuário.
+    mudou = True
+    while mudou:
+        mudou = False
+        for a in dados.get("arestas") or []:
+            if str(a.get("tipo") or "") != "mesmo_individuo":
+                continue
+            o, d = a.get("origem"), a.get("destino")
+            if o in alias and d not in alias:
+                alias[d] = alias[o]
+                mudou = True
+            elif d in alias and o not in alias:
+                alias[o] = alias[d]
+                mudou = True
+    return alias
+
+
 def exportar_vis(documento: str = "", face_id: str = "") -> dict:
     """Payload para vis-network: nodes + edges. Filtros opcionais de cliente/pessoa."""
     sincronizar_cadastros()
     with _TRAVA:
         dados = _ler()
+    alias = _alias_face_para_usuario(dados)
+
+    def _resolver(no_id: str) -> str:
+        atual = str(no_id or "")
+        vistos = set()
+        while atual in alias and atual not in vistos:
+            vistos.add(atual)
+            atual = alias[atual]
+        return atual
+
     nos = []
     for no_id, props in (dados.get("nos") or {}).items():
+        if no_id in alias:
+            # Face do próprio usuário: some no glifo U:.
+            continue
         rotulo = props.get("rotulo") or "No"
         nome = props.get("nome") or no_id
         cor = "#4c8dff" if rotulo == "usuario" else "#ff5c7a"
@@ -497,7 +669,7 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
             "color": cor,
             "title": f"{rotulo}: {nome}",
             "face_id": props.get("face_id") or "",
-            "documento": props.get("documento") or "",
+            "documento": props.get("documento") or props.get("documento_cliente") or "",
             "classe": props.get("classe") or "",
         })
     cores_aresta = {
@@ -522,6 +694,7 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
     }
     arestas = []
     contagem_tipos: dict[str, int] = {}
+    vistos_aresta: set[tuple] = set()
     for idx, a in enumerate(dados.get("arestas") or []):
         tipo_a = str(a.get("tipo") or "")
         # Corrige arestas antigas em que meta.origem sobrescreveu o usuário.
@@ -534,33 +707,62 @@ def exportar_vis(documento: str = "", face_id: str = "") -> dict:
             origem_a = f"U:{doc_meta}" if doc_meta else None
         if not origem_a or not a.get("destino"):
             continue
+        # Grifo limpo: sem «proprio» / «mesmo_individuo» (vira um único glifo).
+        if tipo_a in {"proprio", "mesmo_individuo"}:
+            continue
+        destino_bruto = a.get("destino")
+        origem_r = _resolver(origem_a)
+        destino_r = _resolver(destino_bruto)
+        if not origem_r or not destino_r or origem_r == destino_r:
+            continue
+        # Face do próprio cliente virou U: — não vira «monitora/conhecido» entre usuários.
+        if (
+            tipo_a in {"monitora", "conhecido"}
+            and str(destino_bruto) in alias
+            and str(destino_r).startswith("U:")
+            and str(origem_r).startswith("U:")
+        ):
+            continue
+        chave_a = (origem_r, destino_r, tipo_a)
+        if chave_a in vistos_aresta:
+            continue
+        vistos_aresta.add(chave_a)
         rotulo_a = a.get("rotulo") or TIPOS_VINCULO.get(tipo_a) or tipo_a or ""
         contagem_tipos[tipo_a or "outro"] = contagem_tipos.get(tipo_a or "outro", 0) + 1
         entre_usuarios = bool(a.get("entre_usuarios")) or (
-            str(origem_a).startswith("U:") and str(a.get("destino") or "").startswith("U:")
+            str(origem_r).startswith("U:") and str(destino_r).startswith("U:")
         )
         arestas.append({
             "id": idx + 1,
-            "from": origem_a,
-            "to": a.get("destino"),
+            "from": origem_r,
+            "to": destino_r,
             "label": rotulo_a,
             "arrows": "to",
             "tipo": tipo_a,
             "title": f"{rotulo_a}" + (f" · {a.get('quando')}" if a.get("quando") else ""),
             "color": {"color": cores_aresta.get(tipo_a, "#7a8799"), "highlight": "#e8eefc"},
-            "width": 3 if entre_usuarios or tipo_a in {"mesmo_individuo", "interesse_compartilhado"} else (
-                2 if tipo_a in VINCULOS_STIVE or tipo_a in {"medida_protege", "proprio", "monitora"} else 1
+            "width": 3 if entre_usuarios or tipo_a in {"interesse_compartilhado"} else (
+                2 if tipo_a in VINCULOS_STIVE or tipo_a in {"medida_protege", "monitora"} else 1
             ),
             "font": {"color": cores_aresta.get(tipo_a, "#a7b3c7"), "size": 12, "strokeWidth": 0},
         })
-
+    usados = {e["from"] for e in arestas} | {e["to"] for e in arestas}
     digitos = _digitos(documento)
+    if digitos:
+        usados.add(f"U:{digitos}")
+    nos = [
+        n for n in nos
+        if n.get("id") in usados
+        or (n.get("group") == "usuario")
+        or (str(n.get("id") or "").startswith("U:"))
+    ]
+
     face = str(face_id or "").strip().upper()
     foco: set[str] = set()
     if digitos:
         foco.add(f"U:{digitos}")
     if face:
-        foco.add(f"F:{face}")
+        foco.add(_resolver(f"F:{face}"))
     if foco:
         nos, arestas = _subgrafo(nos, arestas, foco)
 

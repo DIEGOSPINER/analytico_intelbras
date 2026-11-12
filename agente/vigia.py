@@ -369,6 +369,18 @@ class Vigia:
             if alerta.get("descricao"):
                 linhas.append(str(alerta["descricao"]))
             texto = "\n".join(linhas)
+            try:
+                from grupos_seguranca import grupos_da_camera
+
+                nomes_g = [g.get("nome") for g in grupos_da_camera(camera) if g.get("nome")]
+                if nomes_g:
+                    rotulo = ", ".join(nomes_g)
+                    pref = f"Alerta do grupo {rotulo}: "
+                    if not str(assunto).lower().startswith("alerta do grupo"):
+                        assunto = pref + assunto
+                    texto = pref + texto
+            except Exception:
+                pass
             enviar_email(assunto, texto, destinos=destinos)
             if whatsapp_configurado():
                 enviar_whatsapp(texto)

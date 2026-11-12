@@ -1334,13 +1334,19 @@ function alertas(tela, dados) {
   const chaveMatch = `${chaveFiltro}|${match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "vazio"}`;
   const comparacao = document.getElementById("comparacao");
   if (comparacao.dataset.chave !== chaveMatch) {
+    const nomesGrupo = (match && Array.isArray(match.grupos))
+      ? match.grupos.map((g) => g && g.nome).filter(Boolean).join(", ")
+      : "";
+    const avisoGrupo = nomesGrupo
+      ? `<p><span class="luz-info"></span> Alerta do grupo ${escapar(nomesGrupo)}</p>`
+      : "";
     const avisoRisco = match && match.risco
       ? `<p><span class="luz-alerta"></span> Atenção, Pessoa de risco na área!</p>`
       : (match ? `<p><span class="luz-info"></span> Presença informativa na área.</p>` : "");
     if (match) {
       comparacao.className = `cartao sobe${match.risco ? "" : " verde"}`;
-      comparacao.innerHTML = `${avisoRisco}<h2>${escapar(match.nome || match.id)}</h2>
-        <p>Código ${escapar(match.id || "")} · similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes · ${escapar(match.camera || "")}</p>
+      comparacao.innerHTML = `${avisoGrupo}${avisoRisco}<h2>${escapar(match.nome || match.id)}</h2>
+        <p>Código ${escapar(match.id || "")} · similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes · ${escapar(match.camera || "")}${nomesGrupo ? ` · grupo ${escapar(nomesGrupo)}` : ""}</p>
         ${fotos(`/img/match-ref.jpg?t=${Date.now()}`, `/img/match-agora.jpg?t=${Date.now()}`)}
         <p>${escapar(match.narracao_ia || match.narracao || "")}</p>`;
     } else {
@@ -1377,10 +1383,14 @@ function alertas(tela, dados) {
   });
   atualizarLegendaRf("legenda-rf-alertas", rastros, selRf);
 
+  const grupoFrase = (match && Array.isArray(match.grupos))
+    ? match.grupos.map((g) => g && g.nome).filter(Boolean).join(", ")
+    : "";
+  const prefGrupo = grupoFrase ? `Alerta do grupo ${grupoFrase}: ` : "";
   const texto = match
     ? (match.risco
-      ? `Pessoa de risco na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
-      : `Presença informativa na área. ${match.narracao_ia || match.narracao || "Morador ou pessoa sem classificação de risco."}`)
+      ? `${prefGrupo}Pessoa de risco na área. ${match.narracao_ia || match.narracao || "O movimento aparece quando o rosto é acompanhado."}`
+      : `${prefGrupo}Presença informativa na área. ${match.narracao_ia || match.narracao || "Morador ou pessoa sem classificação de risco."}`)
     : (filtro
       ? "A pessoa selecionada não está na área agora."
       : "Nenhuma pessoa de interesse na área agora.");
@@ -1547,14 +1557,20 @@ function risco(tela, dados) {
   const chaveSubida = match ? `${match.id}|${match.taxa}|${match.passagens}|${match.risco}|${match.narracao_ia || match.narracao || ""}` : "";
   if (subida && subida.dataset.chave !== chaveSubida) {
     if (match) {
+      const nomesG = Array.isArray(match.grupos)
+        ? match.grupos.map((g) => g && g.nome).filter(Boolean).join(", ")
+        : "";
+      const linhaGrupo = nomesG
+        ? `<p><span class="luz-info"></span> Alerta do grupo ${escapar(nomesG)}</p>`
+        : "";
       subida.className = `cartao sobe${match.risco ? "" : " verde"}`;
       subida.innerHTML = match.risco
-        ? `<p><span class="luz-alerta"></span> Pessoa de risco detectada</p>
+        ? `${linhaGrupo}<p><span class="luz-alerta"></span> Pessoa de risco detectada</p>
         <h2>${escapar(match.nome || match.id)}</h2>
         <p>Similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes</p>
         <div class="rostos"><figure><img alt="" src="/img/match-agora.jpg?t=${Date.now()}"></figure></div>
         <p>${escapar(match.narracao_ia || match.narracao || "")}</p>`
-        : `<p><span class="luz-info"></span> Presença informativa</p>
+        : `${linhaGrupo}<p><span class="luz-info"></span> Presença informativa</p>
         <h2>${escapar(match.nome || match.id)}</h2>
         <p>Similaridade ${Number(match.taxa || 0).toFixed(2)} · reapareceu ${match.passagens || 0} vezes</p>
         <div class="rostos"><figure><img alt="" src="/img/match-agora.jpg?t=${Date.now()}"></figure></div>
@@ -2242,6 +2258,7 @@ const SELOS_NAV = {
   alertas: { id: "selo-alertas", path: "/painel/3" },
   risco: { id: "selo-risco", path: "/painel/risco" },
   audio: { id: "selo-audio", path: "/painel/audio" },
+  vizinhos: { id: "selo-vizinhos", path: "/vizinhos" },
 };
 
 function caminhoAtual() {
@@ -2295,6 +2312,11 @@ function eventosSelo(tipo, dados) {
       (camera.permanencias || []).forEach((frase) => chaves.push(`perm:${camera.nome}|${frase}`));
     });
     return chaves;
+  }
+  if (tipo === "vizinhos") {
+    return ((dados.vizinhos || {}).alertas || []).map(
+      (item) => `viz:${item.id || ""}|${item.tipo || ""}|${item.quando || ""}`,
+    );
   }
   return [];
 }
@@ -2845,15 +2867,21 @@ function atualizarAlertaRfFlutuante(dados) {
   caixa.hidden = false;
   caixa.classList.remove("fechando", "descendo", "risco", "info");
   void caixa.offsetWidth;
+  const nomesGrupo = Array.isArray(match.grupos)
+    ? match.grupos.map((g) => g && g.nome).filter(Boolean).join(", ")
+    : "";
+  const tituloRf = nomesGrupo
+    ? `Alerta do grupo ${nomesGrupo}`
+    : (risco ? "Alerta RF / LPR" : "Presença informativa");
   caixa.className = `alerta-rf-flutuante${risco ? " risco" : " info"}`;
   caixa.innerHTML = `
-    <strong>${risco ? "Alerta RF / LPR" : "Presença informativa"}</strong>
+    <strong>${escapar(tituloRf)}</strong>
     <div class="rf-fotos">
       <figure><img alt="Referência" src="/img/match-ref.jpg?t=${t}" onerror="this.style.opacity=.35"><figcaption>Referência</figcaption></figure>
       <figure><img alt="Detectada" src="/img/match-agora.jpg?t=${t}" onerror="this.style.opacity=.35"><figcaption>Detectada</figcaption></figure>
     </div>
     <p class="rf-meta"><b>${escapar(match.nome || "Sem nome")}</b> · código ${escapar(match.id || "")}<br>
-    Similaridade ${Number(match.taxa || 0).toFixed(2)} · ${escapar(match.camera || "")}</p>
+    Similaridade ${Number(match.taxa || 0).toFixed(2)} · ${escapar(match.camera || "")}${nomesGrupo ? ` · ${escapar(nomesGrupo)}` : ""}</p>
     <span class="rf-link">Abrir Alertas de RF e LPR →</span>`;
   caixa.onclick = () => { window.location.href = "/painel/3"; };
   timerRfToast = setTimeout(() => {

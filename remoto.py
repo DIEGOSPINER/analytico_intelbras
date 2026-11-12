@@ -210,6 +210,60 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .bolha { max-width: 92%; padding: 12px 14px; border-radius: 16px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .bolha.stive { background: rgba(76,141,255,.16); }
 .bolha.eu { margin-left: auto; background: rgba(255,255,255,.06); }
+.bolha.vizinho { background: rgba(76,141,255,.16); }
+.bolha.vizinho img, .bolha.eu img { max-width: 220px; border-radius: 12px; display: block; margin-top: 6px; }
+.vizinhos-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 16px; min-height: calc(100vh - 130px); }
+.vizinhos-lista, .vizinhos-chat { background: var(--vidro); border: 1px solid var(--linha); border-radius: 18px; padding: 14px; display: flex; flex-direction: column; min-height: 0; }
+.vizinhos-lista h2, .vizinhos-chat h2 { margin: 0 0 10px; font-size: 16px; }
+.vizinho-item { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 12px; padding: 8px; color: inherit; cursor: pointer; }
+.vizinho-item:hover, .vizinho-item.ativo { background: rgba(76,141,255,.12); border-color: var(--linha); }
+.vizinho-item img, .vizinho-avatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: #0b1220; flex: 0 0 auto; }
+.vizinho-item strong { display: block; font-size: 14px; }
+.vizinho-item span { display: block; font-size: 12px; color: var(--mudo); }
+.vizinhos-chat .chat { flex: 1; min-height: 280px; max-height: min(58vh, 520px); margin-bottom: 10px; }
+.vizinhos-chat form { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end; }
+.vizinhos-add { margin-top: 12px; display: grid; gap: 8px; }
+.vizinhos-modal {
+  position: fixed; inset: 0; background: rgba(4,10,18,.72); display: none; place-items: center;
+  z-index: 40; padding: 16px;
+}
+.vizinhos-modal.aberto { display: grid; }
+.vizinhos-modal .caixa {
+  width: min(520px, 100%); max-height: min(86vh, 720px); overflow: auto;
+  background: #101826; border: 1px solid var(--linha); border-radius: 18px; padding: 16px 18px;
+}
+.vizinhos-modal .busca-resultados { display: grid; gap: 8px; margin-top: 10px; }
+.vizinhos-modal .busca-item {
+  display: flex; gap: 10px; align-items: center; width: 100%; text-align: left;
+  background: rgba(255,255,255,.04); border: 1px solid var(--linha); border-radius: 12px; padding: 8px 10px; color: inherit; cursor: pointer;
+}
+.vizinhos-pendencias { margin-top: 14px; display: grid; gap: 8px; }
+.vizinhos-pendencias .pend {
+  border: 1px solid var(--linha); border-radius: 12px; padding: 10px; display: grid; gap: 8px;
+}
+.grupos-seguranca {
+  margin-top: 18px; background: var(--vidro); border: 1px solid var(--linha);
+  border-radius: 18px; padding: 14px 16px;
+}
+.grupos-seguranca h2 { margin: 0 0 8px; font-size: 16px; }
+.grupos-seguranca .grupo-carta {
+  border: 1px solid var(--linha); border-radius: 14px; padding: 12px; margin-top: 10px;
+  display: grid; gap: 8px;
+}
+.grupos-seguranca .grupo-carta strong { font-size: 15px; }
+.grupos-seguranca .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.grupos-seguranca .chip {
+  font-size: 12px; padding: 4px 8px; border-radius: 999px;
+  background: rgba(76,141,255,.12); border: 1px solid var(--linha);
+}
+.grupos-seguranca .acoes-grupo { display: flex; flex-wrap: wrap; gap: 8px; }
+.grupos-seguranca form.criar-grupo {
+  display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; margin-top: 10px;
+}
+@media (max-width: 860px) {
+  .vizinhos-layout { grid-template-columns: 1fr; }
+  .grupos-seguranca form.criar-grupo { grid-template-columns: 1fr; }
+}
 .quadro-stive { min-height: 220px; }
 .acoes-fala { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
 .acoes-fala button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; padding: 8px 12px; border-radius: 10px; font-size: 13px; }
@@ -549,6 +603,7 @@ _ICONES = {
     "audio": "<path d='M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4'/>",
     "sistema": "<rect x='3' y='4' width='18' height='14' rx='2'/><path d='M7 20h10M12 18v2'/><path d='M7 9h2M11 9h2M15 9h2M7 13h10'/>",
     "grafo": "<circle cx='6' cy='12' r='2.5'/><circle cx='18' cy='6' r='2.5'/><circle cx='18' cy='18' r='2.5'/><path d='M8.2 11.2 15.8 7.2M8.2 12.8 15.8 16.8M18 8.5v9'/>",
+    "vizinho": "<circle cx='8' cy='9' r='2.5'/><circle cx='16' cy='9' r='2.5'/><path d='M3 18c.8-2.4 2.4-3.6 5-3.6s4.2 1.2 5 3.6M11 18c.8-2.4 2.4-3.6 5-3.6s4.2 1.2 5 3.6'/>",
 }
 
 
@@ -562,14 +617,11 @@ def _menu(ativo: str, perfil: str = "") -> str:
         ("/painel/3", "Alertas de RF e LPR", "alerta"),
         ("/painel/4", "Mapas", "mapa"),
         ("/painel/risco", "Detector de risco", "alerta"),
-    ]
-    # Áudio e transcrição: somente administrador (cliente usa a IA de áudio sem ver a página).
-    if perfil == "administrador":
-        navegacao.append(("/painel/audio", "Áudio e transcrição", "audio"))
-    navegacao.extend([
         ("/painel/stive", "Agente Stive", "stive"),
+        ("/vizinhos", "Vizinhos", "vizinho"),
         ("/painel/cameras", "Ao vivo", "camera"),
-    ])
+    ]
+    # selo preenchido em _menu via id estável
     grupos = [
         ("Navegação", navegacao),
         ("Cadastros", [
@@ -587,6 +639,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
         grupos.insert(2, ("Administração", [
             ("/gestao", "Gestão de ativos", "cliente"),
             ("/painel/grifos", "Grifos de relacionamento", "grafo"),
+            ("/painel/audio", "Áudio e transcrição", "audio"),
             ("/cadastro/cliente", "Cliente", "cliente"),
             ("/sistema", "Armazenamento e sistema", "sistema"),
         ]))
@@ -596,6 +649,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
         "/painel/3": "<i id='selo-alertas' class='selo' hidden></i>",
         "/painel/risco": "<i id='selo-risco' class='selo' hidden></i>",
         "/painel/audio": "<i id='selo-audio' class='selo' hidden></i>",
+        "/vizinhos": "<i id='selo-vizinhos' class='selo' hidden></i>",
     }
     for titulo_grupo, itens in grupos:
         partes.append(f"<p class='grupo'>{titulo_grupo}</p>")
@@ -977,6 +1031,401 @@ def _audio(perfil: str = "", csrf: str = "", usuario: str = "", documento: str =
         "C4ISTAR MONITOR · Áudio e transcrição", miolo, "/painel/audio",
         perfil=perfil, csrf=csrf, usuario=usuario, documento=documento, vista=vista,
     )
+
+
+def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
+    import grupos_seguranca as grupos
+    import vizinhos as rede
+    from grafo_relacoes import VINCULOS_STIVE
+
+    documento = sessao.get("documento") or ""
+    alertas = rede.listar_alertas(documento)
+    contatos = rede.listar_vizinhos(documento)
+    pendencias = rede.listar_solicitacoes(documento)
+    meus_grupos = grupos.listar_grupos(documento)
+    cliente = cadastro.cliente_por_documento(documento) or {}
+    minhas_cameras = [
+        {"id": str(c.get("id") or "").strip(), "nome": str(c.get("nome") or "").strip()}
+        for c in (cliente.get("cameras") or [])
+        if isinstance(c, dict) and c.get("ativa") is not False and (c.get("id") or c.get("nome"))
+    ]
+    # Ao abrir a tela, limpa o selo (mantém solicitações para aceitar).
+    try:
+        rede.marcar_alertas_vistos(documento)
+    except Exception:
+        pass
+    opcoes_vinculo = "".join(
+        f"<option value='{_html_seguro(chave)}'>{_html_seguro(rotulo)}</option>"
+        for chave, rotulo in VINCULOS_STIVE.items()
+    )
+    lista_html = []
+    for item in contatos:
+        face = _html_seguro(item.get("foto_face_id") or "")
+        avatar = (
+            f"<img class='vizinho-avatar' alt='' src='/rosto/{face}.jpg' onerror=\"this.replaceWith(Object.assign(document.createElement('div'),{{className:'vizinho-avatar'}}))\""
+            if face else "<div class='vizinho-avatar'></div>"
+        )
+        lista_html.append(
+            f"<button type='button' class='vizinho-item' data-doc='{_html_seguro(item.get('documento'))}'>"
+            f"{avatar}<span><strong>{_html_seguro(item.get('nome'))}</strong>"
+            f"<span>{_html_seguro(item.get('vinculo') or 'Vizinho')} · {_html_seguro(item.get('ultima_mensagem') or 'Sem mensagens')}</span></span></button>"
+        )
+    lista = "".join(lista_html) or "<p class='mudo'>Nenhum vizinho aceito ainda.</p>"
+    pend_html = []
+    for item in pendencias.get("recebidas") or []:
+        pend_html.append(
+            f"<div class='pend' data-doc='{_html_seguro(item.get('documento'))}'>"
+            f"<strong>{_html_seguro(item.get('nome'))}</strong> quer te adicionar"
+            f"{(' · ' + _html_seguro(item.get('vinculo'))) if item.get('vinculo') else ''}."
+            f"<span><button type='button' data-acao='aceitar'>Aceitar</button> "
+            f"<button type='button' data-acao='recusar'>Recusar</button></span></div>"
+        )
+    for item in pendencias.get("enviadas") or []:
+        pend_html.append(
+            f"<div class='pend'><strong>{_html_seguro(item.get('nome'))}</strong> — solicitação enviada, aguardando.</div>"
+        )
+    bloco_pend = (
+        f"<div class='vizinhos-pendencias'><h2>Solicitações</h2>{''.join(pend_html)}</div>"
+        if pend_html else ""
+    )
+    notas = [
+        f"<p class='ok'>{_html_seguro(item.get('texto') or '')}</p>"
+        for item in alertas if item.get("tipo") in ("aceite", "info", "recusa")
+    ]
+    bloco_notas = "".join(notas)
+    opcoes_contatos = "".join(
+        f"<option value='{_html_seguro(item.get('documento'))}'>{_html_seguro(item.get('nome'))}</option>"
+        for item in contatos
+    )
+    opcoes_cams = "".join(
+        f"<option value='{_html_seguro(c.get('id') or c.get('nome'))}'>{_html_seguro(c.get('nome'))}</option>"
+        for c in minhas_cameras
+    )
+    digitos_eu = "".join(c for c in str(documento) if c.isdigit())
+    cartas_html = []
+    for g in meus_grupos:
+        membros_txt = ", ".join(
+            _html_seguro(m.get("nome") or m.get("documento") or "")
+            for m in (g.get("membros") or [])
+        ) or "—"
+        cams_html = "".join(
+            f"<span class='chip' title='{_html_seguro(c.get('documento') or '')}'>{_html_seguro(c.get('nome'))}"
+            f"<button type='button' data-acao-grupo='rm-cam' data-gid='{_html_seguro(g.get('id'))}' "
+            f"data-cam='{_html_seguro(c.get('camera_id'))}' style='margin-left:4px;border:0;background:transparent;color:inherit;cursor:pointer'>×</button></span>"
+            for c in (g.get("cameras") or [])
+        ) or "<span class='mudo'>Nenhuma câmera compartilhada ainda.</span>"
+        acoes = [
+            f"<label>Adicionar vizinho<select data-gid='{_html_seguro(g.get('id'))}' class='sel-membro-grupo'>"
+            f"<option value=''>Escolher contato…</option>{opcoes_contatos}</select></label>",
+            f"<label>Compartilhar câmera<select data-gid='{_html_seguro(g.get('id'))}' class='sel-cam-grupo'>"
+            f"<option value=''>Escolher câmera…</option>{opcoes_cams}</select></label>",
+            f"<button type='button' data-acao-grupo='add-membro' data-gid='{_html_seguro(g.get('id'))}'>Incluir membro</button>",
+            f"<button type='button' data-acao-grupo='add-cam' data-gid='{_html_seguro(g.get('id'))}'>Compartilhar</button>",
+        ]
+        if str(g.get("criador") or "") == digitos_eu:
+            acoes.append(
+                f"<button type='button' data-acao-grupo='excluir' data-gid='{_html_seguro(g.get('id'))}'>Excluir grupo</button>"
+            )
+        else:
+            acoes.append(
+                f"<button type='button' data-acao-grupo='sair' data-gid='{_html_seguro(g.get('id'))}'>Sair do grupo</button>"
+            )
+        cartas_html.append(
+            f"<div class='grupo-carta' data-gid='{_html_seguro(g.get('id'))}'>"
+            f"<strong>{_html_seguro(g.get('nome'))}</strong>"
+            f"<span class='mudo'>{_html_seguro(g.get('descricao') or 'Grupo de segurança entre vizinhos')}</span>"
+            f"<div><span class='mudo'>Membros:</span> {membros_txt}</div>"
+            f"<div class='chips'>{cams_html}</div>"
+            f"<div class='acoes-grupo'>{''.join(acoes)}</div>"
+            f"</div>"
+        )
+    bloco_grupos = "".join(cartas_html) or "<p class='mudo'>Nenhum grupo ainda. Crie o primeiro abaixo.</p>"
+    miolo = f"""<header class="topo"><div><h1>Vizinhos</h1>
+<p>Digite o nome, escolha na lista da plataforma, envie a solicitação. Depois do aceite, a notificação aparece e já podem conversar. Crie grupos de segurança para compartilhar câmeras de ruas distintas e receber alertas em conjunto.</p></div></header>
+<main>
+{_aviso_html(aviso, ok)}
+{bloco_notas}
+<section class="vizinhos-layout">
+<article class="vizinhos-lista">
+<h2>Contatos</h2>
+<button type="button" id="btn-abrir-add-vizinho">{_svg(_ICONES["mais"])}Adicionar vizinho</button>
+<div id="lista-vizinhos" style="margin-top:12px">{lista}</div>
+{bloco_pend}
+</article>
+<article class="vizinhos-chat">
+<h2 id="titulo-chat-vizinho">Conversa</h2>
+<p id="subtitulo-chat-vizinho" class="mudo">Escolha um contato à esquerda.</p>
+<div class="chat" id="chat-vizinhos"></div>
+<form id="form-chat-vizinho" enctype="multipart/form-data">
+{_csrf(sessao)}
+<input type="hidden" name="documento_vizinho" id="doc-chat-vizinho" value="">
+<label style="grid-column:1 / -1">Mensagem
+<input name="texto" id="texto-chat-vizinho" placeholder="Escreva como no WhatsApp" autocomplete="off" disabled>
+</label>
+<label>Foto<input type="file" name="foto" id="foto-chat-vizinho" accept="image/*" disabled></label>
+<button type="submit" id="btn-chat-vizinho" disabled>Enviar</button>
+</form>
+</article>
+</section>
+<section class="grupos-seguranca" id="grupos-seguranca">
+<h2>Grupos de segurança</h2>
+<p class="mudo">Ex.: “Grupo de segurança da área do Flamengo”. Câmeras de ruas diferentes e alertas (incluindo reconhecimento facial) chegam a todos os membros; no ao vivo você também vê as câmeras compartilhadas no grupo.</p>
+{bloco_grupos}
+<form id="form-criar-grupo" class="criar-grupo">
+{_csrf(sessao)}
+<label>Nome do grupo<input name="nome" required minlength="3" placeholder="Grupo de segurança da área do Flamengo"></label>
+<label>Descrição<input name="descricao" placeholder="Condomínio, família, amigos…"></label>
+<button type="submit">Criar grupo</button>
+</form>
+</section>
+</main>
+<div class="vizinhos-modal" id="modal-add-vizinho" hidden>
+<div class="caixa">
+<h2>Adicionar vizinho</h2>
+<p>Digite o nome para procurar quem já tem conta. Se não achar, envie convite por e-mail ou WhatsApp.</p>
+<label>Nome
+<input type="search" id="busca-vizinho-nome" placeholder="Comece a digitar o nome…" autocomplete="off" list="">
+</label>
+<div class="busca-resultados" id="busca-vizinho-resultados" role="listbox" aria-label="Contas encontradas"></div>
+<form id="form-solicitar-vizinho" class="vizinhos-add">
+{_csrf(sessao)}
+<input type="hidden" name="documento_vizinho" id="doc-solicitar-vizinho" value="">
+<p id="nome-solicitar-vizinho" class="mudo">Selecione uma pessoa na lista abaixo do nome.</p>
+<label>Vínculo (opcional)
+<select name="vinculo" id="vinculo-solicitar">
+<option value="">Não informar</option>
+{opcoes_vinculo}
+</select></label>
+<label>Avisar também
+<select name="notificar" id="notificar-solicitar">
+<option value="">Só na plataforma</option>
+<option value="email">E-mail da conta</option>
+<option value="whatsapp">WhatsApp cadastrado</option>
+<option value="ambos">E-mail e WhatsApp</option>
+</select></label>
+<button type="submit" id="btn-solicitar-vizinho" disabled>Enviar solicitação</button>
+</form>
+<hr style="border:0;border-top:1px solid var(--linha);margin:16px 0">
+<form id="form-convidar-externo" class="vizinhos-add">
+{_csrf(sessao)}
+<strong>Convidar por e-mail ou WhatsApp</strong>
+<label>Nome<input name="nome" placeholder="Nome da pessoa"></label>
+<label>E-mail<input type="email" name="email" placeholder="email@exemplo.com"></label>
+<label>WhatsApp<input name="telefone" placeholder="5511999999999"></label>
+<label>Canal
+<select name="canal">
+<option value="email">E-mail</option>
+<option value="whatsapp">WhatsApp</option>
+<option value="ambos">Ambos</option>
+</select></label>
+<button type="submit">Enviar convite</button>
+</form>
+<p style="margin-top:12px"><button type="button" id="btn-fechar-add-vizinho">Fechar</button></p>
+</div>
+</div>
+<script>
+(() => {{
+  const lista = document.getElementById("lista-vizinhos");
+  const chat = document.getElementById("chat-vizinhos");
+  const titulo = document.getElementById("titulo-chat-vizinho");
+  const sub = document.getElementById("subtitulo-chat-vizinho");
+  const docCampo = document.getElementById("doc-chat-vizinho");
+  const texto = document.getElementById("texto-chat-vizinho");
+  const foto = document.getElementById("foto-chat-vizinho");
+  const btn = document.getElementById("btn-chat-vizinho");
+  const form = document.getElementById("form-chat-vizinho");
+  const csrf = (form && form.querySelector("[name=csrf]") || {{}}).value || document.body.dataset.csrf || "";
+  const modal = document.getElementById("modal-add-vizinho");
+  const busca = document.getElementById("busca-vizinho-nome");
+  const resultados = document.getElementById("busca-vizinho-resultados");
+  const formSol = document.getElementById("form-solicitar-vizinho");
+  const docSol = document.getElementById("doc-solicitar-vizinho");
+  const nomeSol = document.getElementById("nome-solicitar-vizinho");
+  const btnSol = document.getElementById("btn-solicitar-vizinho");
+  let ativo = "";
+  let timer = null;
+  let timerBusca = null;
+  function bolha(msg) {{
+    const eu = msg.de === (document.body.dataset.documento || "");
+    const fotoHtml = msg.foto ? `<img alt="foto" src="/vizinhos/foto/${{msg.foto}}">` : "";
+    return `<div class="bolha ${{eu ? "eu" : "vizinho"}}">${{escapar(msg.texto || "")}}${{fotoHtml}}<small style="display:block;opacity:.65;margin-top:4px;font-size:11px">${{escapar(msg.quando || "")}}</small></div>`;
+  }}
+  function escapar(t) {{
+    return String(t || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }}
+  function abrirModal() {{
+    modal.hidden = false;
+    modal.classList.add("aberto");
+    busca.focus();
+  }}
+  function fecharModal() {{
+    modal.classList.remove("aberto");
+    modal.hidden = true;
+  }}
+  document.getElementById("btn-abrir-add-vizinho")?.addEventListener("click", abrirModal);
+  document.getElementById("btn-fechar-add-vizinho")?.addEventListener("click", fecharModal);
+  modal?.addEventListener("click", (ev) => {{ if (ev.target === modal) fecharModal(); }});
+  async function carregarChat(doc, nome) {{
+    ativo = doc;
+    docCampo.value = doc;
+    texto.disabled = false; foto.disabled = false; btn.disabled = false;
+    titulo.textContent = nome || "Conversa";
+    sub.textContent = "Documento " + doc;
+    lista.querySelectorAll(".vizinho-item").forEach((el) => el.classList.toggle("ativo", el.dataset.doc === doc));
+    const resp = await fetch("/vizinhos/chat.json?documento=" + encodeURIComponent(doc));
+    const dados = await resp.json().catch(() => ({{mensagens: []}}));
+    chat.innerHTML = (dados.mensagens || []).map(bolha).join("") || "<p class='mudo'>Nenhuma mensagem ainda.</p>";
+    chat.scrollTop = chat.scrollHeight;
+  }}
+  lista?.addEventListener("click", (ev) => {{
+    const item = ev.target.closest(".vizinho-item");
+    if (!item) return;
+    const nome = item.querySelector("strong")?.textContent || "";
+    carregarChat(item.dataset.doc || "", nome);
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => {{ if (ativo) carregarChat(ativo, titulo.textContent); }}, 4000);
+  }});
+  form?.addEventListener("submit", async (ev) => {{
+    ev.preventDefault();
+    if (!ativo) return;
+    const corpo = new FormData(form);
+    corpo.set("csrf", csrf);
+    corpo.set("documento_vizinho", ativo);
+    const resp = await fetch("/vizinhos/mensagem", {{ method: "POST", body: corpo }});
+    const dados = await resp.json().catch(() => ({{}}));
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível enviar."); return; }}
+    texto.value = "";
+    foto.value = "";
+    carregarChat(ativo, titulo.textContent);
+  }});
+  async function buscarNome() {{
+    const q = (busca.value || "").trim();
+    docSol.value = "";
+    btnSol.disabled = true;
+    nomeSol.textContent = "Selecione uma pessoa na lista.";
+    if (q.length < 2) {{ resultados.innerHTML = "<p class='mudo'>Digite ao menos 2 letras.</p>"; return; }}
+    const resp = await fetch("/vizinhos/buscar.json?q=" + encodeURIComponent(q));
+    const dados = await resp.json().catch(() => ({{itens: []}}));
+    const itens = dados.itens || [];
+    if (!itens.length) {{
+      resultados.innerHTML = "<p class='mudo'>Nenhuma conta na plataforma com este nome. Convide por e-mail/WhatsApp abaixo.</p>";
+      return;
+    }}
+    resultados.innerHTML = itens.map((item) => {{
+      const face = item.foto_face_id || "";
+      const avatar = face
+        ? `<img class="vizinho-avatar" alt="" src="/rosto/${{face}}.jpg" onerror="this.replaceWith(Object.assign(document.createElement('div'),{{className:'vizinho-avatar'}}))">`
+        : `<div class="vizinho-avatar"></div>`;
+      const extra = [item.rua, item.bairro].filter(Boolean).join(" · ");
+      return `<button type="button" class="busca-item" role="option" data-doc="${{escapar(item.documento)}}" data-nome="${{escapar(item.nome)}}">${{avatar}}<span><strong>${{escapar(item.nome)}}</strong><span>${{escapar(extra || "Na plataforma")}}</span></span></button>`;
+    }}).join("");
+  }}
+  busca?.addEventListener("input", () => {{
+    clearTimeout(timerBusca);
+    timerBusca = setTimeout(buscarNome, 180);
+  }});
+  busca?.addEventListener("focus", () => {{
+    if ((busca.value || "").trim().length >= 2) buscarNome();
+  }});
+  resultados?.addEventListener("click", (ev) => {{
+    const item = ev.target.closest(".busca-item");
+    if (!item) return;
+    docSol.value = item.dataset.doc || "";
+    busca.value = item.dataset.nome || "";
+    nomeSol.textContent = "Selecionado: " + (item.dataset.nome || item.dataset.doc || "");
+    btnSol.disabled = !docSol.value;
+    resultados.querySelectorAll(".busca-item").forEach((el) => el.classList.toggle("ativo", el === item));
+  }});
+  formSol?.addEventListener("submit", async (ev) => {{
+    ev.preventDefault();
+    if (!docSol.value) return;
+    const corpo = new URLSearchParams(new FormData(formSol));
+    corpo.set("csrf", csrf);
+    const resp = await fetch("/vizinhos/solicitar", {{ method: "POST", headers: {{ "Content-Type": "application/x-www-form-urlencoded" }}, body: corpo }});
+    const dados = await resp.json().catch(() => ({{}}));
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível enviar a solicitação."); return; }}
+    alert(dados.fala || "Solicitação enviada.");
+    location.reload();
+  }});
+  document.getElementById("form-convidar-externo")?.addEventListener("submit", async (ev) => {{
+    ev.preventDefault();
+    const formC = ev.currentTarget;
+    const corpo = new URLSearchParams(new FormData(formC));
+    corpo.set("csrf", csrf);
+    const resp = await fetch("/vizinhos/convidar", {{ method: "POST", headers: {{ "Content-Type": "application/x-www-form-urlencoded" }}, body: corpo }});
+    const dados = await resp.json().catch(() => ({{}}));
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível convidar."); return; }}
+    if (dados.whatsapp_link) {{
+      if (confirm((dados.fala || "Convite pronto.") + "\\nAbrir WhatsApp?")) window.open(dados.whatsapp_link, "_blank");
+    }} else {{
+      alert(dados.fala || "Convite enviado.");
+    }}
+  }});
+  document.querySelector(".vizinhos-pendencias")?.addEventListener("click", async (ev) => {{
+    const botao = ev.target.closest("button[data-acao]");
+    const caixa = ev.target.closest(".pend");
+    if (!botao || !caixa || !caixa.dataset.doc) return;
+    const corpo = new URLSearchParams();
+    corpo.set("csrf", csrf);
+    corpo.set("documento_vizinho", caixa.dataset.doc);
+    corpo.set("resposta", botao.dataset.acao || "recusar");
+    const resp = await fetch("/vizinhos/responder", {{ method: "POST", headers: {{ "Content-Type": "application/x-www-form-urlencoded" }}, body: corpo }});
+    const dados = await resp.json().catch(() => ({{}}));
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível responder."); return; }}
+    location.reload();
+  }});
+  async function postGrupo(acao, extras) {{
+    const corpo = new URLSearchParams();
+    corpo.set("csrf", csrf);
+    corpo.set("acao", acao);
+    Object.entries(extras || {{}}).forEach(([k, v]) => corpo.set(k, v));
+    const resp = await fetch("/vizinhos/grupos", {{ method: "POST", headers: {{ "Content-Type": "application/x-www-form-urlencoded" }}, body: corpo }});
+    return resp.json().catch(() => ({{}}));
+  }}
+  document.getElementById("form-criar-grupo")?.addEventListener("submit", async (ev) => {{
+    ev.preventDefault();
+    const formG = ev.currentTarget;
+    const dados = await postGrupo("criar", {{
+      nome: formG.nome.value || "",
+      descricao: formG.descricao.value || "",
+    }});
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível criar o grupo."); return; }}
+    location.reload();
+  }});
+  document.getElementById("grupos-seguranca")?.addEventListener("click", async (ev) => {{
+    const botao = ev.target.closest("[data-acao-grupo]");
+    if (!botao) return;
+    const gid = botao.dataset.gid || "";
+    const acao = botao.dataset.acaoGrupo || "";
+    if (acao === "excluir" && !confirm("Excluir este grupo de segurança?")) return;
+    if (acao === "sair" && !confirm("Sair deste grupo?")) return;
+    let extras = {{ grupo_id: gid }};
+    if (acao === "add-membro") {{
+      const sel = document.querySelector(`select.sel-membro-grupo[data-gid="${{gid}}"]`);
+      extras.documento_membro = (sel && sel.value) || "";
+      if (!extras.documento_membro) {{ alert("Escolha um vizinho."); return; }}
+    }}
+    if (acao === "add-cam") {{
+      const sel = document.querySelector(`select.sel-cam-grupo[data-gid="${{gid}}"]`);
+      extras.camera_id = (sel && sel.value) || "";
+      if (!extras.camera_id) {{ alert("Escolha uma câmera."); return; }}
+    }}
+    if (acao === "rm-cam") extras.camera_id = botao.dataset.cam || "";
+    if (acao === "sair") extras.documento_membro = document.body.dataset.documento || "";
+    const mapa = {{
+      "add-membro": "membro",
+      "add-cam": "camera",
+      "rm-cam": "remover_camera",
+      "excluir": "excluir",
+      "sair": "remover_membro",
+    }};
+    const dados = await postGrupo(mapa[acao] || acao, extras);
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível atualizar o grupo."); return; }}
+    location.reload();
+  }});
+}})();
+</script>"""
+    return _moldura("Vizinhos · C4ISTAR MONITOR", miolo, "/vizinhos", **_sessao_ui(sessao))
 
 
 def _ao_vivo(cameras, perfil: str = "", csrf: str = "", usuario: str = "", documento: str = "", vista: str = "") -> str:
@@ -2318,6 +2767,22 @@ def _reconstruir_series(cubo: list) -> tuple[list, list]:
     return serie_dias, dias_empilhados
 
 
+def _anexar_vizinhos(resumo: dict, documento: str) -> dict:
+    digitos = "".join(c for c in str(documento or "") if c.isdigit())
+    try:
+        import vizinhos as rede
+
+        alertas = rede.listar_alertas(digitos) if digitos else []
+    except Exception:
+        alertas = []
+    resumo["vizinhos"] = {
+        "alertas": alertas,
+        "pendentes": len([a for a in alertas if a.get("tipo") == "solicitacao"]),
+        "total": len(alertas),
+    }
+    return resumo
+
+
 def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     """Cliente só vê dados das próprias câmeras/CPF; admin vê tudo."""
     digitos = "".join(c for c in str(documento or "") if c.isdigit())
@@ -2325,12 +2790,12 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
         saida = dict(resumo or {})
         saida["cliente_documento"] = digitos or (saida.get("cliente_documento") or "")
         saida["perfil_sessao"] = perfil or ""
-        return saida
+        return _anexar_vizinhos(saida, digitos)
     permitidas = cadastro.nomes_cameras_visiveis(digitos, perfil)
     if not permitidas:
         vazio = _resumo_vazio_cliente(resumo, digitos)
         vazio["perfil_sessao"] = perfil or ""
-        return vazio
+        return _anexar_vizinhos(vazio, digitos)
 
     resumo = dict(resumo or {})
     vivo = [
@@ -2539,10 +3004,49 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
                     f"Atenção: {match.get('nome') or match.get('id')} "
                     f"(risco) em {cam_alerta or 'câmera do bairro'}."
                 )
+    # Prefixo Stive / RF: alertas canalizados por grupo de segurança.
+    try:
+        from grupos_seguranca import grupos_visiveis_na_camera, prefixo_alerta, prefixo_reconhecimento
+
+        cam_grupo = ""
+        match_vivo = resumo.get("match")
+        if isinstance(match_vivo, dict):
+            cam_grupo = str(match_vivo.get("camera") or "").strip()
+        if not cam_grupo:
+            for cam in resumo.get("cameras_vivo") or []:
+                if (cam.get("risco") or "branco") in ("amarelo", "vermelho", "preto"):
+                    cam_grupo = str(cam.get("nome") or "").strip()
+                    if cam_grupo:
+                        break
+        if cam_grupo:
+            grupos = grupos_visiveis_na_camera(digitos, cam_grupo)
+            if grupos:
+                pref = prefixo_alerta(digitos, cam_grupo)
+                voz = str(resumo.get("voz") or "").strip()
+                if pref and voz and not voz.lower().startswith("alerta do grupo"):
+                    resumo["voz"] = pref + voz
+                if isinstance(match_vivo, dict):
+                    match_vivo = dict(match_vivo)
+                    match_vivo["grupos"] = grupos
+                    trecho_grupo = prefixo_reconhecimento(digitos, cam_grupo)
+                    if trecho_grupo and match_vivo.get("tipo") == "FACE":
+                        base = (
+                            f"Reconhecimento facial {trecho_grupo}: "
+                            f"{match_vivo.get('nome') or match_vivo.get('id') or 'uma pessoa'} "
+                            f"na {cam_grupo}."
+                        )
+                        narr = str(resumo.get("narracao_ia") or resumo.get("narracao") or "").strip()
+                        if narr:
+                            base = f"{base} {narr}"
+                        if not voz or "reconhecimento facial" in voz.lower() or "atenção:" in voz.lower():
+                            resumo["voz"] = (pref + base) if pref else base
+                    resumo["match"] = match_vivo
+    except Exception:
+        pass
     resumo["led"] = led
     resumo["cliente_documento"] = digitos
     resumo["perfil_sessao"] = perfil or ""
-    return resumo
+    return _anexar_vizinhos(resumo, digitos)
 
 
 def _nome_camera_item(item) -> str:
@@ -2846,6 +3350,13 @@ def _tratador(portal: Portal):
                     return
                 self._salvar_cliente(sessao)
                 return
+            if caminho == "/vizinhos/mensagem":
+                sessao = portal.abrir_sessao(self.headers.get("Cookie"), self.headers.get("Authorization"))
+                if sessao is None:
+                    self._json_status(401, {"ok": False, "erro": "Faça login."})
+                    return
+                self._enviar_mensagem_vizinho(sessao)
+                return
             campos = self._ler_formulario()
             if campos is None:
                 return
@@ -2874,6 +3385,18 @@ def _tratador(portal: Portal):
                 return
             if caminho == "/cadastro/cliente/novo":
                 self._criar_cliente(sessao, campos)
+                return
+            if caminho == "/vizinhos/solicitar":
+                self._solicitar_vizinho(sessao, campos)
+                return
+            if caminho == "/vizinhos/responder":
+                self._responder_vizinho(sessao, campos)
+                return
+            if caminho == "/vizinhos/convidar":
+                self._convidar_vizinho(sessao, campos)
+                return
+            if caminho == "/vizinhos/grupos":
+                self._gerir_grupo_seguranca(sessao, campos)
                 return
             if caminho == "/cadastro/cameras":
                 self._salvar_camera(sessao, campos)
@@ -3058,6 +3581,51 @@ def _tratador(portal: Portal):
                 self._bytes(dados, "image/jpeg")
                 return
             aviso, ok = _mensagem(consulta)
+            if caminho == "/vizinhos":
+                self._html(_vizinhos(sessao, aviso, ok), 200)
+                return
+            if caminho == "/vizinhos/buscar.json":
+                import vizinhos as rede
+
+                q = (consulta.get("q") or [""])[0]
+                itens = rede.buscar_contas(q, sessao.get("documento") or "")
+                self._json({"ok": True, "itens": itens})
+                return
+            if caminho == "/vizinhos/chat.json":
+                import vizinhos as rede
+
+                doc_outro = (consulta.get("documento") or [""])[0]
+                try:
+                    msgs = rede.historico_chat(sessao.get("documento") or "", doc_outro)
+                except ValueError as exc:
+                    self._json({"ok": False, "erro": str(exc), "mensagens": []})
+                    return
+                self._json({"ok": True, "mensagens": msgs})
+                return
+            if caminho == "/vizinhos/grupos.json":
+                import grupos_seguranca as grupos
+
+                self._json({
+                    "ok": True,
+                    "grupos": grupos.listar_grupos(sessao.get("documento") or ""),
+                })
+                return
+            if caminho.startswith("/vizinhos/foto/"):
+                import vizinhos as rede
+
+                nome = caminho.rsplit("/", 1)[-1]
+                caminho_f = rede.caminho_foto(nome)
+                if caminho_f is None:
+                    self.send_error(404)
+                    return
+                dados = caminho_f.read_bytes()
+                tipo = "image/jpeg"
+                if nome.lower().endswith(".png"):
+                    tipo = "image/png"
+                elif nome.lower().endswith(".webp"):
+                    tipo = "image/webp"
+                self._bytes(dados, tipo)
+                return
             if caminho == "/mapa/folha":
                 if not ver:
                     self.send_error(404)
@@ -3523,6 +4091,159 @@ def _tratador(portal: Portal):
                 return
             self._redirecionar("/cadastro/cliente?ok=criado")
 
+        def _solicitar_vizinho(self, sessao: dict, campos: dict):
+            import vizinhos as rede
+
+            try:
+                saida = rede.solicitar_vizinho(
+                    sessao.get("documento") or "",
+                    _um(campos, "documento_vizinho"),
+                    _um(campos, "vinculo"),
+                    nome=str((cadastro.cliente_por_documento(sessao.get("documento") or "") or {}).get("nome") or ""),
+                    email=sessao.get("email") or "",
+                    notificar=_um(campos, "notificar"),
+                )
+            except ValueError as exc:
+                self._json({"ok": False, "erro": str(exc)})
+                return
+            self._json({
+                "ok": True,
+                "fala": f"Solicitação enviada para {saida.get('nome') or 'o vizinho'}.",
+                "solicitacao": saida,
+            })
+
+        def _responder_vizinho(self, sessao: dict, campos: dict):
+            import vizinhos as rede
+
+            aceitar = _um(campos, "resposta").lower() in ("aceitar", "sim", "1", "aceito")
+            try:
+                saida = rede.responder_solicitacao(
+                    sessao.get("documento") or "",
+                    _um(campos, "documento_vizinho"),
+                    aceitar,
+                    vinculo=_um(campos, "vinculo"),
+                    nome=str((cadastro.cliente_por_documento(sessao.get("documento") or "") or {}).get("nome") or ""),
+                    email=sessao.get("email") or "",
+                )
+            except ValueError as exc:
+                self._json({"ok": False, "erro": str(exc)})
+                return
+            self._json({"ok": True, "resultado": saida})
+
+        def _convidar_vizinho(self, sessao: dict, campos: dict):
+            import vizinhos as rede
+
+            try:
+                saida = rede.convidar_externo(
+                    sessao.get("documento") or "",
+                    nome=_um(campos, "nome"),
+                    email_destino=_um(campos, "email"),
+                    telefone=_um(campos, "telefone"),
+                    canal=_um(campos, "canal") or "email",
+                )
+            except ValueError as exc:
+                self._json({"ok": False, "erro": str(exc)})
+                return
+            partes = []
+            if saida.get("email"):
+                partes.append("e-mail enviado")
+            if saida.get("whatsapp"):
+                partes.append("WhatsApp enviado")
+            elif saida.get("whatsapp_link"):
+                partes.append("link do WhatsApp pronto")
+            self._json({
+                "ok": True,
+                "fala": "Convite: " + (", ".join(partes) if partes else "registrado"),
+                "whatsapp_link": saida.get("whatsapp_link") or "",
+                "convite": saida,
+            })
+
+        def _gerir_grupo_seguranca(self, sessao: dict, campos: dict):
+            import grupos_seguranca as grupos
+            import vizinhos as rede
+
+            documento = sessao.get("documento") or ""
+            acao = (_um(campos, "acao") or "").strip().lower()
+            grupo_id = _um(campos, "grupo_id")
+            try:
+                if acao == "criar":
+                    saida = grupos.criar_grupo(
+                        documento,
+                        _um(campos, "nome"),
+                        descricao=_um(campos, "descricao"),
+                    )
+                    self._json({"ok": True, "grupo": saida})
+                    return
+                if acao in ("membro", "add-membro", "adicionar_membro"):
+                    membro = _um(campos, "documento_membro")
+                    aceitos = {
+                        "".join(c for c in str(v.get("documento") or "") if c.isdigit())
+                        for v in rede.listar_vizinhos(documento)
+                    }
+                    dig_membro = "".join(c for c in membro if c.isdigit())
+                    if dig_membro not in aceitos:
+                        raise ValueError("Só é possível incluir vizinhos já aceitos no grupo.")
+                    saida = grupos.adicionar_membro(grupo_id, documento, membro)
+                    self._json({"ok": True, "grupo": saida})
+                    return
+                if acao in ("remover_membro", "sair"):
+                    saida = grupos.remover_membro(
+                        grupo_id, documento, _um(campos, "documento_membro") or documento
+                    )
+                    self._json({"ok": True, "grupo": saida})
+                    return
+                if acao in ("camera", "add-cam", "compartilhar"):
+                    saida = grupos.compartilhar_camera(
+                        grupo_id, documento, _um(campos, "camera_id")
+                    )
+                    self._json({"ok": True, "grupo": saida})
+                    return
+                if acao in ("remover_camera", "rm-cam"):
+                    saida = grupos.remover_camera(
+                        grupo_id, documento, _um(campos, "camera_id")
+                    )
+                    self._json({"ok": True, "grupo": saida})
+                    return
+                if acao == "excluir":
+                    grupos.excluir_grupo(grupo_id, documento)
+                    self._json({"ok": True})
+                    return
+                if acao in ("listar", "lista"):
+                    self._json({"ok": True, "grupos": grupos.listar_grupos(documento)})
+                    return
+                raise ValueError("Ação de grupo desconhecida.")
+            except ValueError as exc:
+                self._json({"ok": False, "erro": str(exc)})
+
+        def _enviar_mensagem_vizinho(self, sessao: dict):
+            import vizinhos as rede
+
+            tipo = self.headers.get("Content-Type") or ""
+            try:
+                if "multipart/form-data" in tipo:
+                    campos, arquivos = self._ler_multipart()
+                else:
+                    campos = self._ler_formulario() or {}
+                    arquivos = {}
+            except ValueError as exc:
+                self._json({"ok": False, "erro": str(exc)})
+                return
+            if not _csrf_confere(sessao, campos or {}):
+                self._json_status(403, {"ok": False, "erro": "Atualize a página e tente de novo."})
+                return
+            foto = (arquivos or {}).get("foto") or b""
+            try:
+                msg = rede.enviar_mensagem(
+                    sessao.get("documento") or "",
+                    _um(campos, "documento_vizinho"),
+                    _um(campos, "texto"),
+                    foto_bytes=foto if foto else None,
+                )
+            except ValueError as exc:
+                self._json({"ok": False, "erro": str(exc)})
+                return
+            self._json({"ok": True, "mensagem": msg})
+
         def _salvar_camera(self, sessao: dict, campos: dict):
             documento = sessao.get("documento") or ""
             try:
@@ -3857,6 +4578,7 @@ def _mensagem(consulta: dict) -> tuple[str, bool]:
             "Salvo. Este rosto também é pessoa de interesse em outra conta; "
             "o vínculo colaborativo foi compilado no grifo/Neo4j."
         ),
+        "vizinho": "Vizinho adicionado à rede. O vínculo informado foi refletido no grifo.",
     }
     if codigo == "cruzado":
         try:
