@@ -1942,7 +1942,15 @@ def emails_alerta_interesse(tipo: str, ident: str, camera_ref: str = "") -> list
     try:
         from grupos_seguranca import emails_membros_grupos_camera
 
-        emails.extend(emails_membros_grupos_camera(camera_ref))
+        tipo_grupo = "placas_interesse" if str(tipo or "").upper() == "PLACA" else "reconhecimento_interesse"
+        emails.extend(emails_membros_grupos_camera(camera_ref, tipo_alerta=tipo_grupo))
+    except Exception:
+        pass
+    try:
+        from config_alertas import filtrar_emails_por_tipo
+
+        tipo_cfg = "placas_interesse" if str(tipo or "").upper() == "PLACA" else "reconhecimento_interesse"
+        emails = filtrar_emails_por_tipo(emails, tipo_cfg)
     except Exception:
         pass
     return _emails_unicos(emails)

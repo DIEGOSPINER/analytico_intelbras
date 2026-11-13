@@ -50,13 +50,15 @@ def _nome_camera(documento: str, camera_id: str) -> str:
     return ""
 
 
-def criar_grupo(documento: str, nome: str, *, descricao: str = "") -> dict:
+def criar_grupo(documento: str, nome: str, *, descricao: str = "", alertas=None) -> dict:
     digitos = _digitos(documento)
     nome_limpo = " ".join(str(nome or "").split())
     if not digitos:
         raise ValueError("Informe a conta criadora.")
     if len(nome_limpo) < 3:
         raise ValueError("Informe um nome com pelo menos 3 letras para o grupo.")
+    from config_alertas import normalizar_alertas_grupo
+
     grupo = {
         "id": f"g_{uuid.uuid4().hex[:10]}",
         "nome": nome_limpo,
@@ -65,6 +67,7 @@ def criar_grupo(documento: str, nome: str, *, descricao: str = "") -> dict:
         "quando": _agora(),
         "membros": [digitos],
         "cameras": [],
+        "alertas": normalizar_alertas_grupo(alertas),
     }
     with _TRAVA:
         bruto = _ler()
@@ -124,6 +127,13 @@ def _publico(grupo: dict) -> dict:
             "camera_id": cam_id,
             "nome": nome,
         })
+    from config_alertas import alertas_padrao_grupo, normalizar_alertas_grupo
+
+    alertas = grupo.get("alertas")
+    if not isinstance(alertas, list) or not alertas:
+        alertas = alertas_padrao_grupo()
+    else:
+        alertas = normalizar_alertas_grupo(alertas)
     return {
         "id": grupo.get("id") or "",
         "nome": grupo.get("nome") or "",
@@ -132,6 +142,7 @@ def _publico(grupo: dict) -> dict:
         "quando": grupo.get("quando") or "",
         "membros": membros,
         "cameras": cameras,
+        "alertas": alertas,
         "total_membros": len(membros),
         "total_cameras": len(cameras),
     }
@@ -193,6 +204,39 @@ def remover_membro(grupo_id: str, documento_ator: str, documento_membro: str) ->
         grupo["atualizado"] = _agora()
         _gravar(bruto)
         return _publico(grupo)
+
+
+def definir_alertas(grupo_id: str, documento: str, alertas) -> dict:
+    """Atualiza quais tipos de alerta o grupo compartilha entre membros."""
+    from config_alertas import normalizar_alertas_grupo
+
+    digitos = _digitos(documento)
+    with _TRAVA:
+        bruto = _ler()
+        grupo = None
+        for g in bruto.get("grupos") or []:
+            if str(g.get("id") or "") == str(grupo_id or "").strip():
+                grupo = g
+                break
+        if not grupo:
+            raise ValueError("Grupo não encontrado.")
+        membros = [_digitos(m) for m in (grupo.get("membros") or [])]
+        if digitos not in membros:
+            raise ValueError("Só membros podem configurar alertas do grupo.")
+        grupo["alertas"] = normalizar_alertas_grupo(alertas)
+        grupo["atualizado"] = _agora()
+        _gravar(bruto)
+        return _publico(grupo)
+
+
+def grupo_compartilha_alerta(grupo: dict, tipo: str) -> bool:
+    from config_alertas import alertas_padrao_grupo
+
+    chave = str(tipo or "").strip()
+    lista = grupo.get("alertas")
+    if not isinstance(lista, list) or not lista:
+        lista = alertas_padrao_grupo()
+    return chave in set(lista)
 
 
 def compartilhar_camera(grupo_id: str, documento: str, camera_id: str) -> dict:
@@ -362,15 +406,21 @@ def prefixo_reconhecimento(documento: str, camera_ref: str) -> str:
     return f"no grupo {nomes}"
 
 
-def emails_membros_grupos_camera(camera_ref: str, exceto_documento: str = "") -> list[str]:
-    """E-mails dos membros dos grupos que compartilham a câmera."""
+def emails_membros_grupos_camera(
+    camera_ref: str,
+    exceto_documento: str = "",
+    tipo_alerta: str = "",
+) -> list[str]:
+    """E-mails dos membros dos grupos que compartilham a câmera (e o tipo de alerta)."""
     from cadastro import _emails_da_conta, cliente_por_documento
+    from config_alertas import ativo as alerta_ativo
 
     exc = _digitos(exceto_documento)
     emails: list[str] = []
     with _TRAVA:
         grupos = list(_ler().get("grupos") or [])
     alvo = str(camera_ref or "").strip().casefold()
+    tipo = str(tipo_alerta or "").strip()
     for g in grupos:
         compartilha = False
         for item in g.get("cameras") or []:
@@ -382,9 +432,15 @@ def emails_membros_grupos_camera(camera_ref: str, exceto_documento: str = "") ->
                 break
         if not compartilha:
             continue
+        if tipo and not grupo_compartilha_alerta(g, tipo):
+            continue
         for doc in g.get("membros") or []:
             digitos = _digitos(doc)
             if not digitos or digitos == exc:
+                continue
+            if tipo and not alerta_ativo(digitos, "alertas_grupo"):
+                continue
+            if tipo and not alerta_ativo(digitos, tipo):
                 continue
             cli = cliente_por_documento(digitos)
             if cli:

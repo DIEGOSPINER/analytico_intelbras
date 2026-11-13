@@ -122,7 +122,20 @@ class Vigia:
         self._ultima_tentativa_email = time.time()
         with open(caminho, encoding="utf-8") as arquivo:
             texto = arquivo.read()
-        if enviar_email(f"Relatório diário {hoje}", texto, caminho):
+        destinos = None
+        try:
+            from cadastro import destinatarios
+            from config_alertas import filtrar_emails_por_tipo
+
+            destinos = filtrar_emails_por_tipo(destinatarios(), "relatorio_diario")
+            if not destinos:
+                memoria = carregar_memoria()
+                memoria["ultimo_email"] = hoje
+                salvar_memoria(memoria)
+                return
+        except Exception:
+            destinos = None
+        if enviar_email(f"Relatório diário {hoje}", texto, caminho, destinos=destinos):
             memoria = carregar_memoria()
             memoria["ultimo_email"] = hoje
             salvar_memoria(memoria)
@@ -381,6 +394,25 @@ class Vigia:
                     texto = pref + texto
             except Exception:
                 pass
+            try:
+                from config_alertas import filtrar_emails_por_tipo
+
+                tipo_cfg = "ocorrencias_area"
+                if origem == "Cidadao":
+                    tipo_cfg = "ocorrencias_area"
+                elif str(alerta.get("tipo") or "").upper() == "PLACA":
+                    tipo_cfg = "placas_interesse"
+                elif str(alerta.get("tipo") or "").upper() in ("FACE", "face"):
+                    tipo_cfg = "reconhecimento_interesse"
+                elif any(t in str(alerta.get("nome") or "").lower() for t in ("disparo", "tiro", "áudio", "audio")):
+                    tipo_cfg = "disparos"
+                else:
+                    tipo_cfg = "informes"
+                destinos = filtrar_emails_por_tipo(destinos, tipo_cfg)
+            except Exception:
+                pass
+            if not destinos:
+                continue
             enviar_email(assunto, texto, destinos=destinos)
             if whatsapp_configurado():
                 enviar_whatsapp(texto)

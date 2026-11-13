@@ -264,6 +264,23 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
   .vizinhos-layout { grid-template-columns: 1fr; }
   .grupos-seguranca form.criar-grupo { grid-template-columns: 1fr; }
 }
+.config-alertas .perfis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 14px 0; }
+.config-alertas .perfil-card {
+  border: 1px solid var(--linha); border-radius: 14px; padding: 12px; cursor: pointer;
+  background: rgba(255,255,255,.03);
+}
+.config-alertas .perfil-card.ativo { border-color: #4c8dff; background: rgba(76,141,255,.12); }
+.config-alertas .perfil-card strong { display: block; margin-bottom: 4px; }
+.config-alertas .lista-tipos { display: grid; gap: 8px; margin-top: 12px; }
+.config-alertas .tipo-alerta {
+  display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start;
+  border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px;
+}
+.config-alertas .tipo-alerta strong { display: block; font-size: 14px; }
+.config-alertas .tipo-alerta span { display: block; font-size: 12px; color: var(--mudo); }
+.config-alertas .grupo-titulo { margin: 18px 0 6px; font-size: 13px; color: var(--mudo); text-transform: uppercase; letter-spacing: .04em; }
+.grupos-seguranca .checks-alertas { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px; margin-top: 8px; }
+.grupos-seguranca .checks-alertas label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .quadro-stive { min-height: 220px; }
 .acoes-fala { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
 .acoes-fala button { background: #edf2ff; color: #141820; border: 1px solid #c9d6ff; padding: 8px 12px; border-radius: 10px; font-size: 13px; }
@@ -631,6 +648,7 @@ def _menu(ativo: str, perfil: str = "") -> str:
             ("/cadastro/avisos", "Avisos", "aviso"),
         ]),
         ("Conta", [
+            ("/configuracao/alertas", "Configuração de alertas", "alerta"),
             ("/conta", "Conta", "conta"),
             ("/sair", "Sair", "sair"),
         ]),
@@ -1034,6 +1052,7 @@ def _audio(perfil: str = "", csrf: str = "", usuario: str = "", documento: str =
 
 
 def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
+    import config_alertas as cfg_alertas
     import grupos_seguranca as grupos
     import vizinhos as rede
     from grafo_relacoes import VINCULOS_STIVE
@@ -1043,6 +1062,11 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     contatos = rede.listar_vizinhos(documento)
     pendencias = rede.listar_solicitacoes(documento)
     meus_grupos = grupos.listar_grupos(documento)
+    cat_alertas_grupo = [
+        item for item in cfg_alertas.catalogo()
+        if item["id"] != "relatorio_diario"
+    ]
+    padrao_grupo = set(cfg_alertas.alertas_padrao_grupo())
     cliente = cadastro.cliente_por_documento(documento) or {}
     minhas_cameras = [
         {"id": str(c.get("id") or "").strip(), "nome": str(c.get("nome") or "").strip()}
@@ -1114,6 +1138,13 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
             f"data-cam='{_html_seguro(c.get('camera_id'))}' style='margin-left:4px;border:0;background:transparent;color:inherit;cursor:pointer'>×</button></span>"
             for c in (g.get("cameras") or [])
         ) or "<span class='mudo'>Nenhuma câmera compartilhada ainda.</span>"
+        ativos_g = set(g.get("alertas") or list(padrao_grupo))
+        checks_g = "".join(
+            f"<label><input type='checkbox' class='chk-alerta-grupo' data-gid='{_html_seguro(g.get('id'))}' "
+            f"value='{_html_seguro(item['id'])}' {'checked' if item['id'] in ativos_g else ''}>"
+            f"{_html_seguro(item['nome'])}</label>"
+            for item in cat_alertas_grupo
+        )
         acoes = [
             f"<label>Adicionar vizinho<select data-gid='{_html_seguro(g.get('id'))}' class='sel-membro-grupo'>"
             f"<option value=''>Escolher contato…</option>{opcoes_contatos}</select></label>",
@@ -1121,6 +1152,7 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
             f"<option value=''>Escolher câmera…</option>{opcoes_cams}</select></label>",
             f"<button type='button' data-acao-grupo='add-membro' data-gid='{_html_seguro(g.get('id'))}'>Incluir membro</button>",
             f"<button type='button' data-acao-grupo='add-cam' data-gid='{_html_seguro(g.get('id'))}'>Compartilhar</button>",
+            f"<button type='button' data-acao-grupo='salvar-alertas' data-gid='{_html_seguro(g.get('id'))}'>Salvar alertas do grupo</button>",
         ]
         if str(g.get("criador") or "") == digitos_eu:
             acoes.append(
@@ -1136,10 +1168,17 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
             f"<span class='mudo'>{_html_seguro(g.get('descricao') or 'Grupo de segurança entre vizinhos')}</span>"
             f"<div><span class='mudo'>Membros:</span> {membros_txt}</div>"
             f"<div class='chips'>{cams_html}</div>"
+            f"<div><span class='mudo'>Alertas compartilhados no grupo</span>"
+            f"<div class='checks-alertas'>{checks_g}</div></div>"
             f"<div class='acoes-grupo'>{''.join(acoes)}</div>"
             f"</div>"
         )
     bloco_grupos = "".join(cartas_html) or "<p class='mudo'>Nenhum grupo ainda. Crie o primeiro abaixo.</p>"
+    checks_criar = "".join(
+        f"<label><input type='checkbox' name='alerta_grupo' value='{_html_seguro(item['id'])}' "
+        f"{'checked' if item['id'] in padrao_grupo else ''}>{_html_seguro(item['nome'])}</label>"
+        for item in cat_alertas_grupo
+    )
     miolo = f"""<header class="topo"><div><h1>Vizinhos</h1>
 <p>Digite o nome, escolha na lista da plataforma, envie a solicitação. Depois do aceite, a notificação aparece e já podem conversar. Crie grupos de segurança para compartilhar câmeras de ruas distintas e receber alertas em conjunto.</p></div></header>
 <main>
@@ -1169,12 +1208,13 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 </section>
 <section class="grupos-seguranca" id="grupos-seguranca">
 <h2>Grupos de segurança</h2>
-<p class="mudo">Ex.: “Grupo de segurança da área do Flamengo”. Câmeras de ruas diferentes e alertas (incluindo reconhecimento facial) chegam a todos os membros; no ao vivo você também vê as câmeras compartilhadas no grupo.</p>
+<p class="mudo">Ex.: “Grupo de segurança da área do Flamengo”. Câmeras de ruas diferentes e alertas (incluindo reconhecimento facial) chegam a todos os membros; no ao vivo você também vê as câmeras compartilhadas no grupo. Escolha quais tipos de alerta o grupo compartilha.</p>
 {bloco_grupos}
-<form id="form-criar-grupo" class="criar-grupo">
+<form id="form-criar-grupo" class="criar-grupo" style="grid-template-columns:1fr">
 {_csrf(sessao)}
 <label>Nome do grupo<input name="nome" required minlength="3" placeholder="Grupo de segurança da área do Flamengo"></label>
 <label>Descrição<input name="descricao" placeholder="Condomínio, família, amigos…"></label>
+<div><span class="mudo">Alertas a compartilhar no grupo</span><div class="checks-alertas">{checks_criar}</div></div>
 <button type="submit">Criar grupo</button>
 </form>
 </section>
@@ -1385,9 +1425,11 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
   document.getElementById("form-criar-grupo")?.addEventListener("submit", async (ev) => {{
     ev.preventDefault();
     const formG = ev.currentTarget;
+    const alertas = [...formG.querySelectorAll("input[name=alerta_grupo]:checked")].map((el) => el.value);
     const dados = await postGrupo("criar", {{
       nome: formG.nome.value || "",
       descricao: formG.descricao.value || "",
+      alertas: alertas.join(","),
     }});
     if (!dados.ok) {{ alert(dados.erro || "Não foi possível criar o grupo."); return; }}
     location.reload();
@@ -1412,12 +1454,17 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     }}
     if (acao === "rm-cam") extras.camera_id = botao.dataset.cam || "";
     if (acao === "sair") extras.documento_membro = document.body.dataset.documento || "";
+    if (acao === "salvar-alertas") {{
+      const checks = [...document.querySelectorAll(`input.chk-alerta-grupo[data-gid="${{gid}}"]:checked`)];
+      extras.alertas = checks.map((el) => el.value).join(",");
+    }}
     const mapa = {{
       "add-membro": "membro",
       "add-cam": "camera",
       "rm-cam": "remover_camera",
       "excluir": "excluir",
       "sair": "remover_membro",
+      "salvar-alertas": "alertas",
     }};
     const dados = await postGrupo(mapa[acao] || acao, extras);
     if (!dados.ok) {{ alert(dados.erro || "Não foi possível atualizar o grupo."); return; }}
@@ -2491,6 +2538,95 @@ def _sistema_json(documento_filtro: str = "") -> dict:
     }
 
 
+def _config_alertas(sessao: dict, aviso: str = "", ok: bool = False) -> str:
+    import config_alertas as cfg
+
+    prefs = cfg.obter(sessao.get("documento") or "")
+    ativos = set(prefs.get("ativos") or [])
+    perfil_atual = prefs.get("perfil") or "personalizado"
+    cards = []
+    for chave, meta in cfg.perfis().items():
+        classe = "perfil-card ativo" if chave == perfil_atual else "perfil-card"
+        cards.append(
+            f"<label class='{classe}'>"
+            f"<input type='radio' name='perfil' value='{_html_seguro(chave)}' "
+            f"{'checked' if chave == perfil_atual else ''} style='margin-right:8px'>"
+            f"<strong>{_html_seguro(meta.get('nome'))}</strong>"
+            f"<span class='mudo'>{_html_seguro(meta.get('descricao'))}</span></label>"
+        )
+    grupos_html = []
+    grupo_atual = None
+    for item in cfg.catalogo():
+        g = item.get("grupo") or "Outros"
+        if g != grupo_atual:
+            grupos_html.append(f"<p class='grupo-titulo'>{_html_seguro(g)}</p>")
+            grupo_atual = g
+        checked = "checked" if item["id"] in ativos else ""
+        canais = []
+        if item.get("stive"):
+            canais.append("Stive")
+        if item.get("email"):
+            canais.append("e-mail")
+        canal = " · ".join(canais) if canais else ""
+        grupos_html.append(
+            f"<label class='tipo-alerta'>"
+            f"<input type='checkbox' name='alerta' value='{_html_seguro(item['id'])}' {checked}>"
+            f"<span><strong>{_html_seguro(item['nome'])}</strong>"
+            f"<span>{_html_seguro(item.get('descricao') or '')}"
+            f"{(' · ' + canal) if canal else ''}</span></span></label>"
+        )
+    miolo = f"""<header class="topo"><div><h1>Configuração de alertas</h1>
+<p>Escolha o que chega para você pelo Agente Stive e por e-mail. Perfis prontos ou seleção personalizada.</p></div></header>
+<main class="config-alertas">
+{_aviso_html(aviso, ok)}
+<form method="post" action="/configuracao/alertas" id="form-config-alertas">
+{_csrf(sessao)}
+<h2>Perfil</h2>
+<div class="perfis">{''.join(cards)}</div>
+<h2>Tipos de alerta</h2>
+<p class="mudo">Ao marcar Personalizado (ou ao alterar um check), a lista abaixo vale como sua seleção.</p>
+<div class="lista-tipos">{''.join(grupos_html)}</div>
+<p style="margin-top:16px"><button type="submit">Salvar configuração</button></p>
+</form>
+</main>
+<script>
+(() => {{
+  const form = document.getElementById("form-config-alertas");
+  if (!form) return;
+  const checks = () => [...form.querySelectorAll("input[name=alerta]")];
+  form.querySelectorAll("input[name=perfil]").forEach((radio) => {{
+    radio.addEventListener("change", () => {{
+      form.querySelectorAll(".perfil-card").forEach((el) => el.classList.toggle("ativo", el.contains(radio) && radio.checked));
+      const preset = {{
+        completo: {json.dumps(list(cfg.IDS))},
+        essencial: {json.dumps(cfg.PERFIS["essencial"]["ativos"])},
+        silencioso: {json.dumps(cfg.PERFIS["silencioso"]["ativos"])},
+      }};
+      const lista = preset[radio.value];
+      if (!lista) return;
+      const set = new Set(lista);
+      checks().forEach((c) => {{ c.checked = set.has(c.value); }});
+    }});
+  }});
+  checks().forEach((c) => {{
+    c.addEventListener("change", () => {{
+      const personalizado = form.querySelector("input[name=perfil][value=personalizado]");
+      if (personalizado) {{
+        personalizado.checked = true;
+        form.querySelectorAll(".perfil-card").forEach((el) => el.classList.toggle("ativo", el.contains(personalizado)));
+      }}
+    }});
+  }});
+}})();
+</script>"""
+    return _moldura(
+        "Configuração de alertas · C4ISTAR MONITOR",
+        miolo,
+        "/configuracao/alertas",
+        **_sessao_ui(sessao),
+    )
+
+
 def _form_conta(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     usuarios = acesso.da_conta(sessao.get("documento") or "")
     linhas = "".join(
@@ -3056,6 +3192,12 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
     resumo["led"] = led
     resumo["cliente_documento"] = digitos
     resumo["perfil_sessao"] = perfil or ""
+    try:
+        from config_alertas import filtrar_resumo
+
+        resumo = filtrar_resumo(resumo, digitos)
+    except Exception:
+        pass
     return _anexar_vizinhos(resumo, digitos)
 
 
@@ -3408,6 +3550,9 @@ def _tratador(portal: Portal):
             if caminho == "/vizinhos/grupos":
                 self._gerir_grupo_seguranca(sessao, campos)
                 return
+            if caminho == "/configuracao/alertas":
+                self._salvar_config_alertas(sessao, campos)
+                return
             if caminho == "/cadastro/cameras":
                 self._salvar_camera(sessao, campos)
                 return
@@ -3617,6 +3762,9 @@ def _tratador(portal: Portal):
             aviso, ok = _mensagem(consulta)
             if caminho == "/vizinhos":
                 self._html(_vizinhos(sessao, aviso, ok), 200)
+                return
+            if caminho == "/configuracao/alertas":
+                self._html(_config_alertas(sessao, aviso, ok), 200)
                 return
             if caminho == "/vizinhos/buscar.json":
                 import vizinhos as rede
@@ -4192,6 +4340,20 @@ def _tratador(portal: Portal):
                 "convite": saida,
             })
 
+        def _salvar_config_alertas(self, sessao: dict, campos: dict):
+            import config_alertas as cfg
+
+            perfil = _um(campos, "perfil") or "personalizado"
+            ativos = campos.get("alerta") or []
+            if isinstance(ativos, str):
+                ativos = [ativos]
+            try:
+                cfg.salvar(sessao.get("documento") or "", perfil=perfil, ativos=ativos)
+            except ValueError as exc:
+                self._html(_config_alertas(sessao, str(exc)), 400)
+                return
+            self._redirecionar("/configuracao/alertas?ok=salvo")
+
         def _gerir_grupo_seguranca(self, sessao: dict, campos: dict):
             import grupos_seguranca as grupos
             import vizinhos as rede
@@ -4201,11 +4363,22 @@ def _tratador(portal: Portal):
             grupo_id = _um(campos, "grupo_id")
             try:
                 if acao == "criar":
+                    alertas = campos.get("alerta") or campos.get("alertas") or []
+                    if isinstance(alertas, str):
+                        alertas = [a.strip() for a in alertas.split(",") if a.strip()]
                     saida = grupos.criar_grupo(
                         documento,
                         _um(campos, "nome"),
                         descricao=_um(campos, "descricao"),
+                        alertas=alertas or None,
                     )
+                    self._json({"ok": True, "grupo": saida})
+                    return
+                if acao in ("alertas", "definir_alertas"):
+                    alertas = campos.get("alerta") or campos.get("alertas") or []
+                    if isinstance(alertas, str):
+                        alertas = [a.strip() for a in alertas.split(",") if a.strip()]
+                    saida = grupos.definir_alertas(grupo_id, documento, alertas)
                     self._json({"ok": True, "grupo": saida})
                     return
                 if acao in ("membro", "add-membro", "adicionar_membro"):

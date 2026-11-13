@@ -26,6 +26,7 @@ stive_finetune.jsonl
 feedback_modelo.json
 ajustes_feedback.json
 historico_stive.json
+config_alertas.json
 relatorios/
 
 # Modelos e pesos

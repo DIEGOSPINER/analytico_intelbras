@@ -2781,14 +2781,16 @@ function atualizarFalaStive(dados) {
     if (enfileirarFalaStive(`inf:${item.quando}|${textoBase}`, "Informe", fala, { classe: "risco" })) return;
   }
 
-  for (const item of (dados.app || []).slice(0, 3)) {
-    const titulo = String(item.titulo || "Ocorrência").trim();
-    if (enfileirarFalaStive(
-      `app:${item.quando}|${titulo}|${item.lugar || ""}`,
-      "Aplicativo",
-      `Ocorrência nova lançada no app: ${titulo}${item.lugar ? ` em ${item.lugar}` : ""}.`,
-      { classe: "info" },
-    )) return;
+  if (dados.app_stive !== false) {
+    for (const item of (dados.app || []).slice(0, 3)) {
+      const titulo = String(item.titulo || "Ocorrência").trim();
+      if (enfileirarFalaStive(
+        `app:${item.quando}|${titulo}|${item.lugar || ""}`,
+        "Aplicativo",
+        `Ocorrência nova lançada no app: ${titulo}${item.lugar ? ` em ${item.lugar}` : ""}.`,
+        { classe: "info" },
+      )) return;
+    }
   }
 
   for (const item of (dados.insights || []).slice(0, 3)) {
