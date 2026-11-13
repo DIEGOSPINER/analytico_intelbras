@@ -120,7 +120,12 @@ def stive(portal, sessao: dict, pergunta: str, resumo: dict | None = None) -> tu
         registrar_envio("openai", "out", unidades=1.0, detalhe="stive-mobile", documento=documento)
     except Exception:
         pass
-    return 200, {"ok": True, "fala": (saida or {}).get("fala") or "", "visual": (saida or {}).get("visual") or {}}
+    return 200, {
+        "ok": True,
+        "fala": (saida or {}).get("fala") or "",
+        "visual": (saida or {}).get("visual") or {},
+        "episodio_id": (saida or {}).get("episodio_id") or "",
+    }
 
 
 def custos(sessao: dict) -> tuple[int, dict]:

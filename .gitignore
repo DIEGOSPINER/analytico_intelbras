@@ -21,6 +21,11 @@ memoria_rua.json
 dataverse_token.json
 grupos_seguranca.json
 vizinhos_chat.json
+stive_aprendizado.jsonl
+stive_finetune.jsonl
+feedback_modelo.json
+ajustes_feedback.json
+historico_stive.json
 relatorios/
 
 # Modelos e pesos

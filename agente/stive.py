@@ -86,6 +86,8 @@ _SISTEMA = (
     "e diga números claros (passagens, dias, % estimada). Cruze pessoa × câmera × horário × ocorrências. "
     "Quando o operador RELATAR (não perguntar) uma ocorrência nova para gravar, preencha o objeto ocorrencia. "
     "Perguntas do tipo 'o que aconteceu', 'houve', 'resumo do dia' NÃO são registro — só narração. "
+    "Se houver bloco 'Memória operacional', use-o só como referência de estilo/correção do operador; "
+    "os números e fatos da resposta DEVEM vir do contexto atual da sessão, não da memória antiga. "
     "Devolva sempre um JSON com as chaves fala, visual e ocorrencia. "
     "visual.tipo pode ser numeros, lista, texto, barras, linha ou rosca. "
     "Para gráfico, análise, chance ou comparação, use barras, linha ou rosca e preencha itens com rotulo e total. "
@@ -160,6 +162,50 @@ def visual_usuario(documento: str = "", email: str = "") -> dict:
         return dict(bruto) if isinstance(bruto, dict) else {}
 
 
+def _memoria_prompt(pergunta: str, documento: str = "") -> str:
+    try:
+        from agente.memoria_stive import texto_para_prompt
+
+        return texto_para_prompt(pergunta, documento=documento, limite=5)
+    except Exception:
+        return ""
+
+
+def _registrar_aprendizado(
+    *,
+    pergunta: str,
+    fala: str,
+    documento: str = "",
+    email: str = "",
+    perfil: str = "",
+    resumo: dict | None = None,
+    visual: dict | None = None,
+    origem: str = "chat",
+    tipo: str = "",
+    titulo: str = "",
+    camera: str = "",
+) -> str:
+    try:
+        from agente.memoria_stive import registrar_episodio
+
+        ep = registrar_episodio(
+            pergunta=pergunta,
+            fala=fala,
+            documento=documento,
+            email=email,
+            perfil=perfil,
+            resumo=resumo,
+            visual=visual,
+            origem=origem,
+            tipo=tipo,
+            titulo=titulo,
+            camera=camera,
+        )
+        return str(ep.get("id") or "")
+    except Exception:
+        return ""
+
+
 def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perfil: str = "") -> dict:
     pergunta = (pergunta or "").strip()
     if not pergunta:
@@ -176,6 +222,7 @@ def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perf
             briefing = texto_briefing(analise)
         except Exception:
             briefing = ""
+    memoria = _memoria_prompt(pergunta, documento)
     # Perguntas de período respondem direto da base — evita GPT inventar "sem acesso".
     local_periodo = _resposta_periodo(pergunta, resumo)
     if local_periodo is not None and not pede_analise_criminal(pergunta):
@@ -187,10 +234,22 @@ def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perf
             documento=documento,
             visual=local_periodo.get("visual"),
         )
+        local_periodo["episodio_id"] = _registrar_aprendizado(
+            pergunta=pergunta,
+            fala=local_periodo["fala"],
+            documento=documento,
+            email=email,
+            perfil=perfil,
+            resumo=resumo,
+            visual=local_periodo.get("visual"),
+            origem="periodo",
+        )
         return local_periodo
     contexto = _contexto(resumo, documento=documento, perfil=perfil)
     if briefing:
         contexto = contexto + "\n\n" + briefing
+    if memoria:
+        contexto = contexto + "\n\n" + memoria
     try:
         from agente.modelo import SessaoGPT, extrair_json
 
@@ -220,6 +279,16 @@ def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perf
                     documento=documento,
                     visual=resultado.get("visual"),
                 )
+                resultado["episodio_id"] = _registrar_aprendizado(
+                    pergunta=pergunta,
+                    fala=resultado["fala"],
+                    documento=documento,
+                    email=email,
+                    perfil=perfil,
+                    resumo=resumo,
+                    visual=resultado.get("visual"),
+                    origem="chat",
+                )
                 _registrar_ocorrencia(documento, resultado.get("ocorrencia"), perfil=perfil)
                 return resultado
     except Exception:
@@ -232,6 +301,16 @@ def responder(documento: str, pergunta: str, resumo: dict, email: str = "", perf
         email=email,
         documento=documento,
         visual=resultado.get("visual"),
+    )
+    resultado["episodio_id"] = _registrar_aprendizado(
+        pergunta=pergunta,
+        fala=resultado["fala"],
+        documento=documento,
+        email=email,
+        perfil=perfil,
+        resumo=resumo,
+        visual=resultado.get("visual"),
+        origem="local",
     )
     _registrar_ocorrencia(documento, resultado.get("ocorrencia"), perfil=perfil)
     return resultado
@@ -278,6 +357,30 @@ def confirmar(
             titulo="confirmação",
             camera=camera or "",
             documento=documento or "",
+        )
+    except Exception:
+        pass
+    try:
+        from agente.memoria_stive import marcar_feedback, registrar_episodio
+
+        ep = registrar_episodio(
+            pergunta=f"Confirmação de campo: {tipo or 'evento'}",
+            fala=(texto or "")[:800],
+            documento=documento or "",
+            origem="confirmacao",
+            tipo=tipo or "",
+            titulo="confirmação",
+            camera=camera or "",
+        )
+        marcar_feedback(
+            nota=1 if sim else -1,
+            episodio_id=str(ep.get("id") or ""),
+            texto=texto or "",
+            titulo="confirmação",
+            documento=documento or "",
+            correcao=(
+                f"Operador confirmou: {texto}" if sim else f"Operador negou (falso positivo): {texto}"
+            )[:500],
         )
     except Exception:
         pass
@@ -562,6 +665,18 @@ def registrar_reacao(documento: str, chave: str, titulo: str, texto: str, nota: 
                 valor,
                 texto=texto or "",
                 tipo=tipo or "",
+                titulo=titulo or "",
+                documento=documento or "",
+            )
+        except Exception:
+            pass
+        try:
+            from agente.memoria_stive import marcar_feedback
+
+            marcar_feedback(
+                nota=valor,
+                chave_ui=str(chave or ""),
+                texto=texto or "",
                 titulo=titulo or "",
                 documento=documento or "",
             )

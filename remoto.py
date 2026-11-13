@@ -2118,6 +2118,12 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
         ano = sat.get("ano") or {}
         total = sat.get("total") or {}
         serie = sat.get("serie_mes") or []
+        try:
+            from agente.memoria_stive import estatisticas as est_memoria
+
+            mem = est_memoria()
+        except Exception:
+            mem = {"total": 0, "likes": 0, "dislikes": 0, "correcoes": 0, "uteis_prompt": 0}
         novo = f"""<h2>Novo cliente</h2>
 <p>Ao criar, o cliente recebe no e-mail o login e uma senha provisória, que deve ser trocada no primeiro acesso.</p>
 <form method="post" action="/cadastro/cliente/novo">
@@ -2136,8 +2142,12 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
 <article class="cartao"><span>Total</span><strong>{total.get('percentual', 0)}%</strong><p>{total.get('positivos', 0)} legal · {total.get('negativos', 0)} não legal</p></article>
 </div>
 <article class="cartao"><h2>Positivos por mês</h2><canvas class="grafico" id="grafico-satisfacao" width="640" height="280"></canvas></article>
+<article class="cartao"><h2>Memória operacional</h2>
+<p>{int(mem.get('total') or 0)} episódios · {int(mem.get('likes') or 0)} likes · {int(mem.get('dislikes') or 0)} dislikes · {int(mem.get('correcoes') or 0)} correções · {int(mem.get('uteis_prompt') or 0)} úteis no prompt</p>
+<p class="mudo">GET <code>/agente/stive/memoria.json?exportar=1</code> gera <code>stive_finetune.jsonl</code> para fine-tune offline.</p>
+</article>
 <script>
-window.addEventListener("load", () => {{
+  window.addEventListener("load", () => {{
   const serie = {json.dumps(serie, ensure_ascii=False)};
   const canvas = document.getElementById("grafico-satisfacao");
   if (!canvas || typeof barrasVerticais !== "function") return;
@@ -3458,6 +3468,19 @@ def _tratador(portal: Portal):
             if caminho == "/agente/stive/reacao":
                 self._reacao_stive(sessao, campos)
                 return
+            if caminho == "/agente/stive/memoria/exportar":
+                if (sessao.get("perfil") or "") != "administrador":
+                    self._json_status(403, {"ok": False, "erro": "Somente o administrador exporta o fine-tune."})
+                    return
+                try:
+                    from agente.memoria_stive import exportar_finetune, estatisticas
+
+                    saida = exportar_finetune()
+                    saida["estatisticas"] = estatisticas()
+                    self._json(saida)
+                except Exception as exc:
+                    self._json_status(500, {"ok": False, "erro": str(exc)})
+                return
             self.send_error(404)
 
         def _definir_vista(self, sessao: dict, campos: dict):
@@ -3515,6 +3538,17 @@ def _tratador(portal: Portal):
                     "visual": visual,
                     "escopo": "todos" if quer_todos else "usuario",
                 })
+                return
+            if caminho == "/agente/stive/memoria.json":
+                from agente.memoria_stive import estatisticas, exportar_finetune
+
+                if (sessao.get("perfil") or "") != "administrador":
+                    self._json_status(403, {"ok": False, "erro": "Somente o administrador."})
+                    return
+                corpo = {"ok": True, **estatisticas()}
+                if (consulta.get("exportar") or [""])[0] in ("1", "true", "sim"):
+                    corpo["export"] = exportar_finetune()
+                self._json(corpo)
                 return
             if caminho == "/painel.js":
                 self._bytes(Path("painel_web.js").read_bytes(), "text/javascript; charset=utf-8")
@@ -4395,7 +4429,11 @@ def _tratador(portal: Portal):
                 registrar_envio("openai", "out", unidades=1.0, detalhe="stive-web", documento=documento)
             except Exception:
                 pass
-            self._json({"fala": saida.get("fala") or "", "visual": saida.get("visual") or {}})
+            self._json({
+                "fala": saida.get("fala") or "",
+                "visual": saida.get("visual") or {},
+                "episodio_id": saida.get("episodio_id") or "",
+            })
 
         def _confirmar_stive(self, sessao: dict, campos: dict):
             from agente.stive import confirmar
