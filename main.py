@@ -1945,7 +1945,11 @@ _FLUXO_PERIODO = {}  # (nome, tipo) -> totais calendário hora/dia + baseline an
 _FLUXO_COOLDOWN_CAMERA = {}  # nome -> timestamp do último aviso (↑/↓)
 _FLUXO_EVENTOS = deque(maxlen=60)
 _INTERVALO_AVISO_FLUXO_SEG = 600  # no máximo 1 informativo a cada 10 min/câmera
-_FLUXO_PCT_LIMIAR = 25  # variação mínima vs média da hora (ou dia) para avisar
+# Variação significativa de público (modelo: 1→20 ou 20→10 pessoas/min).
+_FLUXO_MULT_AUMENTO = 2.0  # pelo menos o dobro da média
+_FLUXO_MULT_REDUCAO = 0.5  # no máximo a metade da média
+_FLUXO_DELTA_MIN_MINUTO = 8  # salto absoluto mínimo (pessoas ou veículos / min)
+_FLUXO_PICO_MIN_QUANDO_BASE_BAIXA = 10  # se a média ~0/1, só avisa a partir deste /min
 _SERIE = deque(maxlen=90)
 _NARRACAO = {"chave": "", "texto": "", "pedido": ""}
 _ORDEM_LED = {"branco": 0, "verde": 1, "amarelo": 2, "vermelho": 3, "preto": 4}
@@ -2332,6 +2336,27 @@ def _variacao_fluxo_pct(base: float, atual: float) -> int | None:
     return int(round(((atual - base) / base) * 100))
 
 
+def _variacao_fluxo_significativa(base: float, atual: float) -> bool:
+    """True só para saltos relevantes de público/min (ex.: 1→20 ou 20→10)."""
+    base = float(base or 0)
+    atual = float(atual or 0)
+    delta = abs(atual - base)
+    pico = float(_FLUXO_PICO_MIN_QUANDO_BASE_BAIXA)
+    delta_min = float(_FLUXO_DELTA_MIN_MINUTO)
+    # Média baixa (0–4): só avisa se o minuto atual já está alto (ex.: 1→10/20).
+    if base < 5.0:
+        if atual <= base:
+            return False
+        return atual >= pico and atual >= base * _FLUXO_MULT_AUMENTO and delta >= delta_min
+    # Aumento: pelo menos o dobro e salto absoluto mínimo.
+    if atual > base:
+        return atual >= base * _FLUXO_MULT_AUMENTO and delta >= delta_min
+    # Redução: caiu à metade ou menos, partindo de volume relevante (20→10).
+    if atual < base:
+        return atual <= base * _FLUXO_MULT_REDUCAO and base >= pico and delta >= delta_min
+    return False
+
+
 def _candidato_variacao_fluxo(
     tipo: str,
     nome: str,
@@ -2341,32 +2366,31 @@ def _candidato_variacao_fluxo(
     unidade_base: str,
     unidade_atual: str,
 ) -> dict | None:
+    # Alertas de ↑/↓ usam só pessoas/veículos por minuto vs média da hora.
+    if periodo != "minuto":
+        return None
+    if not _variacao_fluxo_significativa(base, atual):
+        return None
     pct = _variacao_fluxo_pct(base, atual)
     if pct is None:
-        return None
-    if abs(int(pct)) < _FLUXO_PCT_LIMIAR:
-        return None
-    # Evita ruído com volumes irrisórios dos dois lados.
-    if float(base or 0) < 0.5 and float(atual or 0) < 1:
         return None
     sujeito = "pessoas" if tipo == "pessoa" else "veículos"
     sentido = "aumento" if pct > 0 else "redução"
     sinal = f"+{pct}%" if pct >= 0 else f"{pct}%"
     base_txt = f"{base:.1f}".rstrip("0").rstrip(".") if isinstance(base, float) and not float(base).is_integer() else str(int(round(base)))
     atual_txt = str(int(round(atual))) if float(atual).is_integer() else f"{atual:.1f}".rstrip("0").rstrip(".")
-    if float(base or 0) <= 0 and float(atual or 0) > 0:
+    if float(base or 0) < 1.0 and float(atual or 0) > 0:
         texto = (
-            f"{sentido.capitalize()} de fluxo de {sujeito} na {nome}: "
-            f"saiu de nenhuma para {atual_txt}{unidade_atual} "
-            f"(+100% vs média da hora)."
+            f"{sentido.capitalize()} significativo de fluxo de {sujeito} na {nome}: "
+            f"passou de {base_txt}{unidade_base} para {atual_txt}{unidade_atual}."
         )
     else:
         texto = (
-            f"{sentido.capitalize()} de fluxo de {sujeito} na {nome}: "
-            f"{atual_txt}{unidade_atual} agora vs média {base_txt}{unidade_base} "
-            f"({sinal})."
+            f"{sentido.capitalize()} significativo de fluxo de {sujeito} na {nome}: "
+            f"passou de {base_txt}{unidade_base} para {atual_txt}{unidade_atual} "
+            f"({sinal} vs média da hora)."
         )
-    if tipo == "pessoa" and periodo == "minuto" and int(round(atual)) >= _FLUXO_ANORMAL_MINUTO:
+    if tipo == "pessoa" and int(round(atual)) >= _FLUXO_ANORMAL_MINUTO:
         texto += f" Superlotação: {int(round(atual))}/min (limiar {_FLUXO_ANORMAL_MINUTO}/min)."
     return {
         "tipo": tipo,
@@ -2376,72 +2400,41 @@ def _candidato_variacao_fluxo(
         "variacao_pct": int(pct),
         "sentido": sentido,
         "texto": texto,
-        "peso": abs(int(pct)),
+        "peso": abs(int(pct)) + int(abs(atual - base)),
     }
 
 
 def _registrar_variacao_fluxo(nome: str, tipo: str, fluxo: dict) -> list[dict]:
-    """Compara fluxo atual com a média da hora (e o dia) em %; 1 aviso/10 min/câmera."""
+    """Compara /min com a média da hora; só saltos grandes; 1 aviso a cada 10 min/câmera."""
     fluxo = fluxo or {}
     camera = str(nome or "")
     minuto = max(0, int(fluxo.get("minuto") or 0))
     hora_total = max(0, int(fluxo.get("hora_dia") or 0))
     hora_ant = max(0, int(fluxo.get("hora_anterior") or 0))
-    dia = max(0, int(fluxo.get("dia") or 0))
-    dia_ant = max(0, int(fluxo.get("dia_anterior") or 0))
     media_hora = _media_fluxo_hora(hora_total)
     # Se a hora ainda está começando, usa a hora anterior como referência de público.
     if media_hora < 0.5 and hora_ant > 0:
         media_hora = hora_ant / 60.0
 
-    candidatos = []
-    hora = _candidato_variacao_fluxo(
+    chave = (camera, tipo)
+    melhor = _candidato_variacao_fluxo(
         tipo, camera, "minuto", media_hora, float(minuto), "/min", "/min",
     )
-    if hora:
-        candidatos.append(hora)
-    if hora_ant > 0:
-        cand_h = _candidato_variacao_fluxo(
-            tipo, camera, "hora", float(hora_ant), float(hora_total), "/h", "/h",
-        )
-        if cand_h:
-            candidatos.append(cand_h)
-    if dia_ant > 0:
-        cand_d = _candidato_variacao_fluxo(
-            tipo, camera, "dia", float(dia_ant), float(dia), "/dia", "/dia",
-        )
-        if cand_d:
-            candidatos.append(cand_d)
-
-    chave = (camera, tipo)
-    estado = _FLUXO_AVISO.get(chave) or {"zona": "neutro", "pct": 0}
-    if not candidatos:
+    if not melhor:
         _FLUXO_AVISO[chave] = {"zona": "neutro", "pct": 0, "media": media_hora, "minuto": minuto}
-        return []
-
-    melhor = max(candidatos, key=lambda item: int(item.get("peso") or 0))
-    zona = "alta" if int(melhor.get("variacao_pct") or 0) > 0 else "baixa"
-    # Só reavisa depois de voltar à faixa neutra ou inverter o sentido.
-    if estado.get("zona") == zona:
-        _FLUXO_AVISO[chave] = {
-            "zona": zona,
-            "pct": melhor.get("variacao_pct") or 0,
-            "media": media_hora,
-            "minuto": minuto,
-        }
         return []
 
     agora = time.time()
     ultimo = float(_FLUXO_COOLDOWN_CAMERA.get(camera) or 0)
     if agora - ultimo < _INTERVALO_AVISO_FLUXO_SEG:
-        # Mantém zona neutra para tentar de novo após o intervalo.
         return []
 
+    zona = "alta" if int(melhor.get("variacao_pct") or 0) > 0 else "baixa"
     evento = {
         "quando": datetime.now().strftime("%H:%M:%S"),
         "camera": camera,
         "tipo": tipo,
-        "periodo": melhor.get("periodo") or "minuto",
+        "periodo": "minuto",
         "de": melhor.get("de"),
         "para": melhor.get("para"),
         "media_hora": round(media_hora, 2),
