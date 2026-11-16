@@ -985,18 +985,25 @@ def atualizar_dados_pessoais(documento_atual: str, nome: str, rg: str, documento
 def cadastrar_camera(documento: str, camera: dict):
     cliente = _exigir(documento)
     if not isinstance(camera, dict):
-        raise ValueError("A câmera precisa ter marca, modelo e o endereço RTSP ou o host.")
+        raise ValueError("A câmera precisa ter marca, modelo e acesso RTSP ou RTMP.")
     marca = str(camera.get("marca") or "").strip()
     modelo = str(camera.get("modelo") or "").strip()
     if not marca or not modelo:
         raise ValueError("Informe a marca e o modelo da câmera.")
-    if not str(camera.get("url") or camera.get("host") or "").strip():
+    from cameras import normalizar_protocolo
+
+    protocolo = normalizar_protocolo(camera.get("protocolo"))
+    if protocolo == "rtmp":
+        if not str(camera.get("stream_key") or camera.get("url") or "").strip():
+            raise ValueError("Câmera RTMP precisa de stream_key (gerada no cadastro).")
+    elif not str(camera.get("url") or camera.get("host") or "").strip():
         raise ValueError("Informe a URL RTSP ou o host da câmera.")
     ident = str(camera.get("id") or f"cam-{len(cliente['cameras']) + 1}").strip()
     registro = dict(camera)
     registro["id"] = ident
     registro["marca"] = marca
     registro["modelo"] = modelo
+    registro["protocolo"] = protocolo
     cameras = [item for item in cliente["cameras"] if str(item.get("id")) != ident]
     cameras.append(registro)
     cliente["cameras"] = cameras
@@ -1256,12 +1263,21 @@ def camera_publica(camera: dict) -> dict:
             "recebe_alerta": aviso.get("recebe_alerta", True) is not False,
             "recebe_relatorio": aviso.get("recebe_relatorio", True) is not False,
         })
+    protocolo = str(camera.get("protocolo") or "rtsp").strip().lower()
+    if protocolo not in ("rtsp", "rtmp"):
+        protocolo = "rtmp" if str(camera.get("stream_key") or "").strip() else "rtsp"
+    tem_rtmp = bool(str(camera.get("stream_key") or "").strip())
+    tem_rtsp = bool(str(camera.get("url") or camera.get("host") or "").strip())
     return {
         "id": str(camera.get("id") or ""),
         "nome": str(camera.get("nome") or ""),
         "marca": str(camera.get("marca") or ""),
         "modelo": str(camera.get("modelo") or ""),
         "ativa": camera.get("ativa") is not False,
+        "protocolo": protocolo,
+        "stream_key": str(camera.get("stream_key") or ""),
+        "rtmp_url_publicar": str(camera.get("rtmp_url_publicar") or ""),
+        "rtmp_url_lan": str(camera.get("rtmp_url_lan") or ""),
         "host": str(camera.get("host") or ""),
         "porta": camera.get("porta") if camera.get("porta") not in (None, "") else "",
         "usuario": str(camera.get("usuario") or ""),
@@ -1272,7 +1288,7 @@ def camera_publica(camera: dict) -> dict:
         "cidade": str(camera.get("cidade") or ""),
         "latitude": camera.get("latitude") if camera.get("latitude") not in (None, "") else "",
         "longitude": camera.get("longitude") if camera.get("longitude") not in (None, "") else "",
-        "tem_acesso": bool(str(camera.get("url") or camera.get("host") or "").strip()),
+        "tem_acesso": tem_rtmp if protocolo == "rtmp" else tem_rtsp,
         "avisos": avisos,
     }
 
@@ -1328,7 +1344,13 @@ def _coordenada_campo(valor, nome: str):
 
 
 def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
-    from cameras import montar_url_rtsp
+    from cameras import (
+        gerar_stream_key,
+        montar_url_rtmp_play,
+        montar_url_rtmp_publicar,
+        montar_url_rtsp,
+        normalizar_protocolo,
+    )
 
     cliente = _exigir(documento)
     if not isinstance(campos, dict):
@@ -1345,12 +1367,16 @@ def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
     marca = str(campos.get("marca") or (anterior or {}).get("marca") or "Intelbras").strip() or "Intelbras"
     if not nome or not modelo:
         raise ValueError("Informe o nome e o modelo da câmera.")
+    protocolo = normalizar_protocolo(
+        campos.get("protocolo") or (anterior or {}).get("protocolo") or "rtsp"
+    )
     registro = dict(anterior or {})
     registro.update({
         "id": ident,
         "nome": nome,
         "marca": marca,
         "modelo": modelo,
+        "protocolo": protocolo,
         "ativa": campos.get("ativa", True) is not False,
         "rua": rua_canonica(str(campos.get("rua") or "").strip()),
         "bairro": bairro_canonico(str(campos.get("bairro") or "").strip()),
@@ -1360,38 +1386,61 @@ def salvar_camera(documento: str, campos: dict, id_anterior: str = "") -> dict:
     })
     if not registro["rua"]:
         raise ValueError("Informe o logradouro da câmera.")
-    host = str(campos.get("host") or "").strip()
-    if host:
-        porta = _inteiro(campos.get("porta"), 554, "a porta")
-        # Formulário às vezes manda "IP:554" no host.
-        if ":" in host and not host.startswith("["):
-            base, _, sufixo = host.rpartition(":")
-            if base and sufixo.isdigit():
-                host = base
-                if str(campos.get("porta") or "").strip() == "":
-                    porta = int(sufixo)
-        registro["host"] = host
-        registro["porta"] = porta
-        registro["canal"] = _inteiro(campos.get("canal"), 1, "o canal")
-        registro["subtype"] = _inteiro(campos.get("subtype"), 0, "o subtype")
-        registro["usuario"] = str(campos.get("usuario") or registro.get("usuario") or "").strip()
-        senha = str(campos.get("senha") or "")
-        if senha:
-            registro["senha"] = senha
-        if not str(registro.get("senha") or ""):
-            raise ValueError("Informe a senha da câmera para gravar o novo host.")
-        registro["url"] = montar_url_rtsp(registro)
-    elif not str(registro.get("url") or registro.get("host") or "").strip():
-        raise ValueError("Informe o host da câmera.")
+
+    if protocolo == "rtmp":
+        renovar_bruto = campos.get("renovar_key")
+        if isinstance(renovar_bruto, bool):
+            renovar = renovar_bruto
+        else:
+            renovar = str(renovar_bruto or "").strip().lower() in ("1", "true", "sim", "on")
+        stream_key = str(registro.get("stream_key") or "").strip()
+        if renovar or not stream_key:
+            stream_key = gerar_stream_key()
+        from cameras import montar_url_rtmp_lan
+
+        registro["stream_key"] = stream_key
+        registro["rtmp_url_publicar"] = montar_url_rtmp_publicar(stream_key)
+        registro["rtmp_url_lan"] = montar_url_rtmp_lan(stream_key)
+        registro["url"] = montar_url_rtmp_play(stream_key)
+        # RTMP não usa host/senha da câmera na LAN
+        for chave in ("host", "porta", "usuario", "senha", "canal", "subtype"):
+            registro.pop(chave, None)
     else:
-        if str(campos.get("usuario") or "").strip():
-            registro["usuario"] = str(campos.get("usuario")).strip()
-        if str(campos.get("porta") or "").strip():
-            registro["porta"] = _inteiro(campos.get("porta"), 554, "a porta")
-        if str(campos.get("canal") or "").strip():
+        registro.pop("stream_key", None)
+        registro.pop("rtmp_url_publicar", None)
+        host = str(campos.get("host") or "").strip()
+        if host:
+            porta = _inteiro(campos.get("porta"), 554, "a porta")
+            # Formulário às vezes manda "IP:554" no host.
+            if ":" in host and not host.startswith("["):
+                base, _, sufixo = host.rpartition(":")
+                if base and sufixo.isdigit():
+                    host = base
+                    if str(campos.get("porta") or "").strip() == "":
+                        porta = int(sufixo)
+            registro["host"] = host
+            registro["porta"] = porta
             registro["canal"] = _inteiro(campos.get("canal"), 1, "o canal")
-        if str(campos.get("subtype") or "").strip():
             registro["subtype"] = _inteiro(campos.get("subtype"), 0, "o subtype")
+            registro["usuario"] = str(campos.get("usuario") or registro.get("usuario") or "").strip()
+            senha = str(campos.get("senha") or "")
+            if senha:
+                registro["senha"] = senha
+            if not str(registro.get("senha") or ""):
+                raise ValueError("Informe a senha da câmera para gravar o novo host.")
+            registro["url"] = montar_url_rtsp(registro)
+        elif not str(registro.get("url") or registro.get("host") or "").strip():
+            raise ValueError("Informe o host da câmera (RTSP) ou escolha RTMP.")
+        else:
+            if str(campos.get("usuario") or "").strip():
+                registro["usuario"] = str(campos.get("usuario")).strip()
+            if str(campos.get("porta") or "").strip():
+                registro["porta"] = _inteiro(campos.get("porta"), 554, "a porta")
+            if str(campos.get("canal") or "").strip():
+                registro["canal"] = _inteiro(campos.get("canal"), 1, "o canal")
+            if str(campos.get("subtype") or "").strip():
+                registro["subtype"] = _inteiro(campos.get("subtype"), 0, "o subtype")
+
     registro["avisos"] = list((anterior or {}).get("avisos") or [])
     cliente["cameras"] = [item for item in cameras if str(item.get("id")) != str((anterior or {}).get("id") or ident)]
     cliente["cameras"].append(registro)

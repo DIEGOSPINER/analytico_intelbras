@@ -1731,6 +1731,9 @@ def _copiar_local(destino, cfg):
     destino["cidade"] = cfg.get("cidade") or ""
     destino["latitude"] = cfg.get("latitude")
     destino["longitude"] = cfg.get("longitude")
+    destino["protocolo"] = str(cfg.get("protocolo") or "rtsp").lower()
+    destino["stream_key"] = str(cfg.get("stream_key") or "")
+    destino["rtmp_url_publicar"] = str(cfg.get("rtmp_url_publicar") or "")
 
 
 def _limpar_janelas_orfas(titulos_vivos):
@@ -1786,9 +1789,13 @@ def aplicar_cameras(
         captura, quadro = captura_com_quadro(cfg["url"])
         if captura is None:
             if ident not in avisos_offline:
+                proto = str(cfg.get("protocolo") or "rtsp").upper()
+                dica = ""
+                if proto == "RTMP":
+                    dica = " Confira se o MediaMTX está no ar e se a câmera já está enviando RTMP."
                 print(
-                    f"{cfg['nome']} offline ({destino_publico(cfg['url'])}). "
-                    "O monitoramento segue com as câmeras online."
+                    f"{cfg['nome']} offline [{proto}] ({destino_publico(cfg['url'])}). "
+                    f"O monitoramento segue com as câmeras online.{dica}"
                 )
                 avisos_offline.add(ident)
             continue
@@ -1810,8 +1817,12 @@ def aplicar_cameras(
             print(f"Falha ao abrir {cfg['nome']}: {exc}")
             continue
         avisos_offline.discard(ident)
+        proto = str(cfg.get("protocolo") or "rtsp").upper()
+        extra = ""
+        if proto == "RTMP" and cfg.get("stream_key"):
+            extra = f" | key {cfg.get('stream_key')}"
         print(
-            f"Câmera iniciada: {cfg['nome']} ({destino_publico(cfg['url'])}) "
+            f"Câmera iniciada: {cfg['nome']} [{proto}] ({destino_publico(cfg['url'])}){extra} "
             f"perfil {cfg.get('modelo') or 'padrao'} | analise {perfil['lado']}px | "
             f"carro a partir de {perfil['conf_veiculo']} em {perfil['frames_veiculo']} quadros"
         )

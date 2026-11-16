@@ -1,0 +1,20 @@
+# Ingest RTMP local para câmeras remotas (Mibo Personalizado).
+# A câmera publica em rtmp://SEU_IP_PUBLICO:1935/live/STREAM_KEY
+# O analítico lê em rtsp://127.0.0.1:8554/live/STREAM_KEY
+#
+# Subir: .\iniciar_ingest_rtmp.ps1
+# Ou: mediamtx.exe mediamtx.yml
+
+logLevel: info
+logDestinations: [stdout]
+
+rtmp: yes
+rtmpAddress: :1935
+
+rtsp: yes
+rtspAddress: :8554
+protocols: [tcp]
+
+# Aceita qualquer path /live/CHAVE sem auth (POC). Em produção, restrinja.
+paths:
+  all_others:

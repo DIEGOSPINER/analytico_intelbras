@@ -4,6 +4,7 @@
       "id": "cam-carlos-ott",
       "nome": "Câmera Professor Carlos Ott",
       "ativa": true,
+      "protocolo": "rtsp",
       "modelo": "IM5",
       "host": "192.168.0.108",
       "porta": 554,
@@ -21,6 +22,7 @@
       "id": "cam-lidia-borja",
       "nome": "Câmera Lidia Borja",
       "ativa": true,
+      "protocolo": "rtsp",
       "modelo": "im3",
       "host": "192.168.0.21",
       "porta": 554,
@@ -33,6 +35,21 @@
       "cidade": "Salvador",
       "latitude": -12.942335515695486,
       "longitude": -38.3339624780146
+    },
+    {
+      "id": "cam-vizinho-rtmp",
+      "nome": "Entrada condominio vizinho",
+      "ativa": true,
+      "protocolo": "rtmp",
+      "modelo": "IM5",
+      "stream_key": "troque-pela-chave-gerada",
+      "rtmp_url_publicar": "rtmp://SEU_IP_PUBLICO:1935/live/troque-pela-chave-gerada",
+      "url": "rtsp://127.0.0.1:8554/live/troque-pela-chave-gerada",
+      "rua": "Rua do condominio vizinho",
+      "bairro": "Stella Maris",
+      "cidade": "Salvador",
+      "latitude": -12.9425,
+      "longitude": -38.3340
     }
   ]
 }

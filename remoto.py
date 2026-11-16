@@ -2344,9 +2344,11 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
     linhas = []
     for camera in cameras:
         estado = "ativa" if camera.get("ativa") else "oculta"
+        proto = str(camera.get("protocolo") or "rtsp").upper()
         linhas.append(
             "<tr>"
             f"<td>{_html_seguro(camera.get('nome'))}</td>"
+            f"<td>{_html_seguro(proto)}</td>"
             f"<td>{_html_seguro(camera.get('rua'))}</td>"
             f"<td>{_html_seguro(camera.get('cidade'))}</td>"
             f"<td>{estado}</td>"
@@ -2357,23 +2359,50 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
             "</tr>"
         )
     tabela = (
-        "<table><tr><th>Câmera</th><th>Rua</th><th>Cidade</th><th></th><th></th><th></th></tr>"
+        "<table><tr><th>Câmera</th><th>Protocolo</th><th>Rua</th><th>Cidade</th><th></th><th></th><th></th></tr>"
         + "".join(linhas)
         + "</table>"
     ) if linhas else "<p>Nenhuma câmera nesta conta.</p>"
     atual = atual or {}
+    protocolo = str(atual.get("protocolo") or "rtsp").strip().lower()
+    if protocolo not in ("rtsp", "rtmp"):
+        protocolo = "rtmp" if atual.get("stream_key") else "rtsp"
     acesso_gravado = ""
-    if atual.get("tem_acesso") and not atual.get("host"):
-        acesso_gravado = "<p>O acesso desta câmera já está gravado. Preencha host, usuário e senha só para substituir.</p>"
+    if protocolo == "rtsp" and atual.get("tem_acesso") and not atual.get("host"):
+        acesso_gravado = "<p>O acesso RTSP desta câmera já está gravado. Preencha host, usuário e senha só para substituir.</p>"
+    bloco_rtmp = ""
+    if protocolo == "rtmp" and atual.get("rtmp_url_publicar"):
+        url_pub = _html_seguro(atual.get("rtmp_url_publicar"))
+        url_lan = _html_seguro(atual.get("rtmp_url_lan") or "")
+        chave = _html_seguro(atual.get("stream_key") or "")
+        bloco_lan = ""
+        if url_lan:
+            bloco_lan = f"""
+  <p><strong>Teste na mesma Wi-Fi / casa</strong> (use esta enquanto a câmera estiver aqui):</p>
+  <p><code id="rtmp-url-lan">{url_lan}</code>
+  <button type="button" id="copiar-rtmp-lan">Copiar LAN</button></p>
+  <p>Na mesma rede, a URL pública (IP da internet) costuma <strong>não funcionar</strong> por NAT loopback.</p>"""
+        bloco_rtmp = f"""
+<div class="aviso ok" id="rtmp-pronto">
+  <p><strong>URL pública</strong> (câmera na casa do cliente, fora da sua rede):</p>
+  <p><code id="rtmp-url">{url_pub}</code>
+  <button type="button" id="copiar-rtmp">Copiar pública</button></p>
+  {bloco_lan}
+  <p>Stream key: <code>{chave}</code></p>
+  <p>Mibo: Transmissão → Personalizado → cole a URL. Também precisa do MediaMTX no ar e, na internet, TCP 1935 no roteador.</p>
+</div>"""
+    sel_rtsp = " selected" if protocolo == "rtsp" else ""
+    sel_rtmp = " selected" if protocolo == "rtmp" else ""
     ident = atual.get("id") or ""
     miolo = f"""<main>
 <h1>Câmeras</h1>
-<p>Com pelo menos uma câmera cadastrada, você compartilha e vê os dados das câmeras do mesmo logradouro. Sem câmera, a rua permanece oculta.</p>
+<p>Escolha <strong>RTSP</strong> (puxar na LAN/Tailscale) ou <strong>RTMP</strong> (câmera envia pela internet — condomínio vizinho, Mibo Personalizado).</p>
 {tabela}
 <h2>{'Editar câmera' if ident else 'Nova câmera'}</h2>
 {_aviso_html(aviso, ok)}
 {acesso_gravado}
-<form method="post" action="/cadastro/cameras">
+{bloco_rtmp}
+<form method="post" action="/cadastro/cameras" id="form-camera">
 {_csrf(sessao)}
 <input type="hidden" name="id_anterior" value="{_html_seguro(ident)}">
 {_campo("Identificador", "id", ident)}
@@ -2381,12 +2410,25 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 {_campo_marca(atual.get("marca") or "Intelbras")}
 {_campo_modelo(atual.get("modelo") or "")}
 {_check("ativa", "Câmera ativa", atual.get("ativa", True))}
+<label>Protocolo de acesso
+<select name="protocolo" id="protocolo" required>
+<option value="rtsp"{sel_rtsp}>RTSP — analítico puxa o stream (rede local)</option>
+<option value="rtmp"{sel_rtmp}>RTMP — câmera envia (push pela internet)</option>
+</select>
+</label>
+<div id="bloco-rtsp">
+<p>Preencha o acesso da câmera na rede (Intelbras). Host pode ser IP:porta.</p>
 {_campo("Host", "host", atual.get("host") or "")}
 {_campo("Porta", "porta", _valor_campo(atual, "porta", 554))}
 {_campo("Usuário", "usuario", atual.get("usuario") or "")}
 {_campo("Senha", "senha", tipo="password")}
 {_campo("Canal", "canal", _valor_campo(atual, "canal", 1))}
 {_campo("Subtype", "subtype", _valor_campo(atual, "subtype", 0))}
+</div>
+<div id="bloco-rtmp">
+<p>Após salvar, a plataforma gera uma URL RTMP. No app Mibo: Transmissão → Personalizado → cole a URL.</p>
+{_check("renovar_key", "Gerar nova stream key (invalida a URL anterior)", False)}
+</div>
 {_campo_logradouro(atual.get("rua") or "")}
 {_campo_bairro(atual.get("bairro") or "Stella Maris")}
 {_campo_municipio(atual.get("cidade") or "Salvador")}
@@ -2394,6 +2436,37 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 {_campo("Longitude", "longitude", atual.get("longitude") if atual.get("longitude") != "" else "")}
 <button type="submit">{_svg(_ICONES["mais"])}Salvar câmera</button>
 </form>
+<script>
+(function () {{
+  var sel = document.getElementById("protocolo");
+  var rtsp = document.getElementById("bloco-rtsp");
+  var rtmp = document.getElementById("bloco-rtmp");
+  function sync() {{
+    var v = (sel && sel.value) || "rtsp";
+    if (rtsp) rtsp.style.display = v === "rtsp" ? "" : "none";
+    if (rtmp) rtmp.style.display = v === "rtmp" ? "" : "none";
+  }}
+  if (sel) {{ sel.addEventListener("change", sync); sync(); }}
+  function copiarDe(botaoId, codigoId) {{
+    var btn = document.getElementById(botaoId);
+    var url = document.getElementById(codigoId);
+    if (!btn || !url) return;
+    btn.addEventListener("click", function () {{
+      var t = url.textContent || "";
+      if (navigator.clipboard && navigator.clipboard.writeText) {{
+        navigator.clipboard.writeText(t).then(function () {{ btn.textContent = "Copiado"; }});
+      }} else {{
+        var ta = document.createElement("textarea");
+        ta.value = t; document.body.appendChild(ta); ta.select();
+        try {{ document.execCommand("copy"); btn.textContent = "Copiado"; }} catch (e) {{}}
+        document.body.removeChild(ta);
+      }}
+    }});
+  }}
+  copiarDe("copiar-rtmp", "rtmp-url");
+  copiarDe("copiar-rtmp-lan", "rtmp-url-lan");
+}})();
+</script>
 </main>"""
     return _moldura("Câmeras · C4ISTAR MONITOR", miolo, "/cadastro/cameras", **_sessao_ui(sessao))
 
@@ -4454,12 +4527,14 @@ def _tratador(portal: Portal):
         def _salvar_camera(self, sessao: dict, campos: dict):
             documento = sessao.get("documento") or ""
             try:
-                cadastro.salvar_camera(documento, {
+                salva = cadastro.salvar_camera(documento, {
                     "id": _um(campos, "id"),
                     "nome": _um(campos, "nome"),
                     "marca": _um(campos, "marca"),
                     "modelo": _um(campos, "modelo"),
                     "ativa": _marcado(campos, "ativa"),
+                    "protocolo": _um(campos, "protocolo") or "rtsp",
+                    "renovar_key": _marcado(campos, "renovar_key"),
                     "host": _um(campos, "host"),
                     "porta": _um(campos, "porta"),
                     "usuario": _um(campos, "usuario"),
@@ -4475,6 +4550,10 @@ def _tratador(portal: Portal):
             except ValueError as exc:
                 cameras = _cameras_ou_vazio(documento)
                 self._html(_form_camera(sessao, cameras, None, str(exc)), 400)
+                return
+            cam_id = (salva or {}).get("id") or ""
+            if (salva or {}).get("protocolo") == "rtmp" and cam_id:
+                self._redirecionar(f"/cadastro/cameras?id={cam_id}&ok=salvo")
                 return
             self._redirecionar("/cadastro/cameras?ok=salvo")
 
