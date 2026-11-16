@@ -126,6 +126,7 @@ def _publico(grupo: dict) -> dict:
             "documento": doc,
             "camera_id": cam_id,
             "nome": nome,
+            "rotulo": f"{nome} - grupo de vizinhos",
         })
     from config_alertas import alertas_padrao_grupo, normalizar_alertas_grupo
 
@@ -325,10 +326,21 @@ def excluir_grupo(grupo_id: str, documento: str) -> None:
 
 def nomes_cameras_compartilhadas(documento: str) -> set[str]:
     """Nomes de câmeras que o CPF enxerga via grupos de segurança."""
+    return set(rotulos_cameras_grupo(documento).keys())
+
+
+def rotulos_cameras_grupo(documento: str) -> dict[str, str]:
+    """Mapa nome_original -> 'Nome - grupo de vizinhos' para câmeras só vistas via grupo.
+
+    Câmeras próprias do documento não entram (para o dono o nome fica limpo).
+    """
     digitos = _digitos(documento)
     if not digitos:
-        return set()
-    nomes: set[str] = set()
+        return {}
+    from cadastro import nomes_cameras_conta
+
+    proprias = {n.casefold() for n in nomes_cameras_conta(digitos)}
+    saida: dict[str, str] = {}
     with _TRAVA:
         grupos = list(_ler().get("grupos") or [])
     for g in grupos:
@@ -338,10 +350,15 @@ def nomes_cameras_compartilhadas(documento: str) -> set[str]:
         for item in g.get("cameras") or []:
             if not isinstance(item, dict):
                 continue
-            nome = _nome_camera(_digitos(item.get("documento")), str(item.get("camera_id") or ""))
-            if nome:
-                nomes.add(nome)
-    return nomes
+            dono = _digitos(item.get("documento"))
+            nome = _nome_camera(dono, str(item.get("camera_id") or ""))
+            if not nome:
+                continue
+            if nome.casefold() in proprias and dono == digitos:
+                continue
+            if nome not in saida:
+                saida[nome] = f"{nome} - grupo de vizinhos"
+    return saida
 
 
 def grupos_da_camera(camera_ref: str) -> list[dict]:

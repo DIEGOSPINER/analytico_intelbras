@@ -575,6 +575,82 @@ def enviar_mensagem(
     return msg
 
 
+def _chave_grupo(grupo_id: str) -> str:
+    ident = str(grupo_id or "").strip()
+    if not ident:
+        raise ValueError("Informe o grupo.")
+    return f"grupo|{ident}"
+
+
+def _membro_do_grupo(documento: str, grupo_id: str) -> bool:
+    import grupos_seguranca as grupos
+
+    digitos = _digitos(documento)
+    g = grupos.obter_grupo(grupo_id)
+    if not g or not digitos:
+        return False
+    return digitos in {_digitos(m) for m in (g.get("membros") or [])}
+
+
+def historico_chat_grupo(documento: str, grupo_id: str, limite: int = 200) -> list[dict]:
+    if not _membro_do_grupo(documento, grupo_id):
+        raise ValueError("Você não participa deste grupo.")
+    chave = _chave_grupo(grupo_id)
+    with _TRAVA:
+        msgs = list((_ler().get("chats") or {}).get(chave) or [])
+    return msgs[-max(1, int(limite or 200)):]
+
+
+def enviar_mensagem_grupo(
+    documento: str,
+    grupo_id: str,
+    texto: str,
+    *,
+    foto_bytes: bytes | None = None,
+    foto_ext: str = ".jpg",
+) -> dict:
+    eu = _digitos(documento)
+    if not _membro_do_grupo(eu, grupo_id):
+        raise ValueError("Você não participa deste grupo.")
+    chave = _chave_grupo(grupo_id)
+    texto = str(texto or "").strip()
+    foto_rel = ""
+    if foto_bytes:
+        DIR_FOTOS.mkdir(parents=True, exist_ok=True)
+        ext = str(foto_ext or ".jpg").lower()
+        if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+            ext = ".jpg"
+        nome = f"{uuid.uuid4().hex}{ext}"
+        (DIR_FOTOS / nome).write_bytes(foto_bytes)
+        foto_rel = nome
+    if not texto and not foto_rel:
+        raise ValueError("Escreva uma mensagem ou envie uma foto.")
+    with _TRAVA:
+        bruto = _ler()
+        msg = {
+            "id": uuid.uuid4().hex[:12],
+            "de": eu,
+            "texto": texto[:4000],
+            "foto": foto_rel,
+            "quando": _agora(),
+            "grupo_id": str(grupo_id or "").strip(),
+        }
+        bruto["chats"].setdefault(chave, []).append(msg)
+        bruto["chats"][chave] = bruto["chats"][chave][-500:]
+        _gravar(bruto)
+    return msg
+
+
+def ultima_mensagem_grupo(grupo_id: str) -> dict:
+    try:
+        chave = _chave_grupo(grupo_id)
+    except ValueError:
+        return {}
+    with _TRAVA:
+        msgs = list((_ler().get("chats") or {}).get(chave) or [])
+    return dict(msgs[-1]) if msgs else {}
+
+
 def caminho_foto(nome: str) -> Path | None:
     base = Path(str(nome or "")).name
     if not base or ".." in base or "/" in base or "\\" in base:

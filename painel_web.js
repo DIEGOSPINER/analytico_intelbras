@@ -1150,8 +1150,8 @@ function montarSegmentadorInicio(tela, dados) {
 }
 
 function inicio(tela, dados) {
-  // v5: segmentador admin + matches/comportamentos em vermelho
-  if (tela.dataset.pronto !== "inicio-v5") {
+  // v7: câmeras no chip ao lado do LED (topo); cards só métricas
+  if (tela.dataset.pronto !== "inicio-v7") {
     const blocos = [
       ["pessoa", "Pessoas hoje", "periodos.dia.Pessoa"],
       ["pessoa", "Pessoas no mês", "periodos.mes.Pessoa"],
@@ -1168,7 +1168,7 @@ function inicio(tela, dados) {
     ];
     tela.innerHTML = `<section class="cartoes">${blocos.map((item) => cartao(item[0], item[1], item[2])).join("")}</section>
       <section class="cartao"><h2>Movimento do dia</h2><canvas class="grafico" id="movimento"></canvas></section>`;
-    tela.dataset.pronto = "inicio-v5";
+    tela.dataset.pronto = "inicio-v7";
   }
   montarSegmentadorInicio(tela, dados);
   const dias = dados.serie_dias || [];
@@ -1434,8 +1434,13 @@ function svgTacho(chave, rotulo) {
   </div>`;
 }
 
+function nomeCamera(camera) {
+  return String((camera && (camera.rotulo || camera.nome)) || "");
+}
+
 function fileiraFluxo(camera) {
-  const nome = escapar(camera.nome);
+  const rotulo = escapar(nomeCamera(camera));
+  const chave = escapar(camera.nome || "");
   const relogios = [
     ["pessoa", "segundo", "Pessoas / s", 2],
     ["pessoa", "minuto", "Pessoas / min", 40],
@@ -1445,9 +1450,9 @@ function fileiraFluxo(camera) {
     ["veiculo", "hora", "Veículos / h", 120],
   ];
   return `<article class="cartao"><div class="fileira-fluxo">
-    <h2>Monitor de Fluxo: ${nome}</h2>
-    ${relogios.map(([tipo, faixa, rotulo]) => svgTacho(`${camera.nome}|${tipo}|${faixa}`, rotulo)).join("")}
-    <div class="termo" data-termo="${nome}"><div class="tubo"><i></i></div><p>Risco</p></div>
+    <h2>Monitor de Fluxo: ${rotulo}</h2>
+    ${relogios.map(([tipo, faixa, rotuloFaixa]) => svgTacho(`${camera.nome}|${tipo}|${faixa}`, rotuloFaixa)).join("")}
+    <div class="termo" data-termo="${chave}"><div class="tubo"><i></i></div><p>Risco</p></div>
   </div></article>`;
 }
 
@@ -2689,9 +2694,10 @@ function falarFluxoAnormalStive(dados) {
   for (const camera of cameras) {
     if (!camera.fluxo_anormal) continue;
     const nome = camera.nome || "câmera";
+    const rotulo = nomeCamera(camera) || nome;
     const minuto = Number((camera.fluxo || {}).minuto || 0);
     const chave = `fluxo:anormal:${nome}:${Math.floor(Date.now() / 600000)}`;
-    const texto = `Fluxo de pessoas fora do normal identificado na ${nome}${minuto ? ` (${minuto}/min)` : ""}.`;
+    const texto = `Fluxo de pessoas fora do normal identificado na ${rotulo}${minuto ? ` (${minuto}/min)` : ""}.`;
     if (enfileirarFalaStive(chave, "Fluxo anormal", texto, {
       tipo: "fluxo",
       classe: "risco",

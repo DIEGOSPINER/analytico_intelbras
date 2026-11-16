@@ -117,12 +117,20 @@ a.texto { color: var(--ciano); }
 .rostos { display: flex; gap: 12px; flex-wrap: wrap; }
 .rostos figure { width: 140px; margin: 0; overflow: hidden; }
 .rostos img { width: 100%; height: 110px; object-fit: cover; }
-.led { position: fixed; top: 16px; right: 22px; z-index: 30; width: 48px; height: 48px; border-radius: 50%; }
+.topo-status { position: fixed; top: 16px; right: 22px; z-index: 30; display: flex; align-items: center; gap: 10px; }
+.led { width: 48px; height: 48px; border-radius: 50%; flex: 0 0 auto; }
 .led.branco { background: #f4f7fb; box-shadow: 0 0 28px #fff; animation: pisca 1.4s infinite; }
 .led.verde { background: #3ddc97; box-shadow: 0 0 28px #3ddc97; animation: pisca 1.2s infinite; }
 .led.amarelo { background: #ffb020; box-shadow: 0 0 28px #ffb020; animation: pisca 0.9s infinite; }
 .led.vermelho { background: #ff3b3b; box-shadow: 0 0 32px #ff3b3b; animation: pisca 0.45s infinite; }
 .led.preto { background: #05070c; box-shadow: 0 0 0 6px #ff3b3b, 0 0 32px #ff3b3b; animation: pisca 0.28s infinite; }
+.chip-cameras {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
+  border-radius: 999px; border: 1px solid var(--linha); background: rgba(11, 18, 32, .82);
+  color: var(--texto); font-size: 12px; font-weight: 600; backdrop-filter: blur(8px);
+}
+.chip-cameras svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+.chip-cameras strong { font-size: 14px; font-weight: 700; }
 @keyframes pisca { 50% { opacity: 0.28; } }
 .grafico, .mapa { width: 100%; height: 280px; border-radius: 12px; background: #101624; }
 .grafico.grafico-rosca { height: 360px; }
@@ -220,6 +228,9 @@ main[data-tela="inicio"] .cartao strong { font-size: 40px; }
 .vizinho-item img, .vizinho-avatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: #0b1220; flex: 0 0 auto; }
 .vizinho-item strong { display: block; font-size: 14px; }
 .vizinho-item span { display: block; font-size: 12px; color: var(--mudo); }
+.vizinho-item[data-tipo="grupo"] .vizinho-avatar { display:grid; place-items:center; background: rgba(76,141,255,.18); }
+.vizinho-item[data-tipo="grupo"] .vizinho-avatar svg { width: 22px; height: 22px; }
+.painel-grupo { border: 1px solid var(--linha); border-radius: 14px; padding: 10px; margin-bottom: 10px; background: rgba(11,18,32,.35); }
 .vizinhos-chat .chat { flex: 1; min-height: 280px; max-height: min(58vh, 520px); margin-bottom: 10px; }
 .vizinhos-chat form { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end; }
 .vizinhos-add { margin-top: 12px; display: grid; gap: 8px; }
@@ -728,10 +739,15 @@ def _moldura(
 </aside>
 <section class="palco{classe}"><div id="faixa-vista" class="faixa-vista" hidden></div>{miolo}</section>
 </div>
-<div id="led" class="led branco" title="Risco"></div>
+<div class="topo-status" title="Status">
+  <span class="chip-cameras" id="chip-cameras" title="Câmeras visíveis">
+    {_svg(_ICONES["camera"])}<span>Câmeras</span><strong id="contagem-cameras" data-num="cameras">0</strong>
+  </span>
+  <div id="led" class="led branco" title="Risco"></div>
+</div>
 {balao}
 {toast_rf}
-<script src="/painel.js?v=sis182"></script>
+<script src="/painel.js?v=sis183"></script>
 </body>
 </html>"""
 
@@ -1090,11 +1106,20 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
             if face else "<div class='vizinho-avatar'></div>"
         )
         lista_html.append(
-            f"<button type='button' class='vizinho-item' data-doc='{_html_seguro(item.get('documento'))}'>"
+            f"<button type='button' class='vizinho-item' data-tipo='pessoa' data-doc='{_html_seguro(item.get('documento'))}'>"
             f"{avatar}<span><strong>{_html_seguro(item.get('nome'))}</strong>"
             f"<span>{_html_seguro(item.get('vinculo') or 'Vizinho')} · {_html_seguro(item.get('ultima_mensagem') or 'Sem mensagens')}</span></span></button>"
         )
-    lista = "".join(lista_html) or "<p class='mudo'>Nenhum vizinho aceito ainda.</p>"
+    for g in meus_grupos:
+        ultima = rede.ultima_mensagem_grupo(g.get("id") or "")
+        preview = str(ultima.get("texto") or "") or f"{g.get('total_membros') or 0} membros"
+        lista_html.append(
+            f"<button type='button' class='vizinho-item' data-tipo='grupo' data-gid='{_html_seguro(g.get('id'))}'>"
+            f"<div class='vizinho-avatar' title='Grupo'>{_svg(_ICONES['vizinho'])}</div>"
+            f"<span><strong>{_html_seguro(g.get('nome'))}</strong>"
+            f"<span>Grupo · {_html_seguro(preview)}</span></span></button>"
+        )
+    lista = "".join(lista_html) or "<p class='mudo'>Nenhum vizinho ou grupo ainda.</p>"
     pend_html = []
     for item in pendencias.get("recebidas") or []:
         pend_html.append(
@@ -1193,11 +1218,24 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 </article>
 <article class="vizinhos-chat">
 <h2 id="titulo-chat-vizinho">Conversa</h2>
-<p id="subtitulo-chat-vizinho" class="mudo">Escolha um contato à esquerda.</p>
+<p id="subtitulo-chat-vizinho" class="mudo">Escolha um contato ou grupo à esquerda.</p>
+<div id="painel-grupo" class="painel-grupo" hidden>
+  <div id="grupo-membros" class="chips"></div>
+  <div id="grupo-cameras" class="chips" style="margin-top:8px"></div>
+  <div class="acoes-grupo" style="margin-top:10px">
+    <label>Adicionar câmera
+      <select id="sel-cam-painel-grupo"><option value="">Escolher câmera…</option>{opcoes_cams}</select>
+    </label>
+    <button type="button" id="btn-add-cam-grupo">Adicionar câmeras</button>
+    <button type="button" id="btn-add-membro-grupo">Incluir membro</button>
+    <select id="sel-membro-painel-grupo" hidden><option value="">Escolher contato…</option>{opcoes_contatos}</select>
+  </div>
+</div>
 <div class="chat" id="chat-vizinhos"></div>
 <form id="form-chat-vizinho" enctype="multipart/form-data">
 {_csrf(sessao)}
 <input type="hidden" name="documento_vizinho" id="doc-chat-vizinho" value="">
+<input type="hidden" name="grupo_id" id="grupo-chat-vizinho" value="">
 <label style="grid-column:1 / -1">Mensagem
 <input name="texto" id="texto-chat-vizinho" placeholder="Escreva como no WhatsApp" autocomplete="off" disabled>
 </label>
@@ -1207,8 +1245,8 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
 </article>
 </section>
 <section class="grupos-seguranca" id="grupos-seguranca">
-<h2>Grupos de segurança</h2>
-<p class="mudo">Ex.: “Grupo de segurança da área do Flamengo”. Câmeras de ruas diferentes e alertas (incluindo reconhecimento facial) chegam a todos os membros; no ao vivo você também vê as câmeras compartilhadas no grupo. Escolha quais tipos de alerta o grupo compartilha.</p>
+<h2>Criar grupo de segurança</h2>
+<p class="mudo">Os grupos aparecem na lista de Contatos (como no WhatsApp). Abra o grupo para ver membros, mensagens e compartilhar câmeras — elas aparecem para os outros como “Câmera — grupo de vizinhos”, com alertas e dashboards.</p>
 {bloco_grupos}
 <form id="form-criar-grupo" class="criar-grupo" style="grid-template-columns:1fr">
 {_csrf(sessao)}
@@ -1283,8 +1321,16 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
   const nomeSol = document.getElementById("nome-solicitar-vizinho");
   const btnSol = document.getElementById("btn-solicitar-vizinho");
   let ativo = "";
+  let ativoTipo = "";
+  let ativoGrupo = "";
   let timer = null;
   let timerBusca = null;
+  const painelGrupo = document.getElementById("painel-grupo");
+  const grupoMembros = document.getElementById("grupo-membros");
+  const grupoCameras = document.getElementById("grupo-cameras");
+  const grupoCampo = document.getElementById("grupo-chat-vizinho");
+  const selCamPainel = document.getElementById("sel-cam-painel-grupo");
+  const selMembroPainel = document.getElementById("sel-membro-painel-grupo");
   function bolha(msg) {{
     const eu = msg.de === (document.body.dataset.documento || "");
     const fotoHtml = msg.foto ? `<img alt="foto" src="/vizinhos/foto/${{msg.foto}}">` : "";
@@ -1305,38 +1351,118 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
   document.getElementById("btn-abrir-add-vizinho")?.addEventListener("click", abrirModal);
   document.getElementById("btn-fechar-add-vizinho")?.addEventListener("click", fecharModal);
   modal?.addEventListener("click", (ev) => {{ if (ev.target === modal) fecharModal(); }});
+  function habilitarChat(ligado) {{
+    texto.disabled = !ligado; foto.disabled = !ligado; btn.disabled = !ligado;
+  }}
   async function carregarChat(doc, nome) {{
     ativo = doc;
+    ativoTipo = "pessoa";
+    ativoGrupo = "";
     docCampo.value = doc;
-    texto.disabled = false; foto.disabled = false; btn.disabled = false;
+    if (grupoCampo) grupoCampo.value = "";
+    if (painelGrupo) painelGrupo.hidden = true;
+    habilitarChat(true);
     titulo.textContent = nome || "Conversa";
     sub.textContent = "Documento " + doc;
-    lista.querySelectorAll(".vizinho-item").forEach((el) => el.classList.toggle("ativo", el.dataset.doc === doc));
+    lista.querySelectorAll(".vizinho-item").forEach((el) => {{
+      const on = el.dataset.tipo === "pessoa" && el.dataset.doc === doc;
+      el.classList.toggle("ativo", on);
+    }});
     const resp = await fetch("/vizinhos/chat.json?documento=" + encodeURIComponent(doc));
     const dados = await resp.json().catch(() => ({{mensagens: []}}));
     chat.innerHTML = (dados.mensagens || []).map(bolha).join("") || "<p class='mudo'>Nenhuma mensagem ainda.</p>";
+    chat.scrollTop = chat.scrollHeight;
+  }}
+  async function carregarGrupo(gid, nome) {{
+    ativo = "";
+    ativoTipo = "grupo";
+    ativoGrupo = gid;
+    docCampo.value = "";
+    if (grupoCampo) grupoCampo.value = gid;
+    habilitarChat(true);
+    titulo.textContent = nome || "Grupo";
+    sub.textContent = "Grupo de vizinhos";
+    lista.querySelectorAll(".vizinho-item").forEach((el) => {{
+      const on = el.dataset.tipo === "grupo" && el.dataset.gid === gid;
+      el.classList.toggle("ativo", on);
+    }});
+    if (painelGrupo) painelGrupo.hidden = false;
+    const [gResp, cResp] = await Promise.all([
+      fetch("/vizinhos/grupos.json"),
+      fetch("/vizinhos/chat.json?grupo_id=" + encodeURIComponent(gid)),
+    ]);
+    const gDados = await gResp.json().catch(() => ({{grupos: []}}));
+    const cDados = await cResp.json().catch(() => ({{mensagens: []}}));
+    const g = (gDados.grupos || []).find((item) => String(item.id) === String(gid)) || {{}};
+    const membros = g.membros || [];
+    const cams = g.cameras || [];
+    if (grupoMembros) {{
+      grupoMembros.innerHTML = membros.length
+        ? membros.map((m) => `<span class="chip">${{escapar(m.nome || m.documento || "")}}</span>`).join("")
+        : "<span class='mudo'>Sem membros.</span>";
+    }}
+    if (grupoCameras) {{
+      grupoCameras.innerHTML = cams.length
+        ? cams.map((c) => {{
+            const rotulo = escapar(c.rotulo || ((c.nome || "") + " - grupo de vizinhos"));
+            return `<span class="chip" title="${{escapar(c.documento || "")}}">${{rotulo}}`
+              + `<button type="button" data-acao-grupo="rm-cam" data-gid="${{escapar(gid)}}" data-cam="${{escapar(c.camera_id || "")}}"`
+              + ` style="margin-left:4px;border:0;background:transparent;color:inherit;cursor:pointer">×</button></span>`;
+          }}).join("")
+        : "<span class='mudo'>Nenhuma câmera compartilhada. Use Adicionar câmeras.</span>";
+    }}
+    chat.innerHTML = (cDados.mensagens || []).map(bolha).join("") || "<p class='mudo'>Nenhuma mensagem no grupo ainda.</p>";
     chat.scrollTop = chat.scrollHeight;
   }}
   lista?.addEventListener("click", (ev) => {{
     const item = ev.target.closest(".vizinho-item");
     if (!item) return;
     const nome = item.querySelector("strong")?.textContent || "";
-    carregarChat(item.dataset.doc || "", nome);
     if (timer) clearInterval(timer);
+    if ((item.dataset.tipo || "pessoa") === "grupo") {{
+      carregarGrupo(item.dataset.gid || "", nome);
+      timer = setInterval(() => {{ if (ativoGrupo) carregarGrupo(ativoGrupo, titulo.textContent); }}, 4000);
+      return;
+    }}
+    carregarChat(item.dataset.doc || "", nome);
     timer = setInterval(() => {{ if (ativo) carregarChat(ativo, titulo.textContent); }}, 4000);
+  }});
+  document.getElementById("btn-add-cam-grupo")?.addEventListener("click", async () => {{
+    if (!ativoGrupo) {{ alert("Abra um grupo na lista de contatos."); return; }}
+    const cam = (selCamPainel && selCamPainel.value) || "";
+    if (!cam) {{ alert("Escolha uma câmera."); return; }}
+    const dados = await postGrupo("camera", {{ grupo_id: ativoGrupo, camera_id: cam }});
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível compartilhar."); return; }}
+    carregarGrupo(ativoGrupo, titulo.textContent);
+  }});
+  document.getElementById("btn-add-membro-grupo")?.addEventListener("click", async () => {{
+    if (!ativoGrupo) {{ alert("Abra um grupo na lista de contatos."); return; }}
+    if (selMembroPainel) selMembroPainel.hidden = false;
+    const membro = (selMembroPainel && selMembroPainel.value) || "";
+    if (!membro) {{ alert("Escolha um vizinho na lista."); return; }}
+    const dados = await postGrupo("membro", {{ grupo_id: ativoGrupo, documento_membro: membro }});
+    if (!dados.ok) {{ alert(dados.erro || "Não foi possível incluir."); return; }}
+    carregarGrupo(ativoGrupo, titulo.textContent);
   }});
   form?.addEventListener("submit", async (ev) => {{
     ev.preventDefault();
-    if (!ativo) return;
+    if (!ativo && !ativoGrupo) return;
     const corpo = new FormData(form);
     corpo.set("csrf", csrf);
-    corpo.set("documento_vizinho", ativo);
+    if (ativoGrupo) {{
+      corpo.set("grupo_id", ativoGrupo);
+      corpo.delete("documento_vizinho");
+    }} else {{
+      corpo.set("documento_vizinho", ativo);
+      corpo.delete("grupo_id");
+    }}
     const resp = await fetch("/vizinhos/mensagem", {{ method: "POST", body: corpo }});
     const dados = await resp.json().catch(() => ({{}}));
     if (!dados.ok) {{ alert(dados.erro || "Não foi possível enviar."); return; }}
     texto.value = "";
     foto.value = "";
-    carregarChat(ativo, titulo.textContent);
+    if (ativoGrupo) carregarGrupo(ativoGrupo, titulo.textContent);
+    else carregarChat(ativo, titulo.textContent);
   }});
   async function buscarNome() {{
     const q = (busca.value || "").trim();
@@ -1434,7 +1560,7 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     if (!dados.ok) {{ alert(dados.erro || "Não foi possível criar o grupo."); return; }}
     location.reload();
   }});
-  document.getElementById("grupos-seguranca")?.addEventListener("click", async (ev) => {{
+  async function aoAcaoGrupo(ev) {{
     const botao = ev.target.closest("[data-acao-grupo]");
     if (!botao) return;
     const gid = botao.dataset.gid || "";
@@ -1443,12 +1569,12 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     if (acao === "sair" && !confirm("Sair deste grupo?")) return;
     let extras = {{ grupo_id: gid }};
     if (acao === "add-membro") {{
-      const sel = document.querySelector(`select.sel-membro-grupo[data-gid="${{gid}}"]`);
+      const sel = document.querySelector(`select.sel-membro-grupo[data-gid="${{gid}}"]`) || selMembroPainel;
       extras.documento_membro = (sel && sel.value) || "";
       if (!extras.documento_membro) {{ alert("Escolha um vizinho."); return; }}
     }}
     if (acao === "add-cam") {{
-      const sel = document.querySelector(`select.sel-cam-grupo[data-gid="${{gid}}"]`);
+      const sel = document.querySelector(`select.sel-cam-grupo[data-gid="${{gid}}"]`) || selCamPainel;
       extras.camera_id = (sel && sel.value) || "";
       if (!extras.camera_id) {{ alert("Escolha uma câmera."); return; }}
     }}
@@ -1468,8 +1594,14 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     }};
     const dados = await postGrupo(mapa[acao] || acao, extras);
     if (!dados.ok) {{ alert(dados.erro || "Não foi possível atualizar o grupo."); return; }}
+    if (ativoGrupo && String(ativoGrupo) === String(gid) && acao === "rm-cam") {{
+      carregarGrupo(ativoGrupo, titulo.textContent);
+      return;
+    }}
     location.reload();
-  }});
+  }}
+  document.getElementById("grupos-seguranca")?.addEventListener("click", aoAcaoGrupo);
+  painelGrupo?.addEventListener("click", aoAcaoGrupo);
 }})();
 </script>"""
     return _moldura("Vizinhos · C4ISTAR MONITOR", miolo, "/vizinhos", **_sessao_ui(sessao))
@@ -3018,9 +3150,20 @@ def _filtrar_resumo_conta(resumo: dict, documento: str, perfil: str) -> dict:
 
     resumo = dict(resumo or {})
     vivo = [
-        item for item in (resumo.get("cameras_vivo") or [])
+        dict(item) for item in (resumo.get("cameras_vivo") or [])
         if (item.get("nome") or "") in permitidas
     ]
+    try:
+        from grupos_seguranca import rotulos_cameras_grupo
+
+        rotulos = rotulos_cameras_grupo(digitos)
+    except Exception:
+        rotulos = {}
+    for item in vivo:
+        nome = str(item.get("nome") or "").strip()
+        if nome in rotulos:
+            item["rotulo"] = rotulos[nome]
+            item["grupo_vizinhos"] = True
     resumo["cameras_vivo"] = vivo
     resumo["cameras"] = len(vivo)
 
@@ -3290,7 +3433,24 @@ def _cameras_ao_vivo(portal, documento: str, perfil: str) -> list:
     permitidas = cadastro.nomes_cameras_visiveis(documento, perfil)
     if not permitidas:
         return []
-    return [item for item in cameras if _nome_camera_item(item) in permitidas]
+    try:
+        from grupos_seguranca import rotulos_cameras_grupo
+
+        rotulos = rotulos_cameras_grupo(documento)
+    except Exception:
+        rotulos = {}
+    saida = []
+    for item in cameras:
+        nome = _nome_camera_item(item)
+        if nome not in permitidas:
+            continue
+        if nome in rotulos and isinstance(item, (list, tuple)) and len(item) >= 3:
+            saida.append((item[0], rotulos[nome], item[2]))
+        elif nome in rotulos and isinstance(item, (list, tuple)) and len(item) >= 2:
+            saida.append((item[0], rotulos[nome]) + tuple(item[2:]))
+        else:
+            saida.append(item)
+    return saida
 
 
 def _cameras_sessao(portal, sessao: dict) -> list:
@@ -3849,9 +4009,13 @@ def _tratador(portal: Portal):
             if caminho == "/vizinhos/chat.json":
                 import vizinhos as rede
 
+                grupo_id = (consulta.get("grupo_id") or [""])[0]
                 doc_outro = (consulta.get("documento") or [""])[0]
                 try:
-                    msgs = rede.historico_chat(sessao.get("documento") or "", doc_outro)
+                    if grupo_id:
+                        msgs = rede.historico_chat_grupo(sessao.get("documento") or "", grupo_id)
+                    else:
+                        msgs = rede.historico_chat(sessao.get("documento") or "", doc_outro)
                 except ValueError as exc:
                     self._json({"ok": False, "erro": str(exc), "mensagens": []})
                     return
@@ -4512,13 +4676,22 @@ def _tratador(portal: Portal):
                 self._json_status(403, {"ok": False, "erro": "Atualize a página e tente de novo."})
                 return
             foto = (arquivos or {}).get("foto") or b""
+            grupo_id = _um(campos, "grupo_id")
             try:
-                msg = rede.enviar_mensagem(
-                    sessao.get("documento") or "",
-                    _um(campos, "documento_vizinho"),
-                    _um(campos, "texto"),
-                    foto_bytes=foto if foto else None,
-                )
+                if grupo_id:
+                    msg = rede.enviar_mensagem_grupo(
+                        sessao.get("documento") or "",
+                        grupo_id,
+                        _um(campos, "texto"),
+                        foto_bytes=foto if foto else None,
+                    )
+                else:
+                    msg = rede.enviar_mensagem(
+                        sessao.get("documento") or "",
+                        _um(campos, "documento_vizinho"),
+                        _um(campos, "texto"),
+                        foto_bytes=foto if foto else None,
+                    )
             except ValueError as exc:
                 self._json({"ok": False, "erro": str(exc)})
                 return
