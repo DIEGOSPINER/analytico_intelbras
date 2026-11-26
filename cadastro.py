@@ -1298,6 +1298,54 @@ def cameras_publicas(documento: str) -> list[dict]:
     return [camera_publica(item) for item in cliente.get("cameras") or [] if isinstance(item, dict)]
 
 
+def documento_dono_camera(ident: str) -> str:
+    """Documento da conta que possui a câmera (id)."""
+    chave = str(ident or "").strip()
+    if not chave:
+        return ""
+    for conta in listar_clientes():
+        if conta.get("ativo") is False:
+            continue
+        for item in conta.get("cameras") or []:
+            if isinstance(item, dict) and str(item.get("id") or "").strip() == chave:
+                return _digitos(conta.get("documento") or "")
+    return ""
+
+
+def cameras_gestao(documento: str = "", *, administrador: bool = False) -> list[dict]:
+    """Lista câmeras RTSP e RTMP para a página de gestão.
+
+    Admin: todas as câmeras de contas ativas.
+    Demais: só as da própria conta.
+    """
+    saida: list[dict] = []
+    vistos: set[str] = set()
+    digitos_sessao = _digitos(documento or "")
+
+    for conta in listar_clientes():
+        if conta.get("ativo") is False:
+            continue
+        doc = _digitos(conta.get("documento") or "")
+        if not administrador and digitos_sessao and doc != digitos_sessao:
+            continue
+        if not administrador and not digitos_sessao:
+            continue
+        nome_conta = str(conta.get("nome") or "").strip()
+        for item in conta.get("cameras") or []:
+            if not isinstance(item, dict):
+                continue
+            ident = str(item.get("id") or "").strip()
+            chave = ident or str(item.get("nome") or "").strip()
+            if not chave or chave in vistos:
+                continue
+            vistos.add(chave)
+            pub = camera_publica(item)
+            pub["documento_dono"] = doc
+            pub["conta"] = nome_conta
+            saida.append(pub)
+    return saida
+
+
 def _espelhar_cameras(cliente: dict | None = None):
     """Espelha todas as câmeras ativas das contas em cameras.json."""
     from cameras import ARQUIVO_CAMERAS

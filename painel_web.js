@@ -32,6 +32,14 @@ function escapar(texto) {
   return String(texto ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function mascararDocumento(valor) {
+  const d = String(valor || "").replace(/\D/g, "");
+  if (d.length === 11) return `***.***.***-${d.slice(-2)}`;
+  if (d.length === 14) return `**.***.***/****-${d.slice(-2)}`;
+  if (d.length >= 4) return `${"*".repeat(d.length - 2)}${d.slice(-2)}`;
+  return d ? "***" : "";
+}
+
 function corSerie(caminho) {
   const chave = String(caminho || "").split(".").pop();
   if (chave === "Comportamento" || chave === "MatchFace" || chave === "MatchPlaca") {
@@ -2137,7 +2145,7 @@ async function sistema(tela) {
     if (sel && !sel.dataset.opcoes) {
       const opts = ['<option value="">Cluster total (clientes + administrador)</option>'].concat(
         (pacote.clientes || []).map((c) =>
-          `<option value="${escapar(c.documento)}">${escapar(c.nome || c.documento)} · ${escapar(c.documento)}</option>`
+          `<option value="${escapar(c.documento)}">${escapar(c.nome || c.documento_visivel || mascararDocumento(c.documento))} · ${escapar(c.documento_visivel || mascararDocumento(c.documento))}</option>`
         )
       );
       sel.innerHTML = opts.join("");
@@ -2149,7 +2157,7 @@ async function sistema(tela) {
     const cluster = pacote.cluster || {};
     if (info) {
       info.textContent = cli
-        ? `Computador/escopo do cliente ${cli.nome || cli.documento}: página filtrada (${cli.cameras || 0} câmera(s), fatia ~${Math.round((Number(cli.fator) || 0) * 100)}% do host, ~${Number(cli.mb_estimado_local || 0).toLocaleString("pt-BR")} MB).`
+        ? `Computador/escopo do cliente ${cli.nome || cli.documento_visivel || mascararDocumento(cli.documento)}: página filtrada (${cli.cameras || 0} câmera(s), fatia ~${Math.round((Number(cli.fator) || 0) * 100)}% do host, ~${Number(cli.mb_estimado_local || 0).toLocaleString("pt-BR")} MB).`
         : `${cluster.rotulo || "Cluster total"}: ${cluster.clientes || 0} conta(s), ${cluster.cameras || 0} câmera(s). Sem seleção = soma de todo o cluster.`;
     }
     const agora = pacote.agora || {};
@@ -2188,11 +2196,11 @@ async function sistema(tela) {
     if (custosCli) {
       const lista = custos.por_cliente_mes || [];
       if (filtro) {
-        custosCli.innerHTML = `<p>Filtro ${escapar(filtro)} · GPT mês: USD ${Number(custos.openai_usd_mes || 0).toLocaleString("pt-BR")} · tokens ${Number(custos.openai_tokens_mes || 0).toLocaleString("pt-BR")}</p>
+        custosCli.innerHTML = `<p>Filtro ${escapar(mascararDocumento(filtro))} · GPT mês: USD ${Number(custos.openai_usd_mes || 0).toLocaleString("pt-BR")} · tokens ${Number(custos.openai_tokens_mes || 0).toLocaleString("pt-BR")}</p>
           <p>Total canais no mês: USD ${Number(custos.total_usd_mes || 0).toLocaleString("pt-BR")}</p>`;
       } else {
         const linhas = lista.map((item) =>
-          `<tr><td>${escapar(item.documento)}</td><td>${Number(item.unidades || 0).toLocaleString("pt-BR")}</td><td>${Number(item.usd || 0).toLocaleString("pt-BR")}</td></tr>`
+          `<tr><td>${escapar(item.documento_visivel || mascararDocumento(item.documento))}</td><td>${Number(item.unidades || 0).toLocaleString("pt-BR")}</td><td>${Number(item.usd || 0).toLocaleString("pt-BR")}</td></tr>`
         ).join("");
         custosCli.innerHTML = `<table><tr><th>CPF/CNPJ</th><th>Tokens/unid.</th><th>USD</th></tr>${linhas || "<tr><td colspan='3'>Sem uso GPT registrado neste mês.</td></tr>"}</table>`;
       }

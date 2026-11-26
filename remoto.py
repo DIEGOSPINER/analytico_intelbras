@@ -591,13 +591,45 @@ def _marcado(campos: dict, nome: str) -> bool:
     return str(valores[-1]) in ("1", "true", "on", "sim")
 
 
-def _documento_visivel(valor: str) -> str:
-    digitos = "".join(caractere for caractere in str(valor or "") if caractere.isdigit())
+def _documento_digitos(valor: str) -> str:
+    return "".join(caractere for caractere in str(valor or "") if caractere.isdigit())
+
+
+def _documento_formatado(valor: str) -> str:
+    """Formata CPF/CNPJ completo (uso interno / campos de edição)."""
+    digitos = _documento_digitos(valor)
     if len(digitos) == 11:
         return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
     if len(digitos) == 14:
         return f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}"
     return digitos
+
+
+def _documento_visivel(valor: str) -> str:
+    """CPF/CNPJ parcialmente oculto na interface (não expõe dados de clientes)."""
+    digitos = _documento_digitos(valor)
+    if len(digitos) == 11:
+        return f"***.***.***-{digitos[-2:]}"
+    if len(digitos) == 14:
+        return f"**.***.***/****-{digitos[-2:]}"
+    if len(digitos) >= 4:
+        return ("*" * (len(digitos) - 2)) + digitos[-2:]
+    if digitos:
+        return "***"
+    return ""
+
+
+def _campo_documento_oculto(nome: str, valor: str, *, rotulo: str = "CPF ou CNPJ", obrigatorio: bool = False) -> str:
+    """Exibe documento mascarado e envia os dígitos reais em campo oculto."""
+    digitos = _documento_digitos(valor)
+    req = " required" if obrigatorio else ""
+    return (
+        f"<label>{_html_seguro(rotulo)}"
+        f"<input type='text' value='{_html_seguro(_documento_visivel(digitos))}' readonly tabindex='-1'>"
+        f"</label>"
+        f"<input type='hidden' name='{_html_seguro(nome)}' value='{_html_seguro(digitos)}'{req}>"
+        f"<p class='mudo'>Documento parcialmente oculto por privacidade.</p>"
+    )
 
 
 def _telefone_visivel(aviso: dict) -> str:
@@ -782,11 +814,11 @@ def _opcoes_vista_admin() -> list[dict]:
         doc = "".join(c for c in str(item.get("documento") or "") if c.isdigit())
         if not doc or doc == "".join(c for c in str(cadastro.DOCUMENTO_ADMIN) if c.isdigit()):
             continue
-        nome = str(item.get("nome") or "") or doc
+        nome = str(item.get("nome") or "") or _documento_visivel(doc)
         ativo = item.get("ativo") is not False
         saida.append({
             "valor": doc,
-            "rotulo": f"{nome} · {doc}" + ("" if ativo else " (inativo)"),
+            "rotulo": f"{nome} · {_documento_visivel(doc)}" + ("" if ativo else " (inativo)"),
         })
     return saida
 
@@ -800,7 +832,7 @@ def _info_vista_admin(portal: Portal, sessao: dict) -> dict:
     else:
         modo = "cliente"
         cli = cadastro.cliente_por_documento(atual) or {}
-        rotulo = f"{cli.get('nome') or atual} · {atual}"
+        rotulo = f"{cli.get('nome') or _documento_visivel(atual)} · {_documento_visivel(atual)}"
     return {
         "valor": atual,
         "modo": modo,
@@ -944,13 +976,20 @@ def _grifos(perfil: str = "", csrf: str = "", usuario: str = "", documento: str 
   let rede = null;
   let opcoesProntas = false;
   let cacheDados = null;
+  function mascararDocumento(valor) {{
+    const d = String(valor || "").replace(/\\D/g, "");
+    if (d.length === 11) return "***.***.***-" + d.slice(-2);
+    if (d.length === 14) return "**.***.***/****-" + d.slice(-2);
+    if (d.length >= 4) return "*".repeat(d.length - 2) + d.slice(-2);
+    return d ? "***" : "";
+  }}
   function popularSelects(dados) {{
     if (!selCli || !selPes) return;
     if (!opcoesProntas) {{
       const cliAtual = selCli.value;
       const pesAtual = selPes.value;
       selCli.innerHTML = '<option value="">Todos os clientes</option>' + (dados.opcoes_clientes || []).map((c) =>
-        `<option value="${{c.documento || ""}}">${{(c.nome || c.documento || "")}} · ${{c.documento || ""}}</option>`
+        `<option value="${{c.documento || ""}}">${{(c.nome || mascararDocumento(c.documento) || "")}} · ${{mascararDocumento(c.documento) || ""}}</option>`
       ).join("");
       selPes.innerHTML = '<option value="">Todas as pessoas</option>' + (dados.opcoes_pessoas || []).map((p) =>
         `<option value="${{p.face_id || ""}}">${{(p.nome || p.face_id || "")}} · ${{p.face_id || ""}}</option>`
@@ -1158,7 +1197,7 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
             for m in (g.get("membros") or [])
         ) or "—"
         cams_html = "".join(
-            f"<span class='chip' title='{_html_seguro(c.get('documento') or '')}'>{_html_seguro(c.get('nome'))}"
+            f"<span class='chip' title='{_html_seguro(_documento_visivel(c.get('documento') or ''))}'>{_html_seguro(c.get('nome'))}"
             f"<button type='button' data-acao-grupo='rm-cam' data-gid='{_html_seguro(g.get('id'))}' "
             f"data-cam='{_html_seguro(c.get('camera_id'))}' style='margin-left:4px;border:0;background:transparent;color:inherit;cursor:pointer'>×</button></span>"
             for c in (g.get("cameras") or [])
@@ -1339,6 +1378,13 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
   function escapar(t) {{
     return String(t || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }}
+  function mascararDocumento(valor) {{
+    const d = String(valor || "").replace(/\\D/g, "");
+    if (d.length === 11) return "***.***.***-" + d.slice(-2);
+    if (d.length === 14) return "**.***.***/****-" + d.slice(-2);
+    if (d.length >= 4) return "*".repeat(d.length - 2) + d.slice(-2);
+    return d ? "***" : "";
+  }}
   function abrirModal() {{
     modal.hidden = false;
     modal.classList.add("aberto");
@@ -1363,7 +1409,7 @@ def _vizinhos(sessao: dict, aviso: str = "", ok: bool = False) -> str:
     if (painelGrupo) painelGrupo.hidden = true;
     habilitarChat(true);
     titulo.textContent = nome || "Conversa";
-    sub.textContent = "Documento " + doc;
+    sub.textContent = "Documento " + mascararDocumento(doc);
     lista.querySelectorAll(".vizinho-item").forEach((el) => {{
       const on = el.dataset.tipo === "pessoa" && el.dataset.doc === doc;
       el.classList.toggle("ativo", on);
@@ -2357,7 +2403,7 @@ def _form_cliente(sessao: dict, cliente: dict, aviso: str = "", ok: bool = False
 {_csrf(sessao)}
 {_campo("Nome", "nome", cliente.get("nome") or "")}
 {_campo("RG", "rg", cliente.get("rg") or "")}
-{_campo("CPF ou CNPJ", "documento", _documento_visivel(cliente.get("documento") or sessao.get("documento") or ""), obrigatorio=True)}
+{_campo_documento_oculto("documento", cliente.get("documento") or sessao.get("documento") or "", obrigatorio=True)}
 {_campo("E-mail da conta", "email", cliente.get("email") or "", tipo="email")}
 <label>Foto do cliente (morador da rua)
 <input type="file" name="foto" accept="image/*" capture="user">
@@ -2449,7 +2495,7 @@ def _gestao_editar(sessao: dict, documento: str, aviso: str = "", ok: bool = Fal
 <input type="hidden" name="documento_atual" value="{_html_seguro(cliente.get('documento') or documento)}">
 {_campo("Nome", "nome", cliente.get("nome") or "")}
 {_campo("RG", "rg", cliente.get("rg") or "")}
-{_campo("CPF ou CNPJ", "documento", _documento_visivel(cliente.get("documento") or ""), obrigatorio=True)}
+{_campo_documento_oculto("documento", cliente.get("documento") or "", obrigatorio=True)}
 {_campo("E-mail da conta", "email", cliente.get("email") or "", tipo="email", obrigatorio=True)}
 <button type="submit">{_svg(_ICONES["mais"])}Salvar alterações</button>
 </form>
@@ -2472,29 +2518,49 @@ def _gestao_editar(sessao: dict, documento: str, aviso: str = "", ok: bool = Fal
     )
 
 
-def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: str = "", ok: bool = False) -> str:
+def _form_camera(
+    sessao: dict,
+    cameras: list[dict],
+    atual: dict | None,
+    aviso: str = "",
+    ok: bool = False,
+    online_ids: set | None = None,
+) -> str:
+    online_ids = online_ids or set()
+    admin = (sessao.get("perfil") or "") == "administrador"
     linhas = []
     for camera in cameras:
         estado = "ativa" if camera.get("ativa") else "oculta"
         proto = str(camera.get("protocolo") or "rtsp").upper()
+        cam_id = str(camera.get("id") or "")
+        cam_nome = str(camera.get("nome") or "")
+        esta_online = cam_id in online_ids or cam_nome.lower() in {x.lower() for x in online_ids}
+        status_online = "online" if esta_online else "offline"
+        conta = _html_seguro(camera.get("conta") or "")
+        col_conta = f"<td>{conta}</td>" if admin else ""
         linhas.append(
             "<tr>"
             f"<td>{_html_seguro(camera.get('nome'))}</td>"
+            f"{col_conta}"
             f"<td>{_html_seguro(proto)}</td>"
+            f"<td>{_html_seguro(status_online)}</td>"
             f"<td>{_html_seguro(camera.get('rua'))}</td>"
             f"<td>{_html_seguro(camera.get('cidade'))}</td>"
             f"<td>{estado}</td>"
-            f"<td><a class='texto' href='/cadastro/cameras?id={_html_seguro(camera.get('id'))}'>Editar</a></td>"
+            f"<td><a class='texto' href='/cadastro/cameras?id={_html_seguro(cam_id)}'>Editar</a></td>"
             "<td><form method='post' action='/cadastro/cameras/remover'>"
-            f"{_csrf(sessao)}<input type='hidden' name='id' value='{_html_seguro(camera.get('id'))}'>"
+            f"{_csrf(sessao)}<input type='hidden' name='id' value='{_html_seguro(cam_id)}'>"
+            f"<input type='hidden' name='documento_dono' value='{_html_seguro(camera.get('documento_dono') or '')}'>"
             "<button type='submit'>Excluir</button></form></td>"
             "</tr>"
         )
+    cab_conta = "<th>Conta</th>" if admin else ""
     tabela = (
-        "<table><tr><th>Câmera</th><th>Protocolo</th><th>Rua</th><th>Cidade</th><th></th><th></th><th></th></tr>"
+        f"<table><tr><th>Câmera</th>{cab_conta}<th>Protocolo</th><th>Status</th>"
+        "<th>Rua</th><th>Cidade</th><th>Cadastro</th><th></th><th></th></tr>"
         + "".join(linhas)
         + "</table>"
-    ) if linhas else "<p>Nenhuma câmera nesta conta.</p>"
+    ) if linhas else "<p>Nenhuma câmera cadastrada.</p>"
     atual = atual or {}
     protocolo = str(atual.get("protocolo") or "rtsp").strip().lower()
     if protocolo not in ("rtsp", "rtmp"):
@@ -2526,9 +2592,15 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
     sel_rtsp = " selected" if protocolo == "rtsp" else ""
     sel_rtmp = " selected" if protocolo == "rtmp" else ""
     ident = atual.get("id") or ""
+    doc_dono = atual.get("documento_dono") or (sessao.get("documento") if not admin else "") or ""
+    intro = (
+        "Gestão de todas as câmeras das contas ativas (RTSP e RTMP): editar, excluir e ver status online."
+        if admin
+        else "Escolha <strong>RTSP</strong> (puxar na LAN/Tailscale) ou <strong>RTMP</strong> (câmera envia pela internet)."
+    )
     miolo = f"""<main>
 <h1>Câmeras</h1>
-<p>Escolha <strong>RTSP</strong> (puxar na LAN/Tailscale) ou <strong>RTMP</strong> (câmera envia pela internet — condomínio vizinho, Mibo Personalizado).</p>
+<p>{intro}</p>
 {tabela}
 <h2>{'Editar câmera' if ident else 'Nova câmera'}</h2>
 {_aviso_html(aviso, ok)}
@@ -2537,6 +2609,7 @@ def _form_camera(sessao: dict, cameras: list[dict], atual: dict | None, aviso: s
 <form method="post" action="/cadastro/cameras" id="form-camera">
 {_csrf(sessao)}
 <input type="hidden" name="id_anterior" value="{_html_seguro(ident)}">
+<input type="hidden" name="documento_dono" value="{_html_seguro(doc_dono)}">
 {_campo("Identificador", "id", ident)}
 {_campo("Nome", "nome", atual.get("nome") or "", obrigatorio=True)}
 {_campo_marca(atual.get("marca") or "Intelbras")}
@@ -2684,14 +2757,15 @@ def _sistema_json(documento_filtro: str = "") -> dict:
         total_cams += len(nomes)
         clientes.append({
             "documento": doc,
-            "nome": str(item.get("nome") or "") or doc,
+            "documento_visivel": _documento_visivel(doc),
+            "nome": str(item.get("nome") or "") or _documento_visivel(doc),
             "ativo": item.get("ativo") is not False,
             "cameras": len(nomes),
         })
         if digitos and doc == digitos:
             cams_cliente = len(nomes)
             pessoas_cliente = len(item.get("pessoas") or [])
-            nome_cliente = str(item.get("nome") or "") or digitos
+            nome_cliente = str(item.get("nome") or "") or _documento_visivel(digitos)
     clientes.sort(key=lambda c: (c.get("nome") or "").lower())
 
     # Sem filtro: host completo do cluster. Com filtro: estima a fatia do computador/cliente.
@@ -4114,10 +4188,20 @@ def _tratador(portal: Portal):
                 self._html(_form_cliente(sessao, cliente, aviso, ok), 200)
                 return
             if caminho == "/cadastro/cameras":
-                cameras = _cameras_ou_vazio(documento)
+                cameras = _cameras_ou_vazio(documento, sessao)
                 ident = (consulta.get("id") or [""])[0]
                 atual = next((item for item in cameras if item.get("id") == ident), None)
-                self._html(_form_camera(sessao, cameras, atual, aviso, ok), 200)
+                self._html(
+                    _form_camera(
+                        sessao,
+                        cameras,
+                        atual,
+                        aviso,
+                        ok,
+                        online_ids=_ids_cameras_online(portal),
+                    ),
+                    200,
+                )
                 return
             if caminho == "/cadastro/pessoas":
                 self._html(_form_pessoas(sessao, _pessoas_da_conta(documento), aviso, ok), 200)
@@ -4157,7 +4241,7 @@ def _tratador(portal: Portal):
                 self._rosto(documento, caminho[len("/rosto/"):-4])
                 return
             if caminho == "/cadastro/avisos":
-                self._html(_form_avisos(sessao, _cameras_ou_vazio(documento), aviso, ok), 200)
+                self._html(_form_avisos(sessao, _cameras_ou_vazio(documento, sessao), aviso, ok), 200)
                 return
             if caminho == "/conta":
                 self._html(_form_conta(sessao, aviso, ok), 200)
@@ -4698,8 +4782,11 @@ def _tratador(portal: Portal):
             self._json({"ok": True, "mensagem": msg})
 
         def _salvar_camera(self, sessao: dict, campos: dict):
-            documento = sessao.get("documento") or ""
+            documento_sessao = sessao.get("documento") or ""
             try:
+                documento = _documento_alvo_camera(
+                    sessao, campos, _um(campos, "id_anterior") or _um(campos, "id")
+                )
                 salva = cadastro.salvar_camera(documento, {
                     "id": _um(campos, "id"),
                     "nome": _um(campos, "nome"),
@@ -4721,8 +4808,17 @@ def _tratador(portal: Portal):
                     "longitude": _um(campos, "longitude"),
                 }, _um(campos, "id_anterior"))
             except ValueError as exc:
-                cameras = _cameras_ou_vazio(documento)
-                self._html(_form_camera(sessao, cameras, None, str(exc)), 400)
+                cameras = _cameras_ou_vazio(documento_sessao, sessao)
+                self._html(
+                    _form_camera(
+                        sessao,
+                        cameras,
+                        None,
+                        str(exc),
+                        online_ids=_ids_cameras_online(portal),
+                    ),
+                    400,
+                )
                 return
             cam_id = (salva or {}).get("id") or ""
             if (salva or {}).get("protocolo") == "rtmp" and cam_id:
@@ -4731,11 +4827,21 @@ def _tratador(portal: Portal):
             self._redirecionar("/cadastro/cameras?ok=salvo")
 
         def _remover_camera(self, sessao: dict, campos: dict):
-            documento = sessao.get("documento") or ""
+            documento_sessao = sessao.get("documento") or ""
             try:
+                documento = _documento_alvo_camera(sessao, campos, _um(campos, "id"))
                 cadastro.remover_camera(documento, _um(campos, "id"))
             except ValueError as exc:
-                self._html(_form_camera(sessao, _cameras_ou_vazio(documento), None, str(exc)), 400)
+                self._html(
+                    _form_camera(
+                        sessao,
+                        _cameras_ou_vazio(documento_sessao, sessao),
+                        None,
+                        str(exc),
+                        online_ids=_ids_cameras_online(portal),
+                    ),
+                    400,
+                )
                 return
             self._redirecionar("/cadastro/cameras?ok=removido")
 
@@ -4925,7 +5031,7 @@ def _tratador(portal: Portal):
                     "recebe_relatorio": _marcado(campos, "recebe_relatorio"),
                 })
             except ValueError as exc:
-                self._html(_form_avisos(sessao, _cameras_ou_vazio(documento), str(exc)), 400)
+                self._html(_form_avisos(sessao, _cameras_ou_vazio(documento, sessao), str(exc)), 400)
                 return
             self._redirecionar("/cadastro/avisos?ok=salvo")
 
@@ -4935,7 +5041,7 @@ def _tratador(portal: Portal):
                 cadastro.remover_aviso(documento, _um(campos, "camera_id"), int(_um(campos, "indice") or "-1"))
             except (ValueError, TypeError) as exc:
                 texto = str(exc) if isinstance(exc, ValueError) else "Aviso não encontrado."
-                self._html(_form_avisos(sessao, _cameras_ou_vazio(documento), texto), 400)
+                self._html(_form_avisos(sessao, _cameras_ou_vazio(documento, sessao), texto), 400)
                 return
             self._redirecionar("/cadastro/avisos?ok=removido")
 
@@ -5056,8 +5162,51 @@ def _mensagem(consulta: dict) -> tuple[str, bool]:
     return textos.get(codigo, ""), bool(codigo in textos)
 
 
-def _cameras_ou_vazio(documento: str) -> list[dict]:
+def _ids_cameras_online(portal) -> set[str]:
+    ids: set[str] = set()
     try:
-        return cadastro.cameras_publicas(documento)
+        for item in portal.cameras() or []:
+            if isinstance(item, dict):
+                for chave in ("id", "nome", "slug"):
+                    valor = str(item.get(chave) or "").strip()
+                    if valor:
+                        ids.add(valor)
+            elif isinstance(item, (list, tuple)) and item:
+                ids.add(str(item[0]).strip())
+                if len(item) > 1:
+                    ids.add(str(item[1]).strip())
+            elif item:
+                ids.add(str(item).strip())
+    except Exception:
+        pass
+    return {x for x in ids if x}
+
+
+def _cameras_ou_vazio(documento: str, sessao: dict | None = None) -> list[dict]:
+    admin = bool(sessao and (sessao.get("perfil") or "") == "administrador")
+    try:
+        return cadastro.cameras_gestao(documento, administrador=admin)
     except ValueError:
         return []
+    except Exception:
+        try:
+            return cadastro.cameras_publicas(documento)
+        except ValueError:
+            return []
+
+
+def _documento_alvo_camera(sessao: dict, campos: dict, ident: str = "") -> str:
+    """Resolve em qual conta salvar/remover a câmera (admin pode gerir outras)."""
+    digitos_sessao = "".join(c for c in str(sessao.get("documento") or "") if c.isdigit())
+    admin = (sessao.get("perfil") or "") == "administrador"
+    informado = "".join(c for c in str(_um(campos, "documento_dono") or "") if c.isdigit())
+    if admin:
+        if informado:
+            return informado
+        dono = cadastro.documento_dono_camera(ident or _um(campos, "id") or _um(campos, "id_anterior"))
+        if dono:
+            return dono
+        return digitos_sessao
+    if informado and informado != digitos_sessao:
+        raise ValueError("Só é possível gerir câmeras da sua conta.")
+    return digitos_sessao

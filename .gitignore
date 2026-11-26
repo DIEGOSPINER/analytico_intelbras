@@ -58,3 +58,12 @@ Thumbs.db
 *.tmp
 tmp/
 temp/
+
+# Certificados e runtime local
+auto.crt
+auto.key
+historico_sistema.json
+grafo_relacoes.json
+vista_admin.json
+tools/
+mobile/Untitled
